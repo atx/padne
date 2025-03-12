@@ -3,6 +3,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+from padne import kicad
+
 
 @dataclass
 class KicadTestProject:
@@ -82,15 +84,28 @@ def test_fixture_files_exist(kicad_test_projects):
         assert project.name, f"Project has empty name"
         
         # Check that project files exist if they were found
-        if project.pro_path:
-            assert project.pro_path.exists(), f"Project file does not exist: {project.pro_path}"
-        
-        if project.pcb_path:
-            assert project.pcb_path.exists(), f"PCB file does not exist: {project.pcb_path}"
-        
-        if project.sch_path:
-            assert project.sch_path.exists(), f"Schematic file does not exist: {project.sch_path}"
-        
-        # Check that at least one of the files was found
-        assert any([project.pro_path, project.pcb_path, project.sch_path]), \
-            f"No files were found for project {project_name}"
+        assert project.pro_path.exists(), f"Project file does not exist: {project.pro_path}"
+        assert project.pcb_path.exists(), f"PCB file does not exist: {project.pcb_path}"
+        assert project.sch_path.exists(), f"Schematic file does not exist: {project.sch_path}"
+
+
+def test_gerber_render_outputs_something(kicad_test_projects):
+    """Test that the gerber rendering process outputs valid layer data."""
+    
+    project = kicad_test_projects["simple_geometry"]
+    
+    # Skip if the PCB file doesn't exist
+    # Render gerbers from the PCB file
+    layers = kicad.render_gerbers_from_kicad(project.pcb_path)
+    
+    # Check that we got some layers back
+    assert len(layers) > 0, "No layers were rendered from the PCB file"
+    
+    # Check that each layer has valid geometry
+    for layer in layers:
+        assert layer.name, "Layer has no name"
+        assert layer.layer_id >= 0, "Layer has invalid ID"
+        assert not layer.geometry.is_empty, "Layer geometry is empty"
+
+    # The simple_geometry project does not have a B.Cu layer
+    assert sorted([layer.name for layer in layers]) == ["F.Cu"]

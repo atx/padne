@@ -1,4 +1,9 @@
 
+import warnings
+# This is to suppress pcbnew deprecation warning. Unfortunately the RPC API
+# is not yet cooked enough for us
+warnings.simplefilter("ignore", DeprecationWarning)
+
 import enum
 import pcbnew
 import tempfile
@@ -64,85 +69,120 @@ class PlottedGerberLayer:
 
 
 def render_gerbers_from_kicad(pcb_file_path: pathlib.Path) -> list[PlottedGerberLayer]:
-    # TODO: What should we return here? GerberFile and some metadata?
-    # Or maybe straight up shapely, we do not need the GerberFile anyway
-
+    """
+    Generate Gerber files from a KiCad PCB file and convert them to PlottedGerberLayer objects.
+    
+    Args:
+        pcb_file_path: Path to the KiCad PCB file
+        
+    Returns:
+        List of PlottedGerberLayer objects containing layer geometries
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         board = pcbnew.LoadBoard(str(pcb_file_path))
-        tmpdir = Path("/tmp/oooo")
-        #tmpdir.mkdir()
         
-        # Create plot controller and options
-        plot_controller = pcbnew.PLOT_CONTROLLER(board)
-        plot_options = plot_controller.GetPlotOptions()
+        # Plot gerbers and get paths to generated files
+        gerber_layers = plot_board_to_gerbers(board, Path(tmpdir))
         
-        # Configure plot options for Gerber output
-        plot_options.SetOutputDirectory(str(tmpdir))
-        plot_options.SetFormat(pcbnew.PLOT_FORMAT_GERBER)
-        plot_options.SetUseGerberAttributes(True)
-        plot_options.SetCreateGerberJobFile(False)
-        #plot_options.SetExcludeEdgeLayer(False) # TODO: Figure this out
-        plot_options.SetUseAuxOrigin(True)
-        # TODO: This is a rather important choice - for now, we make no drill
-        # shapes and later after we get via sim online, we need to include the drill shape
-        # and handle the edge of each hole correctly
-        plot_options.SetDrillMarksType(pcbnew.DRILL_MARKS_FULL_DRILL_SHAPE)
+        # Extract geometry from gerber files
+        return extract_layers_from_gerbers(board, gerber_layers)
+
+
+def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
+    """
+    Plot copper layers of a KiCad board to Gerber files.
+    
+    Args:
+        board: KiCad board object
+        output_dir: Directory where Gerber files will be saved
         
-        # Set up layer list to plot
-        gerber_layers = {}
+    Returns:
+        Dictionary mapping layer IDs to paths of generated Gerber files
+    """
+    # Create plot controller and options
+    plot_controller = pcbnew.PLOT_CONTROLLER(board)
+    plot_options = plot_controller.GetPlotOptions()
+    
+    # Configure plot options for Gerber output
+    plot_options.SetOutputDirectory(str(output_dir))
+    plot_options.SetFormat(pcbnew.PLOT_FORMAT_GERBER)
+    plot_options.SetUseGerberAttributes(True)
+    plot_options.SetCreateGerberJobFile(False)
+    #plot_options.SetExcludeEdgeLayer(False) # TODO: Figure this out
+    plot_options.SetUseAuxOrigin(True)
+    # TODO: This is a rather important choice - for now, we make no drill
+    # shapes and later after we get via sim online, we need to include the drill shape
+    # and handle the edge of each hole correctly
+    plot_options.SetDrillMarksType(pcbnew.DRILL_MARKS_FULL_DRILL_SHAPE)
+    
+    # Set up layer list to plot
+    gerber_layers = {}
+    
+    # Plot each copper layer
+    for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
+        # Get layer name first
+        layer_name = board.GetLayerName(layer_id)
+        # Only process enabled layers that are copper layers (e.g. contain "Cu")
+        if not board.IsLayerEnabled(layer_id) or "Cu" not in layer_name:
+            continue
         
-        # Plot each copper layer
-        for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
-            # Check if this is a copper layer and it's enabled
-            if not board.IsLayerEnabled(layer_id) or layer_id > pcbnew.B_Cu:
-                continue
-
-            layer_name = board.GetLayerName(layer_id)
-            
-            # Open plot file
-            plot_controller.SetLayer(layer_id)
-            plot_controller.OpenPlotfile(layer_name, pcbnew.PLOT_FORMAT_GERBER, "")
-            
-            # Plot the layer
-            assert plot_controller.PlotLayer(), f"Failed to plot layer {layer_name}"
-
-            gerber_path = Path(plot_controller.GetPlotFileName())
-
-            assert gerber_path.exists(), f"Gerber file {gerber_path} does not exist"
-
-            gerber_layers[layer_id] = gerber_path
-
-        # Close the plot
-        plot_controller.ClosePlot()
-
-        # Now that the plotting is done, we can extract the geometry from the gerber files
+        # Open plot file
+        plot_controller.SetLayer(layer_id)
+        plot_controller.OpenPlotfile(layer_name, pcbnew.PLOT_FORMAT_GERBER, "")
         
-        plotted_layers = []
-        for layer_id, gerber_path in gerber_layers.items():
-            # Get layer name from the board
-            layer_name = board.GetLayerName(layer_id)
+        # Plot the layer
+        assert plot_controller.PlotLayer(), f"Failed to plot layer {layer_name}"
 
-            # Load gerber file and extract geometry
-            gerber_data = pygerber.gerber.api.GerberFile.from_file(gerber_path)
-            try:
-                geometry = gerber_data.render_with_shapely()._result.shape
-            except AssertionError:
-                # This is a bug in pygerber, which gets triggered if the
-                # gerber file is empty. We should fix this in pygerber ideally
-                # TODO: Figure out if there is at least a way to check if the
-                # gerber file is empty before we try to render it
-                continue
+        gerber_path = Path(plot_controller.GetPlotFileName())
 
-            # Create a PlottedGerberLayer object
-            plotted_layer = PlottedGerberLayer(
-                name=layer_name,
-                layer_id=layer_id,
-                geometry=geometry
-            )
-            
-            plotted_layers.append(plotted_layer)
+        assert gerber_path.exists(), f"Gerber file {gerber_path} does not exist"
+
+        gerber_layers[layer_id] = gerber_path
+
+    # Close the plot
+    plot_controller.ClosePlot()
+    
+    return gerber_layers
+
+
+def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[PlottedGerberLayer]:
+    """
+    Extract geometry from Gerber files and create PlottedGerberLayer objects.
+    
+    Args:
+        board: KiCad board object (for layer names)
+        gerber_layers: Dictionary mapping layer IDs to paths of Gerber files
         
-        return plotted_layers
+    Returns:
+        List of PlottedGerberLayer objects
+    """
+    plotted_layers = []
+    
+    for layer_id, gerber_path in gerber_layers.items():
+        # Get layer name from the board
+        layer_name = board.GetLayerName(layer_id)
+
+        # Load gerber file and extract geometry
+        gerber_data = pygerber.gerber.api.GerberFile.from_file(gerber_path)
+        try:
+            geometry = gerber_data.render_with_shapely()._result.shape
+        except AssertionError:
+            # This is a bug in pygerber, which gets triggered if the
+            # gerber file is empty. We should fix this in pygerber ideally
+            # TODO: Figure out if there is at least a way to check if the
+            # gerber file is empty before we try to render it
+            continue
+
+        # Create a PlottedGerberLayer object
+        plotted_layer = PlottedGerberLayer(
+            name=layer_name,
+            layer_id=layer_id,
+            geometry=geometry
+        )
+        
+        plotted_layers.append(plotted_layer)
+    
+    return plotted_layers
 
 
 def extract_geometry_from_gerber(gerber_data) -> shapely.geometry.MultiPolygon:
