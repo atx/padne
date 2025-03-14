@@ -58,6 +58,7 @@ class LayerSpec:
     """
     This class contains material parameters for a layer.
     """
+    name: str
     resistivity: float
 
 
@@ -130,11 +131,15 @@ def parse_layer_spec_directive(directive: ParsedDirective) -> LayerSpec:
     # Expected directive format:
     # "!padne LAYER <LAYER_NAME> <RESISTIVITY>"
     # Examples:
-    #   "!padne LAYER 1.68e-8"
+    #   "!padne LAYER F.Cu 1.68e-8"
     # TODO: Also implement stuff like "1oz copper"
 
-    resistivity = float(directive.params[0])
-    return LayerSpec(resistivity=resistivity)
+    if len(directive.params) < 2:
+        raise ValueError(f"LAYER directive must have at least 2 parameters (layer name and resistivity): {directive}")
+    
+    layer_name = directive.params[0]
+    resistivity = float(directive.params[1])
+    return LayerSpec(name=layer_name, resistivity=resistivity)
 
 
 def parse_value(value_str: str) -> float:
@@ -397,14 +402,12 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
     raise ValueError(f"Component {designator} not found")
 
 
-def load_kicad_project(pro_file_path: pathlib.Path,
-                       copper_resistivity: float = 1.68e-8) -> problem.Problem:
+def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
     
     Args:
         pro_file_path: Path to the KiCad project file (*.kicad_pro)
-        copper_resistivity: Resistivity of copper in ohm⋅m, default is 1.68e-8
         
     Returns:
         A Problem object containing layers and lumped elements
@@ -432,16 +435,27 @@ def load_kicad_project(pro_file_path: pathlib.Path,
     # Extract layer geometry from PCB file
     plotted_layers = render_gerbers_from_kicad(pcb_file_path)
     
-    # Extract lumped elements from schematic
+    # Extract directives from schematic
     directives = process_directives(extract_directives_from_eeschema(sch_file_path))
+    
+    # Create a dictionary of layer resistivities from directives
+    layer_resistivity_dict = {}
+    default_resistivity = 1.68e-8  # Default copper resistivity
+    
+    # Populate the dictionary from layer directives
+    for layer_spec in directives.layers:
+        layer_resistivity_dict[layer_spec.name] = layer_spec.resistivity
     
     # Create a dictionary mapping layer names to Layer objects
     layer_dict = {}
     for plotted_layer in plotted_layers:
+        # Use layer-specific resistivity if available, or default
+        resistivity = layer_resistivity_dict.get(plotted_layer.name, default_resistivity)
+        
         layer = problem.Layer(
             shape=plotted_layer.geometry,
             name=plotted_layer.name,
-            resistivity=copper_resistivity
+            resistivity=resistivity
         )
         layer_dict[plotted_layer.name] = layer
     

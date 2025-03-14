@@ -259,16 +259,15 @@ class TestLoadKicadProject:
         assert isinstance(f_cu_layer.shape, shapely.geometry.MultiPolygon)
         assert not f_cu_layer.shape.is_empty
 
-    def test_custom_resistivity(self, kicad_test_projects):
+    def test_custom_resistivity(self, kicad_test_projects, monkeypatch):
         """Test that custom resistivity is applied correctly."""
         project = kicad_test_projects["simple_geometry"]
-        custom_resistivity = 2.0e-8
+
+        result = kicad.load_kicad_project(project.pro_path)
         
-        result = kicad.load_kicad_project(project.pro_path, copper_resistivity=custom_resistivity)
-        
-        # All layers should have the custom resistivity
-        for layer in result.layers:
-            assert layer.resistivity == custom_resistivity
+        # F.Cu layer should have the custom resistivity
+        f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
+        assert f_cu_layer.resistivity == 123.4e-5
 
     def test_lumped_elements(self, kicad_test_projects):
         """Test that lumped elements are loaded correctly."""
