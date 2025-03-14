@@ -1,6 +1,7 @@
 
 import shapely
 
+import enum
 from dataclasses import dataclass
 
 
@@ -28,31 +29,23 @@ class Lumped:
     """
     This is a two-terminal device that is connected to two physical points in the circuit.
     """
+
+    class Type(enum.Enum):
+        VOLTAGE = "VOLTAGE"
+        CURRENT = "CURRENT"
+        RESISTANCE = "RESISTANCE"
+
+    type: Type
+
     a_layer: Layer
     a_point: shapely.geometry.Point
-
     b_layer: Layer
     b_point: shapely.geometry.Point
 
-
-@dataclass(frozen=True)
-class Resistor(Lumped):
-    resistance: float
-
-
-@dataclass(frozen=True)
-class VoltageSource(Lumped):
-    voltage: float
-
-
-@dataclass(frozen=True)
-class CurrentSource(Lumped):
-    current: float
+    value: float
 
 
 @dataclass(frozen=True)
 class Problem:
     layers: list[Layer]
-    resistors: list[Resistor]
-    voltage_sources: list[VoltageSource]
-    current_sources: list[CurrentSource]
+    lumpeds: list[Lumped]

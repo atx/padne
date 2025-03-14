@@ -40,11 +40,6 @@ class LumpedSpec:
     This is what comes out of the eeschema parser (which does not yet exist)
     """
 
-    class Type(enum.Enum):
-        VOLTAGE = "VOLTAGE"
-        CURRENT = "CURRENT"
-        RESISTOR = "RESISTOR"
-
     @dataclass(frozen=True)
     class Endpoint:
         designator: str
@@ -53,20 +48,21 @@ class LumpedSpec:
     endpoint_a: Endpoint
     endpoint_b: Endpoint
 
-    type: Type
+    # Use the unified lumped type from the problem module.
+    type: problem.Lumped.Type
     value: float
 
 
 def parse_padne_eeschema_directive(directive: str) -> LumpedSpec:
     # Parse a directive like
     # !padne VOLTAGE 5V R1.1 R2.1
-    # !padne RESISTOR 1k R1.1 R1.2
+    # !padne RESISTANCE 1k R1.1 R1.2
     # !padne CURRENT 1A R1.1 R2.1
     # Expected directive format:
     # "!padne <TYPE> <VALUE> <ENDPOINT_A> <ENDPOINT_B>"
     # Examples:
     #   "!padne VOLTAGE 5V R1.1 R2.1"
-    #   "!padne RESISTOR 1k R1.1 R1.2"
+    #   "!padne RESISTANCE 1k R1.1 R1.2"
     #   "!padne CURRENT 1A R1.1 R2.1"
     tokens = directive.split()
     if len(tokens) != 5:
@@ -75,7 +71,7 @@ def parse_padne_eeschema_directive(directive: str) -> LumpedSpec:
     # tokens[0] is the literal "!padne"
     directive_type = tokens[1].upper()
     try:
-        spec_type = LumpedSpec.Type(directive_type)
+        spec_type = problem.Lumped.Type(directive_type)
     except ValueError:
         raise ValueError(f"Unknown directive type: {directive_type}")
     

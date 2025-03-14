@@ -3,7 +3,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
-from padne import kicad
+from padne import kicad, problem
 
 
 @dataclass
@@ -116,7 +116,7 @@ class TestDirectiveParser:
     def test_valid_voltage_directive(self):
         directive = "!padne VOLTAGE 5V R1.1 R2.1"
         spec = kicad.parse_padne_eeschema_directive(directive)
-        assert spec.type == kicad.LumpedSpec.Type.VOLTAGE
+        assert spec.type == problem.Lumped.Type.VOLTAGE
         assert spec.value == 5.0
         assert spec.endpoint_a.designator == "R1"
         assert spec.endpoint_a.pad == "1"
@@ -124,9 +124,9 @@ class TestDirectiveParser:
         assert spec.endpoint_b.pad == "1"
 
     def test_valid_resistor_directive(self):
-        directive = "!padne RESISTOR 1k R3.2 R4.3"
+        directive = "!padne RESISTANCE 1k R3.2 R4.3"
         spec = kicad.parse_padne_eeschema_directive(directive)
-        assert spec.type == kicad.LumpedSpec.Type.RESISTOR
+        assert spec.type == problem.Lumped.Type.RESISTANCE
         assert spec.value == 1000.0  # "1k" becomes 1000.0
         assert spec.endpoint_a.designator == "R3"
         assert spec.endpoint_a.pad == "2"
@@ -136,7 +136,7 @@ class TestDirectiveParser:
     def test_valid_current_directive(self):
         directive = "!padne CURRENT 1A R5.1 R6.1"
         spec = kicad.parse_padne_eeschema_directive(directive)
-        assert spec.type == kicad.LumpedSpec.Type.CURRENT
+        assert spec.type == problem.Lumped.Type.CURRENT
         assert spec.value == 1.0
         assert spec.endpoint_a.designator == "R5"
         assert spec.endpoint_a.pad == "1"
@@ -165,8 +165,12 @@ class TestDirectiveParser:
         
         # Parse each directive, then assign by type
         specs = [kicad.parse_padne_eeschema_directive(d) for d in directives]
-        voltage_spec = next(spec for spec in specs if spec.type == kicad.LumpedSpec.Type.VOLTAGE)
-        resistor_spec = next(spec for spec in specs if spec.type == kicad.LumpedSpec.Type.RESISTOR)
+        voltage_spec = next(
+            spec for spec in specs if spec.type == problem.Lumped.Type.VOLTAGE
+        )
+        resistor_spec = next(
+            spec for spec in specs if spec.type == problem.Lumped.Type.RESISTANCE
+        )
         
         # Validate the voltage directive
         assert voltage_spec.value == 1.0, "Voltage value should be 1.0"
