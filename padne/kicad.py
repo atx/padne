@@ -283,6 +283,56 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
     return plotted_layers
 
 
+def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.geometry.Point]:
+    """
+    Find the physical location of a pad on the PCB.
+    
+    Args:
+        board: KiCad board object
+        designator: Component reference designator (e.g., "R1")
+        pad: Pad number or name (e.g., "1")
+        
+    Returns:
+        Tuple of (layer_name, point) where point is the pad's center
+        
+    Raises:
+        ValueError: If the component or pad is not found
+    """
+    # Find the footprint with the given designator
+    for footprint in board.GetFootprints():
+        if footprint.GetReference() != designator:
+            continue
+        # Find the pad with the given number/name
+        for pad_obj in footprint.Pads():
+            if pad_obj.GetName() != pad:
+                continue
+
+            # Get the pad's position (in KiCad internal units, nanometers)
+            position = pad_obj.GetPosition()
+            
+            # Convert from KiCad internal units (nanometers) to mm
+            x_mm = position.x / 1000000.0
+            y_mm = position.y / 1000000.0
+            point = shapely.geometry.Point(x_mm, y_mm)
+            
+            # For SMD pads, get the layer directly
+            if pad_obj.GetAttribute() == pcbnew.PAD_ATTRIB_SMD:
+                layer_id = pad_obj.GetLayer()
+                layer_name = board.GetLayerName(layer_id)
+                return layer_name, point
+            
+            # For through-hole pads, use the component's layer
+            # This is a simplification - through-hole pads exist on multiple layers
+            # For now, we do not handle this case
+            layer_id = footprint.GetLayer()
+            layer_name = board.GetLayerName(layer_id)
+            return layer_name, point
+        
+        raise ValueError(f"Pad {pad} not found on component {designator}")
+    
+    raise ValueError(f"Component {designator} not found")
+
+
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Load the project, figure out where the schematics live, the kicad pcb file lives
     # etc

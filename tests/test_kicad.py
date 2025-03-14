@@ -1,4 +1,11 @@
+import warnings
+# This is to suppress pcbnew deprecation warning. Unfortunately the RPC API
+# is not yet cooked enough for us
+warnings.simplefilter("ignore", DeprecationWarning)
+
 import pytest
+import pcbnew
+
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -189,3 +196,23 @@ class TestDirectiveParser:
         directive = "!padne VOLTAGE 5V R11 R2.1"
         with pytest.raises(ValueError, match="Invalid endpoint format"):
             kicad.parse_padne_eeschema_directive(directive)
+
+
+class TestPadFinder:
+
+    def test_simple_geometry_pad(self, kicad_test_projects):
+        # Get the simple_geometry project's PCB file
+        project = kicad_test_projects["simple_geometry"]
+        assert project.pcb_path is not None, "simple_geometry project must have a PCB file"
+        
+        # Load the KiCad board from the PCB file
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+        
+        # Try to find the pad R2.1
+        layer_name, point = kicad.find_pad_location(board, "R3", "1")
+
+        assert layer_name == "F.Cu", "Pad should be on the F.Cu layer"
+
+        assert abs(point.x - 129) < 1e-3, "Pad X coordinate should be 129"
+        assert abs(point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
+        
