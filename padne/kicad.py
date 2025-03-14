@@ -45,11 +45,74 @@ class LumpedSpec:
         CURRENT = "CURRENT"
         RESISTOR = "RESISTOR"
 
-    component_designator: str  # Such as "U12"
-    pad_name: str  # Such as "54" or "a2"
+    @dataclass(frozen=True)
+    class Endpoint:
+        designator: str
+        pad: str
+
+    endpoint_a: Endpoint
+    endpoint_b: Endpoint
 
     type: Type
     value: float
+
+
+def parse_padne_eeschema_directive(directive: str) -> LumpedSpec:
+    # Parse a directive like
+    # !padne VOLTAGE 5V R1.1 R2.1
+    # !padne RESISTOR 1k R1.1 R1.2
+    # !padne CURRENT 1A R1.1 R2.1
+    # Expected directive format:
+    # "!padne <TYPE> <VALUE> <ENDPOINT_A> <ENDPOINT_B>"
+    # Examples:
+    #   "!padne VOLTAGE 5V R1.1 R2.1"
+    #   "!padne RESISTOR 1k R1.1 R1.2"
+    #   "!padne CURRENT 1A R1.1 R2.1"
+    tokens = directive.split()
+    if len(tokens) != 5:
+        raise ValueError(f"Directive must have 5 tokens, got {len(tokens)}: {directive}")
+    
+    # tokens[0] is the literal "!padne"
+    directive_type = tokens[1].upper()
+    try:
+        spec_type = LumpedSpec.Type(directive_type)
+    except ValueError:
+        raise ValueError(f"Unknown directive type: {directive_type}")
+    
+    raw_value = tokens[2]
+    value = parse_value(raw_value)
+    
+    ep_a = parse_endpoint(tokens[3])
+    ep_b = parse_endpoint(tokens[4])
+    
+    return LumpedSpec(endpoint_a=ep_a, endpoint_b=ep_b, type=spec_type, value=value)
+
+
+def parse_value(value_str: str) -> float:
+    """
+    Parse a value string that may contain a unit suffix.
+    For instance, "5V" becomes 5.0 and "1k" becomes 1000.0.
+    """
+    multiplier = 1.0
+    lower_value = value_str.lower()
+    if lower_value.endswith('k'):
+        multiplier = 1e3
+        value_str = value_str[:-1]
+    elif lower_value.endswith('v') or lower_value.endswith('a'):
+        value_str = value_str[:-1]
+    
+    return float(value_str) * multiplier
+
+
+def parse_endpoint(token: str) -> LumpedSpec.Endpoint:
+    """
+    Parse an endpoint in the format DESIGNATOR.PAD.
+    For example, "R1.1" will become Endpoint(designator="R1", pad="1").
+    """
+    parts = token.split(".")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid endpoint format: {token}")
+    return LumpedSpec.Endpoint(designator=parts[0], pad=parts[1])
 
 
 def extract_lumped_from_eeschema(sch_file_path: pathlib.Path) -> list[LumpedSpec]:
@@ -58,7 +121,46 @@ def extract_lumped_from_eeschema(sch_file_path: pathlib.Path) -> list[LumpedSpec
     # either !padne directives or resistors (not in MVP) produce a list
     # of LumpedSpecs that later get injected into the final generation
     # of the Problem
-    pass
+
+    # First load the input schematic file
+    with open(sch_file_path, "r") as f:
+        import sexpdata
+        sexpr = sexpdata.load(f)
+
+    def find_text_elements(sexp_data):
+        # Recurse to find all (text ...) elements in the sexp tree
+        # This might be overkill, since I think they only live at the
+        # top level
+        if not isinstance(sexp_data, list):
+            return []
+
+        ret = []
+
+        if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol("text"):
+            ret.append(sexp_data)
+
+        for item in sexp_data:
+            ret.extend(find_text_elements(item))
+
+        return ret
+
+    def extract_content_from_text_element(text_element):
+        assert isinstance(text_element, list)
+        assert text_element[0] == sexpdata.Symbol("text")
+        # This should probably always be the second element
+        return text_element[1]
+
+    all_texts = [
+        extract_content_from_text_element(text_element)
+        for text_element in find_text_elements(sexpr)
+    ]
+
+    directives = [
+        text for text in all_texts
+        if text.startswith("!padne")
+    ]
+
+    return directives
 
 
 @dataclass(frozen=True)
@@ -183,20 +285,6 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
         plotted_layers.append(plotted_layer)
     
     return plotted_layers
-
-
-def extract_geometry_from_gerber(gerber_data) -> shapely.geometry.MultiPolygon:
-    """
-    Extract Shapely geometry from gerber data.
-    This implementation depends on how pygerber represents gerber data.
-    """
-    # This is a placeholder - implement based on pygerber API specifics
-    # Typically would extract polygons and combine into a MultiPolygon
-    polygons = []
-    # Process gerber_data to extract polygon geometries
-    # ...
-    
-    return shapely.geometry.MultiPolygon(polygons) if polygons else shapely.geometry.MultiPolygon()
 
 
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:

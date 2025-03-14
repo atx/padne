@@ -109,3 +109,52 @@ def test_gerber_render_outputs_something(kicad_test_projects):
 
     # The simple_geometry project does not have a B.Cu layer
     assert sorted([layer.name for layer in layers]) == ["F.Cu"]
+
+
+class TestDirectiveParser:
+
+    def test_valid_voltage_directive(self):
+        directive = "!padne VOLTAGE 5V R1.1 R2.1"
+        spec = kicad.parse_padne_eeschema_directive(directive)
+        assert spec.type == kicad.LumpedSpec.Type.VOLTAGE
+        assert spec.value == 5.0
+        assert spec.endpoint_a.designator == "R1"
+        assert spec.endpoint_a.pad == "1"
+        assert spec.endpoint_b.designator == "R2"
+        assert spec.endpoint_b.pad == "1"
+
+    def test_valid_resistor_directive(self):
+        directive = "!padne RESISTOR 1k R3.2 R4.3"
+        spec = kicad.parse_padne_eeschema_directive(directive)
+        assert spec.type == kicad.LumpedSpec.Type.RESISTOR
+        assert spec.value == 1000.0  # "1k" becomes 1000.0
+        assert spec.endpoint_a.designator == "R3"
+        assert spec.endpoint_a.pad == "2"
+        assert spec.endpoint_b.designator == "R4"
+        assert spec.endpoint_b.pad == "3"
+
+    def test_valid_current_directive(self):
+        directive = "!padne CURRENT 1A R5.1 R6.1"
+        spec = kicad.parse_padne_eeschema_directive(directive)
+        assert spec.type == kicad.LumpedSpec.Type.CURRENT
+        assert spec.value == 1.0
+        assert spec.endpoint_a.designator == "R5"
+        assert spec.endpoint_a.pad == "1"
+        assert spec.endpoint_b.designator == "R6"
+        assert spec.endpoint_b.pad == "1"
+
+    def test_invalid_token_count(self):
+        directive = "!padne VOLTAGE 5V R1.1"  # Missing endpoint token
+        with pytest.raises(ValueError, match="Directive must have 5 tokens"):
+            kicad.parse_padne_eeschema_directive(directive)
+
+    def test_unknown_directive_type(self):
+        directive = "!padne UNKNOWN 5V R1.1 R2.1"
+        with pytest.raises(ValueError, match="Unknown directive type"):
+            kicad.parse_padne_eeschema_directive(directive)
+
+    def test_invalid_endpoint_format(self):
+        # Endpoint missing the dot separator.
+        directive = "!padne VOLTAGE 5V R11 R2.1"
+        with pytest.raises(ValueError, match="Invalid endpoint format"):
+            kicad.parse_padne_eeschema_directive(directive)

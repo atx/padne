@@ -309,7 +309,7 @@
 		)
 		(uuid "e799d471-f361-4e19-a095-69b15ce2142c")
 	)
-	(text "!padne V 1.0 R2 1 R2 2"
+	(text "!padne VOLTAGE 1.0V R2.1 R2.2"
 		(exclude_from_sim no)
 		(at 119.38 96.266 0)
 		(effects
@@ -319,7 +319,7 @@
 		)
 		(uuid "875656d6-84fe-42e3-ae11-56c865590301")
 	)
-	(text "!padne R 1.0 R3 1 R3 2"
+	(text "!padne RESISTOR 1k R3.1 R3.2"
 		(exclude_from_sim no)
 		(at 118.872 99.568 0)
 		(effects
