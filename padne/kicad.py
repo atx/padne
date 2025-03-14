@@ -111,6 +111,21 @@ def parse_endpoint(token: str) -> LumpedSpec.Endpoint:
     return LumpedSpec.Endpoint(designator=parts[0], pad=parts[1])
 
 
+def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
+    """
+    Given a KiCad project file, return the associated PCB and schematic file paths.
+    
+    Args:
+        pro_file_path: The KiCad project file (*.kicad_pro)
+        
+    Returns:
+        A tuple of (pcb_file_path, sch_file_path)
+    """
+    base_name = pro_file_path.stem
+    pcb_file_path = pro_file_path.parent / f"{base_name}.kicad_pcb"
+    sch_file_path = pro_file_path.parent / f"{base_name}.kicad_sch"
+    return pcb_file_path, sch_file_path
+
 def extract_lumped_from_eeschema(sch_file_path: pathlib.Path) -> list[LumpedSpec]:
     # TODO
     # This function should eat the eeschema file and produce, based on
@@ -333,8 +348,89 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
     raise ValueError(f"Component {designator} not found")
 
 
-def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
-    # Load the project, figure out where the schematics live, the kicad pcb file lives
-    # etc
-    # MVP: We just manipulate the kicad_pcb file in order to get the geometries
-    pass
+def load_kicad_project(pro_file_path: pathlib.Path,
+                       copper_resistivity: float = 1.68e-8) -> problem.Problem:
+    """
+    Load a KiCad project and create a Problem object for PDN simulation.
+    
+    Args:
+        pro_file_path: Path to the KiCad project file (*.kicad_pro)
+        copper_resistivity: Resistivity of copper in ohm⋅m, default is 1.68e-8
+        
+    Returns:
+        A Problem object containing layers and lumped elements
+    
+    Raises:
+        FileNotFoundError: If required files are missing
+        ValueError: If the project contains invalid data
+    """
+    # Verify project file exists
+    if not pro_file_path.exists():
+        raise FileNotFoundError(f"Project file not found: {pro_file_path}")
+    
+    # Find associated PCB and schematic files
+    pcb_file_path, sch_file_path = find_associated_files(pro_file_path)
+    
+    # Verify required files exist
+    if not pcb_file_path.exists():
+        raise FileNotFoundError(f"PCB file not found: {pcb_file_path}")
+    if not sch_file_path.exists():
+        raise FileNotFoundError(f"Schematic file not found: {sch_file_path}")
+    
+    # Load KiCad board
+    board = pcbnew.LoadBoard(str(pcb_file_path))
+    
+    # Extract layer geometry from PCB file
+    plotted_layers = render_gerbers_from_kicad(pcb_file_path)
+    
+    # Create a dictionary mapping layer names to Layer objects
+    layer_dict = {}
+    for plotted_layer in plotted_layers:
+        layer = problem.Layer(
+            shape=plotted_layer.geometry,
+            name=plotted_layer.name,
+            resistivity=copper_resistivity
+        )
+        layer_dict[plotted_layer.name] = layer
+    
+    # Extract lumped elements from schematic
+    directive_strings = extract_lumped_from_eeschema(sch_file_path)
+    lumped_specs = [parse_padne_eeschema_directive(directive) for directive in directive_strings]
+    
+    # Convert LumpedSpec objects to Lumped objects
+    lumpeds = []
+    for spec in lumped_specs:
+        # Find the physical locations of the pads
+        a_layer_name, a_point = find_pad_location(
+            board, spec.endpoint_a.designator, spec.endpoint_a.pad
+        )
+        b_layer_name, b_point = find_pad_location(
+            board, spec.endpoint_b.designator, spec.endpoint_b.pad
+        )
+        
+        # Get the corresponding Layer objects
+        if a_layer_name not in layer_dict:
+            raise ValueError(f"Layer {a_layer_name} not found in rendered layers")
+        if b_layer_name not in layer_dict:
+            raise ValueError(f"Layer {b_layer_name} not found in rendered layers")
+        
+        a_layer = layer_dict[a_layer_name]
+        b_layer = layer_dict[b_layer_name]
+        
+        # Create Lumped object
+        lumped = problem.Lumped(
+            type=spec.type,
+            a_layer=a_layer,
+            a_point=a_point,
+            b_layer=b_layer,
+            b_point=b_point,
+            value=spec.value
+        )
+        
+        lumpeds.append(lumped)
+
+    # Get all layers as a list
+    layers = list(layer_dict.values())
+    
+    # Return the Problem object
+    return problem.Problem(layers=layers, lumpeds=lumpeds)

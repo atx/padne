@@ -5,6 +5,7 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 import pytest
 import pcbnew
+import shapely.geometry
 
 from pathlib import Path
 from dataclasses import dataclass
@@ -181,17 +182,25 @@ class TestDirectiveParser:
         
         # Validate the voltage directive
         assert voltage_spec.value == 1.0, "Voltage value should be 1.0"
-        assert voltage_spec.endpoint_a.designator == "R2", "Voltage directive endpoint A designator should be R2"
-        assert voltage_spec.endpoint_a.pad == "1", "Voltage directive endpoint A pad should be 1"
-        assert voltage_spec.endpoint_b.designator == "R2", "Voltage directive endpoint B designator should be R2"
-        assert voltage_spec.endpoint_b.pad == "2", "Voltage directive endpoint B pad should be 2"
+        assert voltage_spec.endpoint_a.designator == "R2", \
+            "Voltage directive endpoint A designator should be R2"
+        assert voltage_spec.endpoint_a.pad == "1", \
+            "Voltage directive endpoint A pad should be 1"
+        assert voltage_spec.endpoint_b.designator == "R2", \
+            "Voltage directive endpoint B designator should be R2"
+        assert voltage_spec.endpoint_b.pad == "2", \
+            "Voltage directive endpoint B pad should be 2"
         
         # Validate the resistor directive
         assert resistor_spec.value == 1000.0, "Resistor value should be 1000.0"
-        assert resistor_spec.endpoint_a.designator == "R3", "Resistor directive endpoint A designator should be R3"
-        assert resistor_spec.endpoint_a.pad == "1", "Resistor directive endpoint A pad should be 1"
-        assert resistor_spec.endpoint_b.designator == "R3", "Resistor directive endpoint B designator should be R3"
-        assert resistor_spec.endpoint_b.pad == "2", "Resistor directive endpoint B pad should be 2"
+        assert resistor_spec.endpoint_a.designator == "R3", \
+            "Resistor directive endpoint A designator should be R3"
+        assert resistor_spec.endpoint_a.pad == "1", \
+            "Resistor directive endpoint A pad should be 1"
+        assert resistor_spec.endpoint_b.designator == "R3", \
+            "Resistor directive endpoint B designator should be R3"
+        assert resistor_spec.endpoint_b.pad == "2", \
+            "Resistor directive endpoint B pad should be 2"
         # Endpoint missing the dot separator.
         directive = "!padne VOLTAGE 5V R11 R2.1"
         with pytest.raises(ValueError, match="Invalid endpoint format"):
@@ -215,4 +224,77 @@ class TestPadFinder:
 
         assert abs(point.x - 129) < 1e-3, "Pad X coordinate should be 129"
         assert abs(point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
+
+
+class TestLoadKicadProject:
+    """Tests for the load_kicad_project function."""
+
+    def test_basic_loading(self, kicad_test_projects):
+        """Test that the function loads a project successfully."""
+        project = kicad_test_projects["simple_geometry"]
+        result = kicad.load_kicad_project(project.pro_path)
         
+        # Check that we got a Problem object back
+        assert isinstance(result, problem.Problem)
+        # Should have at least one layer (F.Cu)
+        assert len(result.layers) >= 1
+        # Should have our two lumped elements
+        assert len(result.lumpeds) == 2
+
+    def test_file_not_found_handling(self):
+        """Test that appropriate exceptions are raised for missing files."""
+        with pytest.raises(FileNotFoundError, match="Project file not found"):
+            kicad.load_kicad_project(Path("/nonexistent/file.kicad_pro"))
+
+    def test_layer_properties(self, kicad_test_projects):
+        """Test that the loaded layers have expected properties."""
+        project = kicad_test_projects["simple_geometry"]
+        result = kicad.load_kicad_project(project.pro_path)
+        
+        # Check the F.Cu layer specifically
+        f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
+        assert f_cu_layer is not None
+        assert isinstance(f_cu_layer.shape, shapely.geometry.MultiPolygon)
+        assert not f_cu_layer.shape.is_empty
+
+    def test_custom_resistivity(self, kicad_test_projects):
+        """Test that custom resistivity is applied correctly."""
+        project = kicad_test_projects["simple_geometry"]
+        custom_resistivity = 2.0e-8
+        
+        result = kicad.load_kicad_project(project.pro_path, copper_resistivity=custom_resistivity)
+        
+        # All layers should have the custom resistivity
+        for layer in result.layers:
+            assert layer.resistivity == custom_resistivity
+
+    def test_lumped_elements(self, kicad_test_projects):
+        """Test that lumped elements are loaded correctly."""
+        project = kicad_test_projects["simple_geometry"]
+        result = kicad.load_kicad_project(project.pro_path)
+        
+        # Find the voltage source and resistor
+        voltage_source = next(l for l in result.lumpeds if l.type == problem.Lumped.Type.VOLTAGE)
+        resistor = next(l for l in result.lumpeds if l.type == problem.Lumped.Type.RESISTANCE)
+        
+        # Check voltage source properties
+        assert voltage_source.value == 1.0
+        # Check that it's connected to component R2, pads 1 and 2
+        r2_1_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R2", "1")[1]
+        r2_2_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R2", "2")[1]
+        
+        assert (voltage_source.a_point.x == r2_1_point.x and 
+                voltage_source.a_point.y == r2_1_point.y)
+        assert (voltage_source.b_point.x == r2_2_point.x and 
+                voltage_source.b_point.y == r2_2_point.y)
+        
+        # Check resistor properties
+        assert resistor.value == 1000.0  # 1k
+        # Check that it's connected to component R3, pads 1 and 2
+        r3_1_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R3", "1")[1]
+        r3_2_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R3", "2")[1]
+        
+        assert (resistor.a_point.x == r3_1_point.x and 
+                resistor.a_point.y == r3_1_point.y)
+        assert (resistor.b_point.x == r3_2_point.x and 
+                resistor.b_point.y == r3_2_point.y)
