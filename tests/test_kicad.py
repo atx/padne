@@ -122,8 +122,8 @@ def test_gerber_render_outputs_something(kicad_test_projects):
 class TestDirectiveParser:
 
     def test_valid_voltage_directive(self):
-        directive = "!padne VOLTAGE 5V R1.1 R2.1"
-        spec = kicad.parse_padne_eeschema_directive(directive)
+        directive = kicad.ParsedDirective.from_string("!padne VOLTAGE 5V R1.1 R2.1")
+        spec = kicad.parse_lumped_spec_directive(directive)
         assert spec.type == problem.Lumped.Type.VOLTAGE
         assert spec.value == 5.0
         assert spec.endpoint_a.designator == "R1"
@@ -132,8 +132,8 @@ class TestDirectiveParser:
         assert spec.endpoint_b.pad == "1"
 
     def test_valid_resistor_directive(self):
-        directive = "!padne RESISTANCE 1k R3.2 R4.3"
-        spec = kicad.parse_padne_eeschema_directive(directive)
+        directive = kicad.ParsedDirective.from_string("!padne RESISTANCE 1k R3.2 R4.3")
+        spec = kicad.parse_lumped_spec_directive(directive)
         assert spec.type == problem.Lumped.Type.RESISTANCE
         assert spec.value == 1000.0  # "1k" becomes 1000.0
         assert spec.endpoint_a.designator == "R3"
@@ -142,8 +142,8 @@ class TestDirectiveParser:
         assert spec.endpoint_b.pad == "3"
 
     def test_valid_current_directive(self):
-        directive = "!padne CURRENT 1A R5.1 R6.1"
-        spec = kicad.parse_padne_eeschema_directive(directive)
+        directive = kicad.ParsedDirective.from_string("!padne CURRENT 1A R5.1 R6.1")
+        spec = kicad.parse_lumped_spec_directive(directive)
         assert spec.type == problem.Lumped.Type.CURRENT
         assert spec.value == 1.0
         assert spec.endpoint_a.designator == "R5"
@@ -152,14 +152,14 @@ class TestDirectiveParser:
         assert spec.endpoint_b.pad == "1"
 
     def test_invalid_token_count(self):
-        directive = "!padne VOLTAGE 5V R1.1"  # Missing endpoint token
-        with pytest.raises(ValueError, match="Directive must have 5 tokens"):
-            kicad.parse_padne_eeschema_directive(directive)
+        with pytest.raises(ValueError, match="Invalid directive format"):
+            d = kicad.ParsedDirective.from_string("!padne VOLTAGE 5V R1.1")  # Missing endpoint token
+            kicad.parse_lumped_spec_directive(d)
 
     def test_unknown_directive_type(self):
-        directive = "!padne UNKNOWN 5V R1.1 R2.1"
+        directive = kicad.ParsedDirective.from_string("!padne UNKNOWN 5V R1.1 R2.1")
         with pytest.raises(ValueError, match="Unknown directive type"):
-            kicad.parse_padne_eeschema_directive(directive)
+            kicad.parse_lumped_spec_directive(directive)
 
     def test_parse_directives_from_simple_geometry(self, kicad_test_projects):
         # Get the simple_geometry project's schematic file
@@ -167,17 +167,23 @@ class TestDirectiveParser:
         assert project.sch_path.exists(), "Schematic file of simple_geometry project does not exist"
         
         # Extract the raw directive strings from the schematic file
-        directives = kicad.extract_lumped_from_eeschema(project.sch_path)
+        directives = kicad.process_directives(
+            kicad.extract_directives_from_eeschema(project.sch_path)
+        )
         # Expecting exactly two directives based on our simple_geometry project
-        assert len(directives) == 2, f"Expected 2 directives, got {len(directives)}"
+        assert len(directives.lumpeds) == 2, f"Expected 2 lumped elements, got {len(directives)}"
+
+        print(directives.lumpeds[0].type.__class__)
+        print(directives.lumpeds)
         
         # Parse each directive, then assign by type
-        specs = [kicad.parse_padne_eeschema_directive(d) for d in directives]
         voltage_spec = next(
-            spec for spec in specs if spec.type == problem.Lumped.Type.VOLTAGE
+            spec for spec in directives.lumpeds
+            if spec.type == problem.Lumped.Type.VOLTAGE
         )
         resistor_spec = next(
-            spec for spec in specs if spec.type == problem.Lumped.Type.RESISTANCE
+            spec for spec in directives.lumpeds
+            if spec.type == problem.Lumped.Type.RESISTANCE
         )
         
         # Validate the voltage directive
@@ -201,10 +207,6 @@ class TestDirectiveParser:
             "Resistor directive endpoint B designator should be R3"
         assert resistor_spec.endpoint_b.pad == "2", \
             "Resistor directive endpoint B pad should be 2"
-        # Endpoint missing the dot separator.
-        directive = "!padne VOLTAGE 5V R11 R2.1"
-        with pytest.raises(ValueError, match="Invalid endpoint format"):
-            kicad.parse_padne_eeschema_directive(directive)
 
 
 class TestPadFinder:

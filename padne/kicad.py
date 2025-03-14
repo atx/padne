@@ -13,7 +13,7 @@ import pathlib
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import padne.problem as problem
 
@@ -53,35 +53,88 @@ class LumpedSpec:
     value: float
 
 
-def parse_padne_eeschema_directive(directive: str) -> LumpedSpec:
-    # Parse a directive like
-    # !padne VOLTAGE 5V R1.1 R2.1
-    # !padne RESISTANCE 1k R1.1 R1.2
-    # !padne CURRENT 1A R1.1 R2.1
-    # Expected directive format:
-    # "!padne <TYPE> <VALUE> <ENDPOINT_A> <ENDPOINT_B>"
-    # Examples:
-    #   "!padne VOLTAGE 5V R1.1 R2.1"
-    #   "!padne RESISTANCE 1k R1.1 R1.2"
-    #   "!padne CURRENT 1A R1.1 R2.1"
-    tokens = directive.split()
-    if len(tokens) != 5:
-        raise ValueError(f"Directive must have 5 tokens, got {len(tokens)}: {directive}")
-    
-    # tokens[0] is the literal "!padne"
-    directive_type = tokens[1].upper()
+@dataclass(frozen=True)
+class LayerSpec:
+    """
+    This class contains material parameters for a layer.
+    """
+    resistivity: float
+
+
+@dataclass(frozen=True)
+class ParsedDirective:
+    key: str
+    params: list[str]
+
+    @classmethod
+    def from_string(cls, directive: str) -> 'ParsedDirective':
+        tokens = directive.split()
+        if len(tokens) < 2:
+            raise ValueError(f"Directive must have at least 1 token: {directive}")
+        if tokens[0] != "!padne":
+            raise ValueError(f"Directive must start with '!padne': {directive}")
+        return cls(key=tokens[1], params=tokens[2:])
+
+
+@dataclass(frozen=True)
+class Directives:
+    # Surface resistivity
+    # TODO: Add default value for 1oz copper
+    layers: list[LayerSpec]
+    lumpeds: list[LumpedSpec]
+
+
+def parse_lumped_spec_directive(directive: ParsedDirective) -> LumpedSpec:
+
+    if len(directive.params) != 3:
+        raise ValueError(f"Invalid directive format: {directive}")
+
     try:
-        spec_type = problem.Lumped.Type(directive_type)
+        type_enum = problem.Lumped.Type(directive.key)
     except ValueError:
-        raise ValueError(f"Unknown directive type: {directive_type}")
-    
-    raw_value = tokens[2]
-    value = parse_value(raw_value)
-    
-    ep_a = parse_endpoint(tokens[3])
-    ep_b = parse_endpoint(tokens[4])
-    
-    return LumpedSpec(endpoint_a=ep_a, endpoint_b=ep_b, type=spec_type, value=value)
+        raise ValueError(f"Unknown directive type: {directive.key}")
+
+    value = parse_value(directive.params[0])
+    ep_a = parse_endpoint(directive.params[1])
+    ep_b = parse_endpoint(directive.params[2])
+
+    return LumpedSpec(
+        endpoint_a=ep_a,
+        endpoint_b=ep_b,
+        type=type_enum,
+        value=value
+    )
+
+
+def process_directives(directives: list[ParsedDirective]) -> Directives:
+    layers = []
+    lumpeds = []
+
+    for directive in directives:
+        match directive.key:
+            case "VOLTAGE" | "CURRENT" | "RESISTANCE":
+                lumped = parse_lumped_spec_directive(directive)
+                lumpeds.append(lumped)
+            case "LAYER":
+                layer = parse_layer_spec_directive(directive)
+                layers.append(layer)
+            case _:
+                warnings.warn(f"Unknown directive: {directive.key}")
+
+    return Directives(layers=layers, lumpeds=lumpeds)
+
+
+def parse_layer_spec_directive(directive: ParsedDirective) -> LayerSpec:
+    # Parse a directive like
+    # !padne LAYER F.Cu 1.68e-8
+    # Expected directive format:
+    # "!padne LAYER <LAYER_NAME> <RESISTIVITY>"
+    # Examples:
+    #   "!padne LAYER 1.68e-8"
+    # TODO: Also implement stuff like "1oz copper"
+
+    resistivity = float(directive.params[0])
+    return LayerSpec(resistivity=resistivity)
 
 
 def parse_value(value_str: str) -> float:
@@ -126,13 +179,8 @@ def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
     sch_file_path = pro_file_path.parent / f"{base_name}.kicad_sch"
     return pcb_file_path, sch_file_path
 
-def extract_lumped_from_eeschema(sch_file_path: pathlib.Path) -> list[LumpedSpec]:
-    # TODO
-    # This function should eat the eeschema file and produce, based on
-    # either !padne directives or resistors (not in MVP) produce a list
-    # of LumpedSpecs that later get injected into the final generation
-    # of the Problem
 
+def extract_directives_from_eeschema(sch_file_path: pathlib.Path) -> list[str]:
     # First load the input schematic file
     with open(sch_file_path, "r") as f:
         import sexpdata
@@ -167,7 +215,8 @@ def extract_lumped_from_eeschema(sch_file_path: pathlib.Path) -> list[LumpedSpec
     ]
 
     directives = [
-        text for text in all_texts
+        ParsedDirective.from_string(text)
+        for text in all_texts
         if text.startswith("!padne")
     ]
 
@@ -383,6 +432,9 @@ def load_kicad_project(pro_file_path: pathlib.Path,
     # Extract layer geometry from PCB file
     plotted_layers = render_gerbers_from_kicad(pcb_file_path)
     
+    # Extract lumped elements from schematic
+    directives = process_directives(extract_directives_from_eeschema(sch_file_path))
+    
     # Create a dictionary mapping layer names to Layer objects
     layer_dict = {}
     for plotted_layer in plotted_layers:
@@ -393,13 +445,9 @@ def load_kicad_project(pro_file_path: pathlib.Path,
         )
         layer_dict[plotted_layer.name] = layer
     
-    # Extract lumped elements from schematic
-    directive_strings = extract_lumped_from_eeschema(sch_file_path)
-    lumped_specs = [parse_padne_eeschema_directive(directive) for directive in directive_strings]
-    
     # Convert LumpedSpec objects to Lumped objects
     lumpeds = []
-    for spec in lumped_specs:
+    for spec in directives.lumpeds:
         # Find the physical locations of the pads
         a_layer_name, a_point = find_pad_location(
             board, spec.endpoint_a.designator, spec.endpoint_a.pad
