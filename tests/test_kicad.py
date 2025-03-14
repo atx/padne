@@ -153,7 +153,34 @@ class TestDirectiveParser:
         with pytest.raises(ValueError, match="Unknown directive type"):
             kicad.parse_padne_eeschema_directive(directive)
 
-    def test_invalid_endpoint_format(self):
+    def test_parse_directives_from_simple_geometry(self, kicad_test_projects):
+        # Get the simple_geometry project's schematic file
+        project = kicad_test_projects["simple_geometry"]
+        assert project.sch_path.exists(), "Schematic file of simple_geometry project does not exist"
+        
+        # Extract the raw directive strings from the schematic file
+        directives = kicad.extract_lumped_from_eeschema(project.sch_path)
+        # Expecting exactly two directives based on our simple_geometry project
+        assert len(directives) == 2, f"Expected 2 directives, got {len(directives)}"
+        
+        # Parse each directive, then assign by type
+        specs = [kicad.parse_padne_eeschema_directive(d) for d in directives]
+        voltage_spec = next(spec for spec in specs if spec.type == kicad.LumpedSpec.Type.VOLTAGE)
+        resistor_spec = next(spec for spec in specs if spec.type == kicad.LumpedSpec.Type.RESISTOR)
+        
+        # Validate the voltage directive
+        assert voltage_spec.value == 1.0, "Voltage value should be 1.0"
+        assert voltage_spec.endpoint_a.designator == "R2", "Voltage directive endpoint A designator should be R2"
+        assert voltage_spec.endpoint_a.pad == "1", "Voltage directive endpoint A pad should be 1"
+        assert voltage_spec.endpoint_b.designator == "R2", "Voltage directive endpoint B designator should be R2"
+        assert voltage_spec.endpoint_b.pad == "2", "Voltage directive endpoint B pad should be 2"
+        
+        # Validate the resistor directive
+        assert resistor_spec.value == 1000.0, "Resistor value should be 1000.0"
+        assert resistor_spec.endpoint_a.designator == "R3", "Resistor directive endpoint A designator should be R3"
+        assert resistor_spec.endpoint_a.pad == "1", "Resistor directive endpoint A pad should be 1"
+        assert resistor_spec.endpoint_b.designator == "R3", "Resistor directive endpoint B designator should be R3"
+        assert resistor_spec.endpoint_b.pad == "2", "Resistor directive endpoint B pad should be 2"
         # Endpoint missing the dot separator.
         directive = "!padne VOLTAGE 5V R11 R2.1"
         with pytest.raises(ValueError, match="Invalid endpoint format"):
