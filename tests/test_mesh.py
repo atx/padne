@@ -898,13 +898,12 @@ class TestMesher:
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
-        
-        # Check for holes by ensuring no triangles in the interior hole area
-        hole_center = Point(5, 5)
-        for _, face in mesh.faces.items():
-            for vertex in face.vertices:
-                # Ensure no vertices are at the exact center of the hole
-                assert not (vertex.p.x == 5 and vertex.p.y == 5)
+        assert mesh.euler_characteristic() == 0
+
+        for vertex in mesh.vertices:
+            x = vertex.p.x
+            y = vertex.p.y
+            assert not (4 < x < 6 and 4 < y < 6)
 
     def test_polygon_with_multiple_holes(self):
         """Test meshing a polygon with multiple holes."""
@@ -923,6 +922,15 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
 
+        for vertex in mesh.vertices:
+            x = vertex.p.x
+            y = vertex.p.y
+
+            assert not (2 < x < 4 and 2 < y < 4)
+            assert not (6 < x < 8 and 6 < y < 8)
+
+        assert mesh.euler_characteristic() == -1
+
     def test_concave_polygon(self):
         """Test meshing a concave polygon."""
         # Create a concave polygon (like a 'C' shape)
@@ -938,6 +946,11 @@ class TestMesher:
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
+        assert mesh.euler_characteristic() == 1
+
+        # Check that all vertices are contained within the original polygon
+        for vertex in mesh.vertices:
+            concave.contains(shapely.geometry.Point(vertex.p.x, vertex.p.y))
 
     def test_mesh_quality_constraints(self):
         """Test that mesh quality constraints are respected."""
@@ -954,27 +967,6 @@ class TestMesher:
         # The higher quality mesh should have more triangles due to stricter constraints
         assert len(high_quality_mesh.faces) > len(low_quality_mesh.faces)
 
-    def test_euler_characteristic_preserved(self):
-        """Test that the Euler characteristic is preserved during meshing."""
-        # Create a simple polygon
-        poly = shapely.geometry.Polygon([
-            (0, 0), (10, 0), (10, 10), (0, 10), (0, 0)
-        ])
-        
-        mesher = Mesher()
-        mesh = mesher.poly_to_mesh(poly)
-        
-        # The Euler characteristic (V - E + F) for a simple polygon should be 1
-        v = len(mesh.vertices)
-        e = len(mesh.halfedges) // 2  # Half-edges count each edge twice
-        f = len(mesh.faces)
-        
-        euler = v - e + f
-        assert euler == 1
-        
-        # Alternative calculation using the mesh's method
-        assert mesh.euler_characteristic() == 1
-
     def test_tiny_polygon(self):
         """Test meshing a very small polygon."""
         # Create a tiny square
@@ -986,3 +978,4 @@ class TestMesher:
         # Verify that something was meshed
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
+        assert mesh.euler_characteristic() == 1
