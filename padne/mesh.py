@@ -99,6 +99,19 @@ class Face:
         for edge in self.edges:
             yield edge.origin
 
+    @property
+    def area(self) -> float:
+        """
+        Compute the area using the shoelace formula.
+        Returns the absolute value to ensure positive area regardless of vertex order.
+        """
+        area = 0.0
+        for edge in self.edges:
+            p1 = edge.origin.p
+            p2 = edge.next.origin.p
+            area += (p1.x * p2.y - p2.x * p1.y)
+        return 0.5 * abs(area)
+
 
 class IndexMap[T: Hashable]:
     """

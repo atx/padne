@@ -170,6 +170,83 @@ class TestMeshStructure:
         
         # Test prev
         assert e12.prev == e21
+        
+    def test_face_area(self):
+        """Test area calculation for different face configurations."""
+        # Create a simple triangular face
+        v1 = Vertex(Point(0.0, 0.0))
+        v2 = Vertex(Point(2.0, 0.0))
+        v3 = Vertex(Point(0.0, 2.0))
+        
+        e1 = HalfEdge(v1)
+        e2 = HalfEdge(v2)
+        e3 = HalfEdge(v3)
+        
+        e1.next = e2
+        e2.next = e3
+        e3.next = e1
+        
+        f = Face(e1)
+        
+        # Area should be 2.0 (base * height / 2)
+        assert f.area == 2.0
+
+        # Test square face
+        v1 = Vertex(Point(0.0, 0.0))
+        v2 = Vertex(Point(2.0, 0.0))
+        v3 = Vertex(Point(2.0, 2.0))
+        v4 = Vertex(Point(0.0, 2.0))
+        
+        e1 = HalfEdge(v1)
+        e2 = HalfEdge(v2)
+        e3 = HalfEdge(v3)
+        e4 = HalfEdge(v4)
+        
+        e1.next = e2
+        e2.next = e3
+        e3.next = e4
+        e4.next = e1
+        
+        f = Face(e1)
+        
+        # Area should be 4.0 (2 * 2)
+        assert f.area == 4.0
+
+        # Test face with negative area (vertices in clockwise order)
+        v1 = Vertex(Point(0.0, 0.0))
+        v2 = Vertex(Point(0.0, 2.0))
+        v3 = Vertex(Point(2.0, 0.0))
+        
+        e1 = HalfEdge(v1)
+        e2 = HalfEdge(v2)
+        e3 = HalfEdge(v3)
+        
+        e1.next = e2
+        e2.next = e3
+        e3.next = e1
+        
+        f = Face(e1)
+        
+        # Area should still be positive (2.0)
+        assert f.area == 2.0
+
+        # Test degenerate face (collinear points)
+        v1 = Vertex(Point(0.0, 0.0))
+        v2 = Vertex(Point(1.0, 0.0))
+        v3 = Vertex(Point(2.0, 0.0))
+        
+        e1 = HalfEdge(v1)
+        e2 = HalfEdge(v2)
+        e3 = HalfEdge(v3)
+        
+        e1.next = e2
+        e2.next = e3
+        e3.next = e1
+        
+        f = Face(e1)
+        
+        # Area should be 0.0
+        assert f.area == 0.0
 
     def test_face_edges(self):
         # Create a triangular face
