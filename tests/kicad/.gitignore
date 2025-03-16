@@ -38,4 +38,12 @@ bom/
 # Gerber export output
 out/
 
-# End of https://www.toptal.com/developers/gitignore/api/kicad
+# KiCad lock files
+*kicad_pcb.lck
+*kicad_sch.lck
+
+# KiCad backup files
+*kicad_sch-bak
+*kicad_pro-bak
+
+\#auto_saved_files#
