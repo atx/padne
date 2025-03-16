@@ -142,6 +142,9 @@ class IndexMap[T: Hashable]:
     def __len__(self) -> int:
         return len(self._idx_to_obj)
 
+    def __iter__(self) -> Iterable[T]:
+        return iter(self._idx_to_obj)
+
     def items(self) -> Iterable[tuple[int, T]]:
         for idx, obj in enumerate(self._idx_to_obj):
             yield idx, obj
