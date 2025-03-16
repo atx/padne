@@ -1,5 +1,7 @@
 
 
+from . import mesh
+
 # This file contains misc functions useful for debugging. Ultimately
 # should be dropped
 
@@ -26,3 +28,11 @@ def plot_multi_polygons(polys):
     ax.set_ylabel("Y")
     ax.set_title("MultiPolygon Plot")
     plt.show()
+
+
+def plot_mesh(mesh: mesh.Mesh):
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon
+    # Implement plotting of a Mesh structure. Show the edges and the vertices
+    # properly AI!
+    pass
