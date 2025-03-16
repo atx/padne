@@ -558,6 +558,262 @@ class TestMesh:
         mesh.triangle_from_vertices(v2, v4, v3)
         
         assert mesh.euler_characteristic() == 1
+    
+    def test_disjoint_union_empty_meshes(self):
+        """Test disjoint union of empty meshes."""
+        mesh1 = Mesh()
+        mesh2 = Mesh()
+        
+        union = Mesh.disjoint_union(mesh1, mesh2)
+        
+        # The result should be an empty mesh
+        assert isinstance(union, Mesh)
+        assert len(union.vertices) == 0
+        assert len(union.halfedges) == 0
+        assert len(union.faces) == 0
+
+    def test_disjoint_union_one_empty_mesh(self):
+        """Test disjoint union where one mesh is empty."""
+        # Create a non-empty mesh
+        mesh1 = Mesh()
+        p1 = Point(0.0, 0.0)
+        p2 = Point(1.0, 0.0)
+        p3 = Point(0.0, 1.0)
+        
+        v1 = mesh1.make_vertex(p1)
+        v2 = mesh1.make_vertex(p2)
+        v3 = mesh1.make_vertex(p3)
+        
+        mesh1.triangle_from_vertices(v1, v2, v3)
+        
+        # Create empty mesh
+        mesh2 = Mesh()
+        
+        union = Mesh.disjoint_union(mesh1, mesh2)
+        
+        # The union should be equivalent to mesh1
+        assert len(union.vertices) == len(mesh1.vertices)
+        assert len(union.faces) == len(mesh1.faces)
+        assert len(union.halfedges) == len(mesh1.halfedges)
+
+    def test_disjoint_union_same_mesh(self):
+        """Test disjoint union of the same mesh with itself."""
+        mesh = Mesh()
+        p1 = Point(0.0, 0.0)
+        p2 = Point(1.0, 0.0)
+        p3 = Point(0.0, 1.0)
+        
+        v1 = mesh.make_vertex(p1)
+        v2 = mesh.make_vertex(p2)
+        v3 = mesh.make_vertex(p3)
+        
+        mesh.triangle_from_vertices(v1, v2, v3)
+        
+        union = Mesh.disjoint_union(mesh, mesh)
+        
+        # The union should have twice the elements
+        assert len(union.vertices) == 2 * len(mesh.vertices)
+        assert len(union.faces) == 2 * len(mesh.faces)
+        assert len(union.halfedges) == 2 * len(mesh.halfedges)
+
+    def test_disjoint_union_two_triangles(self):
+        """Test disjoint union of two triangular meshes."""
+        mesh1 = Mesh()
+        p1 = Point(0.0, 0.0)
+        p2 = Point(1.0, 0.0)
+        p3 = Point(0.0, 1.0)
+        
+        v1 = mesh1.make_vertex(p1)
+        v2 = mesh1.make_vertex(p2)
+        v3 = mesh1.make_vertex(p3)
+        
+        mesh1.triangle_from_vertices(v1, v2, v3)
+        
+        mesh2 = Mesh()
+        p4 = Point(2.0, 0.0)
+        p5 = Point(3.0, 0.0)
+        p6 = Point(2.0, 1.0)
+        
+        v4 = mesh2.make_vertex(p4)
+        v5 = mesh2.make_vertex(p5)
+        v6 = mesh2.make_vertex(p6)
+        
+        mesh2.triangle_from_vertices(v4, v5, v6)
+        
+        union = Mesh.disjoint_union(mesh1, mesh2)
+        
+        # Check correct counts
+        assert len(union.vertices) == len(mesh1.vertices) + len(mesh2.vertices)
+        assert len(union.faces) == len(mesh1.faces) + len(mesh2.faces)
+        assert len(union.halfedges) == len(mesh1.halfedges) + len(mesh2.halfedges)
+        
+        # Verify that all points from both meshes are present in the union
+        union_points = {vertex.p for vertex in union.vertices}
+        expected_points = {v1.p, v2.p, v3.p, v4.p, v5.p, v6.p}
+        assert union_points == expected_points
+
+    def test_disjoint_union_multiple_meshes(self):
+        """Test disjoint union of more than two meshes."""
+        # Create three simple triangle meshes
+        meshes = []
+        for i in range(3):
+            mesh = Mesh()
+            offset = i * 2
+            
+            p1 = Point(0.0 + offset, 0.0)
+            p2 = Point(1.0 + offset, 0.0)
+            p3 = Point(0.0 + offset, 1.0)
+            
+            v1 = mesh.make_vertex(p1)
+            v2 = mesh.make_vertex(p2)
+            v3 = mesh.make_vertex(p3)
+            
+            mesh.triangle_from_vertices(v1, v2, v3)
+            meshes.append(mesh)
+        
+        union = Mesh.disjoint_union(*meshes)
+        
+        # Check correct counts
+        assert len(union.vertices) == sum(len(mesh.vertices) for mesh in meshes)
+        assert len(union.faces) == sum(len(mesh.faces) for mesh in meshes)
+        assert len(union.halfedges) == sum(len(mesh.halfedges) for mesh in meshes)
+
+    def test_disjoint_union_preserves_connectivity(self):
+        """Test that disjoint union preserves the connectivity of each mesh."""
+        # Create a mesh with two connected triangles
+        mesh1 = Mesh()
+        p1 = Point(0.0, 0.0)
+        p2 = Point(1.0, 0.0)
+        p3 = Point(0.0, 1.0)
+        p4 = Point(1.0, 1.0)
+        
+        v1 = mesh1.make_vertex(p1)
+        v2 = mesh1.make_vertex(p2)
+        v3 = mesh1.make_vertex(p3)
+        v4 = mesh1.make_vertex(p4)
+        
+        mesh1.triangle_from_vertices(v1, v2, v3)
+        mesh1.triangle_from_vertices(v2, v4, v3)
+        
+        # Create a separate single triangle mesh
+        mesh2 = Mesh()
+        p5 = Point(2.0, 0.0)
+        p6 = Point(3.0, 0.0)
+        p7 = Point(2.0, 1.0)
+        
+        v5 = mesh2.make_vertex(p5)
+        v6 = mesh2.make_vertex(p6)
+        v7 = mesh2.make_vertex(p7)
+        
+        mesh2.triangle_from_vertices(v5, v6, v7)
+        
+        union = Mesh.disjoint_union(mesh1, mesh2)
+        
+        # Check that each component of the union has the correct structure
+        vertices_by_point = {}
+        for vertex in union.vertices:
+            vertices_by_point[vertex.p] = vertex
+        
+        # Check that the original connected triangles are still connected
+        v1_new = vertices_by_point[p1]
+        v2_new = vertices_by_point[p2]
+        v3_new = vertices_by_point[p3]
+        v4_new = vertices_by_point[p4]
+        
+        # Find the faces that correspond to the triangles from mesh1
+        found_triangles = 0
+        for face in union.faces:
+            face_points = {edge.origin.p for edge in face.edges}
+            if face_points == {p1, p2, p3} or face_points == {p2, p4, p3}:
+                found_triangles += 1
+        
+        assert found_triangles == 2, "Original connected triangles not preserved in union"
+        
+        # Similar check for mesh2
+        v5_new = vertices_by_point[p5]
+        v6_new = vertices_by_point[p6]
+        v7_new = vertices_by_point[p7]
+        
+        found = False
+        for face in union.faces:
+            face_points = {edge.origin.p for edge in face.edges}
+            if face_points == {p5, p6, p7}:
+                found = True
+                break
+        
+        assert found, "Original triangle from mesh2 not preserved in union"
+
+    def test_disjoint_union_euler_characteristic(self):
+        """Test that the Euler characteristic of the union is the sum of the parts."""
+        # Create two separate meshes
+        mesh1 = Mesh()
+        p1 = Point(0.0, 0.0)
+        p2 = Point(1.0, 0.0)
+        p3 = Point(0.0, 1.0)
+        
+        v1 = mesh1.make_vertex(p1)
+        v2 = mesh1.make_vertex(p2)
+        v3 = mesh1.make_vertex(p3)
+        
+        mesh1.triangle_from_vertices(v1, v2, v3)
+        
+        mesh2 = Mesh()
+        p4 = Point(2.0, 0.0)
+        p5 = Point(3.0, 0.0)
+        p6 = Point(2.0, 1.0)
+        p7 = Point(3.0, 1.0)
+        
+        v4 = mesh2.make_vertex(p4)
+        v5 = mesh2.make_vertex(p5)
+        v6 = mesh2.make_vertex(p6)
+        v7 = mesh2.make_vertex(p7)
+        
+        mesh2.triangle_from_vertices(v4, v5, v6)
+        mesh2.triangle_from_vertices(v5, v7, v6)
+        
+        union = Mesh.disjoint_union(mesh1, mesh2)
+        
+        # The Euler characteristic should be the sum
+        assert union.euler_characteristic() == mesh1.euler_characteristic() + mesh2.euler_characteristic()
+
+    def test_disjoint_union_overlapping_points(self):
+        """Test disjoint union with meshes that have vertices at the same locations."""
+        mesh1 = Mesh()
+        p1 = Point(0.0, 0.0)
+        p2 = Point(1.0, 0.0)
+        p3 = Point(0.0, 1.0)
+        
+        v1 = mesh1.make_vertex(p1)
+        v2 = mesh1.make_vertex(p2)
+        v3 = mesh1.make_vertex(p3)
+        
+        mesh1.triangle_from_vertices(v1, v2, v3)
+        
+        mesh2 = Mesh()
+        # Create points at the same locations
+        p4 = Point(0.0, 0.0)  # Same as p1
+        p5 = Point(1.0, 0.0)  # Same as p2
+        p6 = Point(1.0, 1.0)  # New point
+        
+        v4 = mesh2.make_vertex(p4)
+        v5 = mesh2.make_vertex(p5)
+        v6 = mesh2.make_vertex(p6)
+        
+        mesh2.triangle_from_vertices(v4, v5, v6)
+        
+        union = Mesh.disjoint_union(mesh1, mesh2)
+        
+        # Even though points overlap, they should be separate vertices in the union
+        assert len(union.vertices) == len(mesh1.vertices) + len(mesh2.vertices)
+        
+        # Verify that we have 6 vertices even though some have the same coordinates
+        point_counts = {}
+        for vertex in union.vertices:
+            p = vertex.p
+            point_counts[p] = point_counts.get(p, 0) + 1
+        
+        assert point_counts[p1] == 2  # Both p1 and p4 at (0,0)
+        assert point_counts[p2] == 2  # Both p2 and p5 at (1,0)
 
     def test_edge_lookup(self):
         """Test that edge lookup works correctly."""
