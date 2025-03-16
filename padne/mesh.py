@@ -57,7 +57,7 @@ class Vertex:
     p: Point
     out: Optional["HalfEdge"] = None
 
-    def orbit(self) -> Iterable["Vertex"]:
+    def orbit(self) -> Iterable["HalfEdge"]:
         edge = self.out
         while True:
             yield edge
