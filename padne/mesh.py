@@ -1,5 +1,6 @@
 
 import numpy as np
+import shapely.geometry
 from dataclasses import dataclass
 from typing import Optional, Iterable, Hashable
 
@@ -211,3 +212,96 @@ class Mesh:
 
     def euler_characteristic(self) -> int:
         return len(self.vertices) - len(self.halfedges) // 2 + len(self.faces)
+
+
+class Mesher:
+    """
+    This class is responsible for generating a mesh from a Shapely polygon.
+    Works through the triangle library.
+    """
+
+    def __init__(self, minimum_angle: float = 20.0, maximum_area: float = 0.1):
+        self.minimum_angle = minimum_angle
+        self.maximum_area = maximum_area
+
+    def _make_triangle_args(self) -> str:
+        r = ""
+        r += "p"  # Planar straight line graph
+        r += f"q{self.minimum_angle}"  # Quality mesh generation with minimum angle
+        r += f"a{self.maximum_area}"  # Imposes a maximum triangle area constraint
+        return r
+
+    def poly_to_mesh(self, poly: shapely.geometry.Polygon) -> Mesh:
+        """
+        Convert a Shapely polygon to a triangular mesh.
+        
+        Args:
+            poly: A Shapely polygon, potentially with holes
+            
+        Returns:
+            A Mesh object representing the triangulated polygon
+        """
+        import triangle as tr
+
+        # This serves to deduplicate vertices.
+        # In theory, deduplication should not be needed
+        vertices = []
+        segments = []
+
+        def insert_linear_ring(ring):
+            assert ring.is_closed
+            assert ring.is_ccw  # TODO: Flip if needed
+            # Add the first point
+            i_first = len(vertices)
+
+            for p in ring.coords[:-1]:
+                vertices.append(p)
+
+            n = len(ring.coords) - 1
+
+            for i in range(n):
+                segments.append((i_first + i, i_first + (i + 1) % n))
+
+        insert_linear_ring(poly.exterior)
+
+        hole_points = []
+        for hole in poly.interiors:
+            # Note that we need to convert the LinearRing into a Polygon here.
+            # Otherwise representative_point returns a point that lies _on the linear ring_,
+            # not within the space enclosed by the ring!
+            rep_point = shapely.geometry.Polygon(hole).representative_point()
+            hole_points.append(rep_point.coords[0])
+
+            insert_linear_ring(hole)
+
+        tri_input = {
+            "vertices": np.array(vertices),
+            "segments": np.array(segments),
+        }
+
+        if hole_points:
+            # There is a bug in the library that makes it crash when
+            # an empty holes array is passed
+            tri_input["holes"] = np.array(hole_points)
+        
+        tri_output = tr.triangulate(tri_input, self._make_triangle_args())
+        
+        # Create our mesh from the triangulation
+        mesh = Mesh()
+        
+        # Map triangle vertex indices to our mesh vertices
+        vertex_map = {}
+        for i, vertex_coords in enumerate(tri_output['vertices']):
+            x, y = vertex_coords
+            point = Point(x, y)
+            vertex = mesh.make_vertex(point)
+            vertex_map[i] = vertex
+        
+        # Create triangles from the triangulation
+        for triangle in tri_output['triangles']:
+            v1 = vertex_map[triangle[0]]
+            v2 = vertex_map[triangle[1]]
+            v3 = vertex_map[triangle[2]]
+            mesh.triangle_from_vertices(v1, v2, v3)
+        
+        return mesh

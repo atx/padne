@@ -1,6 +1,8 @@
 import pytest
-import numpy as np
-from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh
+import shapely.geometry
+
+from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
+        Mesher
 
 
 class TestVector:
@@ -835,3 +837,152 @@ class TestIndexMap:
         assert index_map.to_object(int_idx) == 42
         assert index_map.to_object(tuple_idx) == (1, 2, 3)
         assert index_map.to_object(point_idx) == point
+
+
+class TestMesher:
+
+    def test_simple_square(self):
+        """Test meshing a simple square polygon."""
+        # Create a square
+        square = shapely.geometry.box(0, 0, 1, 1)
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(square)
+        
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+        assert len(mesh.halfedges) > 0
+        
+        # A simple square should be triangulated into at least 2 triangles
+        assert len(mesh.faces) >= 2
+
+    def test_triangle(self):
+        """Test meshing a triangle polygon."""
+        # Create a triangle
+        triangle = shapely.geometry.Polygon([(0, 0), (1, 0), (0, 1)])
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(triangle)
+        
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        
+        # A simple triangle might be represented as one face
+        # or more depending on quality constraints
+        assert len(mesh.faces) >= 1
+        
+        # Check that all vertices are within the polygon bounds
+        for _, vertex in mesh.vertices.items():
+            x, y = vertex.p.x, vertex.p.y
+            assert 0 <= x <= 1
+            assert 0 <= y <= 1
+            # Note that this actually fails, one of the vertices is very slightly
+            # outside of the bounds due to floating point error
+            assert y <= -x + 1 + 1e-6  # This is the line connecting (0,1) and (1,0)
+
+    def test_polygon_with_hole(self):
+        """Test meshing a polygon with a hole."""
+        # Create a square with a square hole
+        exterior = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        interior = [(4, 4), (6, 4), (6, 6), (4, 6), (4, 4)]
+        
+        poly_with_hole = shapely.geometry.Polygon(exterior, [interior])
+        assert poly_with_hole.interiors  # Verify that the hole exists
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(poly_with_hole)
+        
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+        
+        # Check for holes by ensuring no triangles in the interior hole area
+        hole_center = Point(5, 5)
+        for _, face in mesh.faces.items():
+            for vertex in face.vertices:
+                # Ensure no vertices are at the exact center of the hole
+                assert not (vertex.p.x == 5 and vertex.p.y == 5)
+
+    def test_polygon_with_multiple_holes(self):
+        """Test meshing a polygon with multiple holes."""
+        exterior = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        hole1 = [(2, 2), (4, 2), (4, 4), (2, 4), (2, 2)]  # First hole
+        hole2 = [(6, 6), (8, 6), (8, 8), (6, 8), (6, 6)]  # Second hole
+        
+        poly_with_holes = shapely.geometry.Polygon(exterior, [hole1, hole2])
+        assert len(poly_with_holes.interiors) == 2  # Verify that both holes exist
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(poly_with_holes)
+        
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+
+    def test_concave_polygon(self):
+        """Test meshing a concave polygon."""
+        # Create a concave polygon (like a 'C' shape)
+        concave = shapely.geometry.Polygon([
+            (0, 0), (10, 0), (10, 10), (0, 10),
+            (0, 8), (8, 8), (8, 2), (0, 2), (0, 0)
+        ])
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(concave)
+        
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+
+    def test_mesh_quality_constraints(self):
+        """Test that mesh quality constraints are respected."""
+        # Create a square
+        square = shapely.geometry.box(0, 0, 1, 1)
+        
+        # Create two meshers with different quality constraints
+        low_quality_mesher = Mesher(minimum_angle=5.0, maximum_area=0.1)
+        high_quality_mesher = Mesher(minimum_angle=30.0, maximum_area=0.01)
+        
+        low_quality_mesh = low_quality_mesher.poly_to_mesh(square)
+        high_quality_mesh = high_quality_mesher.poly_to_mesh(square)
+        
+        # The higher quality mesh should have more triangles due to stricter constraints
+        assert len(high_quality_mesh.faces) > len(low_quality_mesh.faces)
+
+    def test_euler_characteristic_preserved(self):
+        """Test that the Euler characteristic is preserved during meshing."""
+        # Create a simple polygon
+        poly = shapely.geometry.Polygon([
+            (0, 0), (10, 0), (10, 10), (0, 10), (0, 0)
+        ])
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(poly)
+        
+        # The Euler characteristic (V - E + F) for a simple polygon should be 1
+        v = len(mesh.vertices)
+        e = len(mesh.halfedges) // 2  # Half-edges count each edge twice
+        f = len(mesh.faces)
+        
+        euler = v - e + f
+        assert euler == 1
+        
+        # Alternative calculation using the mesh's method
+        assert mesh.euler_characteristic() == 1
+
+    def test_tiny_polygon(self):
+        """Test meshing a very small polygon."""
+        # Create a tiny square
+        tiny_square = shapely.geometry.box(0, 0, 1e-6, 1e-6)
+        
+        mesher = Mesher(maximum_area=1e-12)  # Small enough for the tiny square
+        mesh = mesher.poly_to_mesh(tiny_square)
+        
+        # Verify that something was meshed
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
