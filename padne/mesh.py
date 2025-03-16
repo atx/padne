@@ -234,7 +234,9 @@ class Mesher:
         r += f"a{self.maximum_area}"  # Imposes a maximum triangle area constraint
         return r
 
-    def poly_to_mesh(self, poly: shapely.geometry.Polygon) -> Mesh:
+    def poly_to_mesh(self,
+                     poly: shapely.geometry.Polygon,
+                     seed_points: list[Point] = []) -> Mesh:
         """
         Convert a Shapely polygon to a triangular mesh.
         
@@ -266,6 +268,11 @@ class Mesher:
                 segments.append((i_first + i, i_first + (i + 1) % n))
 
         insert_linear_ring(poly.exterior)
+
+        # Insert the seed points to the vertices list
+        # Those points are not part of any segment
+        for seed_point in seed_points:
+            vertices.append((seed_point.x, seed_point.y))
 
         hole_points = []
         for hole in poly.interiors:

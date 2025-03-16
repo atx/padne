@@ -967,6 +967,109 @@ class TestMesher:
         # The higher quality mesh should have more triangles due to stricter constraints
         assert len(high_quality_mesh.faces) > len(low_quality_mesh.faces)
 
+    def test_seed_points(self):
+        """Test that seed points are correctly incorporated into the mesh."""
+        # Create a square
+        square = shapely.geometry.box(0, 0, 10, 10)
+        
+        # Define seed points inside the square
+        seed_points = [
+            Point(2.5, 2.5),
+            Point(7.5, 7.5),
+            Point(5.0, 5.0)
+        ]
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(square, seed_points)
+        
+        # Verify that the seed points are included in the mesh vertices
+        seed_points_found = 0
+        for vertex in mesh.vertices:
+            for seed_point in seed_points:
+                if vertex.p.distance(seed_point) < 1e-6:
+                    seed_points_found += 1
+                    break
+        
+        assert seed_points_found == len(seed_points), "Not all seed points were included in the mesh"
+
+    def test_seed_points_affect_triangulation(self):
+        """Test that adding seed points changes the triangulation."""
+        # Create a square
+        square = shapely.geometry.box(0, 0, 1, 1)
+        
+        # Create mesh without seed points
+        mesher = Mesher(minimum_angle=20.0, maximum_area=0.1)
+        mesh_without_seeds = mesher.poly_to_mesh(square, [])
+        
+        # Create mesh with a seed point in the middle
+        seed_points = [Point(0.23, 0.41)]
+        mesh_with_seeds = mesher.poly_to_mesh(square, seed_points)
+        
+        # The mesh with the seed point should have more vertices
+        assert len(mesh_with_seeds.vertices) > len(mesh_without_seeds.vertices)
+        
+        # Verify that the seed point is included
+        seed_found = False
+        for vertex in mesh_with_seeds.vertices:
+            if vertex.p.distance(seed_points[0]) < 1e-6:
+                seed_found = True
+                break
+        
+        assert seed_found, "Seed point was not included in the mesh"
+
+    def test_seed_points_on_boundary(self):
+        """Test behavior with seed points on the polygon boundary."""
+        # Create a square
+        square = shapely.geometry.box(0, 0, 1, 1)
+        
+        # Define seed points on the boundary
+        boundary_points = [
+            Point(0.5, 0.0),  # Bottom edge
+            Point(1.0, 0.5),  # Right edge
+            Point(0.0, 0.5)   # Left edge
+        ]
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(square, boundary_points)
+        
+        # Check that boundary points are included
+        boundary_points_found = 0
+        for vertex in mesh.vertices:
+            for point in boundary_points:
+                if vertex.p.distance(point) < 1e-6:
+                    boundary_points_found += 1
+                    break
+        
+        assert boundary_points_found == len(boundary_points), "Not all boundary seed points were included"
+
+    def test_seed_points_with_holes(self):
+        """Test seed points with a polygon that has holes."""
+        # Create a square with a square hole
+        exterior = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        interior = [(4, 4), (6, 4), (6, 6), (4, 6), (4, 4)]
+        poly_with_hole = shapely.geometry.Polygon(exterior, [interior])
+        
+        # Define seed points in the valid region (not in the hole)
+        seed_points = [
+            Point(2, 2),    # Bottom-left quadrant
+            Point(8, 2),    # Bottom-right quadrant
+            Point(8, 8),    # Top-right quadrant
+            Point(2, 8),    # Top-left quadrant
+        ]
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(poly_with_hole, seed_points)
+        
+        # Check that seed points are included
+        seed_points_found = 0
+        for vertex in mesh.vertices:
+            for point in seed_points:
+                if abs(vertex.p.x - point.x) < 1e-6 and abs(vertex.p.y - point.y) < 1e-6:
+                    seed_points_found += 1
+                    break
+        
+        assert seed_points_found == len(seed_points), "Not all seed points were included in the mesh with hole"
+
     def test_tiny_polygon(self):
         """Test meshing a very small polygon."""
         # Create a tiny square
