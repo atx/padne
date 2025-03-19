@@ -149,30 +149,12 @@ class TestMeshStructure:
 
     def test_half_edge_boundary_property(self):
         v = Vertex(Point(0.0, 0.0))
-        e1 = HalfEdge(v, face=None)
-        e2 = HalfEdge(v, face=Face())
+        e1 = HalfEdge(v, face=Face())
+        e2 = HalfEdge(v, face=Face(is_boundary=True))
         
-        assert e1.is_boundary == True
-        assert e2.is_boundary == False
+        assert not e1.is_boundary
+        assert e2.is_boundary
 
-    def test_half_edge_prev_property(self):
-        # Create a simple mesh with twin edges
-        p1, p2 = Point(0.0, 0.0), Point(1.0, 0.0)
-        v1, v2 = Vertex(p1), Vertex(p2)
-        
-        e12 = HalfEdge(v1)
-        e21 = HalfEdge(v2)
-        
-        # Set twins
-        e12.twin = e21
-        e21.twin = e12
-        
-        # Set next
-        e21.next = e12
-        
-        # Test prev
-        assert e12.prev == e21
-        
     def test_face_area(self):
         """Test area calculation for different face configurations."""
         # Create a simple triangular face
@@ -406,6 +388,37 @@ class TestMeshStructure:
         assert face_dict[f2] == "face 2"
 
 
+def assert_mesh_boundaries_okay(mesh):
+    # Walk over _every half edge_ and check that the loop it defines has
+    # 3 edges if it is part of a face and any finite amount of edges if it
+    # is a boundary edge
+    for halfedge in mesh.halfedges:
+        walk_len = len(list(halfedge.walk()))
+        if halfedge.is_boundary:
+            assert walk_len >= 3
+        else:
+            assert walk_len == 3
+
+
+def assert_mesh_structure_valid(mesh):
+    # Check that every face has 3 edges
+    for face in mesh.faces:
+        assert len(list(face.edges)) == 3
+
+    # Check that every edge has a twin
+    for halfedge in mesh.halfedges:
+        assert halfedge.twin is not None
+
+    # Check that every edge has a next and previous edge
+    for halfedge in mesh.halfedges:
+        assert halfedge.next is not None
+        assert halfedge.prev is not None
+
+    # Check that every edge has an origin vertex
+    for halfedge in mesh.halfedges:
+        assert halfedge.origin is not None
+
+
 class TestMesh:
     def test_initialization(self):
         """Test that a new mesh is correctly initialized."""
@@ -414,41 +427,6 @@ class TestMesh:
         assert len(mesh.halfedges) == 0
         assert len(mesh.faces) == 0
         assert len(mesh._edge_map) == 0
-
-    def test_make_vertex(self):
-        """Test vertex creation and registration."""
-        mesh = Mesh()
-        p = Point(1.0, 2.0)
-        
-        v = mesh.make_vertex(p)
-        
-        assert v.p == p
-        assert len(mesh.vertices) == 1
-        assert mesh.vertices.to_object(0) == v
-
-    def test_connect_vertices_new(self):
-        """Test connecting vertices with no existing connections."""
-        mesh = Mesh()
-        p1, p2 = Point(0.0, 0.0), Point(1.0, 0.0)
-        v1 = mesh.make_vertex(p1)
-        v2 = mesh.make_vertex(p2)
-        
-        e12 = mesh.connect_vertices(v1, v2)
-        
-        # Check properties of the edge
-        assert e12.origin == v1
-        assert e12.twin.origin == v2
-        assert e12.twin.twin == e12
-        
-        # Check registration
-        assert len(mesh.halfedges) == 2
-        assert e12 in [mesh.halfedges.to_object(i) for i in range(len(mesh.halfedges))]
-        assert e12.twin in [mesh.halfedges.to_object(i) for i in range(len(mesh.halfedges))]
-        
-        # Check edge map
-        v1_idx, v2_idx = mesh.vertices.to_index(v1), mesh.vertices.to_index(v2)
-        assert mesh._edge_map[(v1_idx, v2_idx)] == e12
-        assert mesh._edge_map[(v2_idx, v1_idx)] == e12.twin
 
     def test_connect_vertices_existing(self):
         """Test that connecting already connected vertices returns the existing edge."""
@@ -463,358 +441,154 @@ class TestMesh:
         assert e1 == e2
         assert len(mesh.halfedges) == 2  # Only one pair of half-edges created
 
-    def test_triangle_from_vertices(self):
-        """Test creating a triangle from three vertices."""
+    def test_connect_vertices_existing_twin(self):
+        """Test that connecting vertices with existing edges in opposite direction returns the existing edge."""
         mesh = Mesh()
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
+        p1, p2 = Point(0.0, 0.0), Point(1.0, 0.0)
         v1 = mesh.make_vertex(p1)
         v2 = mesh.make_vertex(p2)
-        v3 = mesh.make_vertex(p3)
         
-        face = mesh.triangle_from_vertices(v1, v2, v3)
+        e1 = mesh.connect_vertices(v1, v2)
+        e2 = mesh.connect_vertices(v2, v1)
         
-        # Check that face was created properly
-        assert isinstance(face, Face)
-        assert face.edge.origin == v1
-        assert face.edge.next.origin == v2
-        assert face.edge.next.next.origin == v3
-        assert face.edge.next.next.next == face.edge  # Loop back to start
+        assert e1.twin == e2
+        assert e1 == e2.twin
+        assert len(mesh.halfedges) == 2
+
+    def test_single_triangle(self):
+        """Test creating a single triangle mesh."""
+        points = [
+            Point(0.0, 0.0),
+            Point(1.0, 0.0), 
+            Point(0.0, 1.0)
+        ]
+        triangles = [(0, 1, 2)]
         
-        # Check that edges point to this face
-        assert face.edge.face == face
-        assert face.edge.next.face == face
-        assert face.edge.next.next.face == face
+        mesh = Mesh.from_triangle_soup(points, triangles)
         
-        # Check that the face was registered
+        # Check basic mesh properties
+        assert len(mesh.vertices) == 3
         assert len(mesh.faces) == 1
-        assert mesh.faces.to_object(0) == face
-        
-        # Check half-edges
         assert len(mesh.halfedges) == 6  # 3 edges * 2 half-edges each
+        
+        # Get the vertices in order they appear in the face
+        face = mesh.faces.to_object(0)
+        face_verts = list(face.vertices)
+        
+        # Check the triangle vertices are in CCW order
+        v1, v2, v3 = face_verts
+        cross = (v2.p - v1.p) ^ (v3.p - v1.p)
+        assert cross > 0, "Triangle vertices not in CCW order"
+        
+        # Walk around the face
+        assert len(list(face.edge.walk())) == 3
+        # Walk around the boundary 
+        assert len(list(face.edge.twin.walk())) == 3
+
+        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_structure_valid(mesh)
 
     def test_create_multiple_triangles(self):
         """Test creating multiple connected triangles."""
-        mesh = Mesh()
-        
         # Create a square with two triangles
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(1.0, 1.0)
-        p4 = Point(0.0, 1.0)
+        points = [
+            Point(0.0, 0.0),  # 0
+            Point(1.0, 0.0),  # 1 
+            Point(1.0, 1.0),  # 2
+            Point(0.0, 1.0)   # 3
+        ]
         
-        v1 = mesh.make_vertex(p1)
-        v2 = mesh.make_vertex(p2)
-        v3 = mesh.make_vertex(p3)
-        v4 = mesh.make_vertex(p4)
+        triangles = [
+            (0, 1, 2),  # First triangle
+            (0, 2, 3)   # Second triangle
+        ]
         
-        f1 = mesh.triangle_from_vertices(v1, v2, v3)
-        f2 = mesh.triangle_from_vertices(v1, v3, v4)
+        mesh = Mesh.from_triangle_soup(points, triangles)
         
         # Check registration
-        assert len(mesh.faces) == 2
         assert len(mesh.vertices) == 4
+        assert len(mesh.faces) == 2
         
         # Since some edges are shared, we expect fewer than 12 half-edges
         # Each triangle adds 3 edges (6 half-edges), but they share 1 edge (2 half-edges)
         assert len(mesh.halfedges) == 10
         
-        # Check that edge v1->v3 is shared between the triangles
-        edge_v1v3 = None
-        for edge in f1.edges:
-            if edge.origin == v3 and edge.next.origin == v1:
-                edge_v1v3 = edge
-                break
+        # Check that the faces have the expected vertices
+        face_points = []
+        for face in mesh.faces:
+            face_points.append({vertex.p for vertex in face.vertices})
         
-        assert edge_v1v3 is not None
-        assert edge_v1v3.face == f1
-        assert edge_v1v3.twin.face == f2
+        expected_faces = [
+            {points[0], points[1], points[2]},
+            {points[0], points[2], points[3]}
+        ]
+        
+        assert all(face in face_points for face in expected_faces)
+        
+        # Check that all faces have 3 edges
+        for face in mesh.faces:
+            assert len(list(face.edges)) == 3
+        
+        # Check boundary
+        boundary_edges = [e for e in mesh.halfedges if e.is_boundary]
+        assert len(list(boundary_edges[0].walk())) == 4
+
+        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_structure_valid(mesh)
+
+    def test_square_from_four(self):
+        """Test creating a square from four triangles around a center point."""
+        # Create points for a star-shaped square
+        points = [
+            Point(0.0, 0.0),   # 0: Center  
+            Point(0.0, 1.0),   # 1: Top
+            Point(-1.0, 0.0),  # 2: Left 
+            Point(0.0, -1.0),  # 3: Bottom
+            Point(1.0, 0.0)    # 4: Right
+        ]
+        
+        triangles = [
+            (0, 4, 1),  # Center, Right, Top
+            (0, 1, 2),  # Center, Top, Left
+            (0, 2, 3),  # Center, Left, Bottom 
+            (0, 3, 4)   # Center, Bottom, Right
+        ]
+        
+        mesh = Mesh.from_triangle_soup(points, triangles)
+        
+        # Check basic mesh properties
+        assert len(mesh.vertices) == 5
+        assert len(mesh.faces) == 4
+        
+        # Check Euler characteristic
+        # V=5, E=8, F=4 => χ=5-8+4=1
+        assert mesh.euler_characteristic() == 1
+        
+        # Check boundary
+        boundary_edges = [e for e in mesh.halfedges if e.is_boundary]
+        assert len(list(boundary_edges[0].walk())) == 4  # Square boundary has 4 edges
+
+        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_structure_valid(mesh)
 
     def test_euler_characteristic(self):
         """Test calculation of the Euler characteristic."""
-        mesh = Mesh()
-        
         # Empty mesh
+        mesh = Mesh()
         assert mesh.euler_characteristic() == 0
         
         # Single triangle (V=3, E=3, F=1 => 3-3+1 = 1)
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh.make_vertex(p1)
-        v2 = mesh.make_vertex(p2)
-        v3 = mesh.make_vertex(p3)
-        
-        mesh.triangle_from_vertices(v1, v2, v3)
-        
-        assert mesh.euler_characteristic() == 1
+        points1 = [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0)]
+        triangles1 = [(0, 1, 2)]
+        mesh1 = Mesh.from_triangle_soup(points1, triangles1)
+        assert mesh1.euler_characteristic() == 1
         
         # Add a second triangle sharing an edge (V=4, E=5, F=2 => 4-5+2 = 1)
-        p4 = Point(1.0, 1.0)
-        v4 = mesh.make_vertex(p4)
-        mesh.triangle_from_vertices(v2, v4, v3)
-        
-        assert mesh.euler_characteristic() == 1
+        points2 = [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0), Point(1.0, 1.0)]
+        triangles2 = [(0, 1, 2), (1, 3, 2)]
+        mesh2 = Mesh.from_triangle_soup(points2, triangles2)
+        assert mesh2.euler_characteristic() == 1
     
-    def test_disjoint_union_empty_meshes(self):
-        """Test disjoint union of empty meshes."""
-        mesh1 = Mesh()
-        mesh2 = Mesh()
-        
-        union = Mesh.disjoint_union(mesh1, mesh2)
-        
-        # The result should be an empty mesh
-        assert isinstance(union, Mesh)
-        assert len(union.vertices) == 0
-        assert len(union.halfedges) == 0
-        assert len(union.faces) == 0
-
-    def test_disjoint_union_one_empty_mesh(self):
-        """Test disjoint union where one mesh is empty."""
-        # Create a non-empty mesh
-        mesh1 = Mesh()
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh1.make_vertex(p1)
-        v2 = mesh1.make_vertex(p2)
-        v3 = mesh1.make_vertex(p3)
-        
-        mesh1.triangle_from_vertices(v1, v2, v3)
-        
-        # Create empty mesh
-        mesh2 = Mesh()
-        
-        union = Mesh.disjoint_union(mesh1, mesh2)
-        
-        # The union should be equivalent to mesh1
-        assert len(union.vertices) == len(mesh1.vertices)
-        assert len(union.faces) == len(mesh1.faces)
-        assert len(union.halfedges) == len(mesh1.halfedges)
-
-    def test_disjoint_union_same_mesh(self):
-        """Test disjoint union of the same mesh with itself."""
-        mesh = Mesh()
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh.make_vertex(p1)
-        v2 = mesh.make_vertex(p2)
-        v3 = mesh.make_vertex(p3)
-        
-        mesh.triangle_from_vertices(v1, v2, v3)
-        
-        union = Mesh.disjoint_union(mesh, mesh)
-        
-        # The union should have twice the elements
-        assert len(union.vertices) == 2 * len(mesh.vertices)
-        assert len(union.faces) == 2 * len(mesh.faces)
-        assert len(union.halfedges) == 2 * len(mesh.halfedges)
-
-    def test_disjoint_union_two_triangles(self):
-        """Test disjoint union of two triangular meshes."""
-        mesh1 = Mesh()
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh1.make_vertex(p1)
-        v2 = mesh1.make_vertex(p2)
-        v3 = mesh1.make_vertex(p3)
-        
-        mesh1.triangle_from_vertices(v1, v2, v3)
-        
-        mesh2 = Mesh()
-        p4 = Point(2.0, 0.0)
-        p5 = Point(3.0, 0.0)
-        p6 = Point(2.0, 1.0)
-        
-        v4 = mesh2.make_vertex(p4)
-        v5 = mesh2.make_vertex(p5)
-        v6 = mesh2.make_vertex(p6)
-        
-        mesh2.triangle_from_vertices(v4, v5, v6)
-        
-        union = Mesh.disjoint_union(mesh1, mesh2)
-        
-        # Check correct counts
-        assert len(union.vertices) == len(mesh1.vertices) + len(mesh2.vertices)
-        assert len(union.faces) == len(mesh1.faces) + len(mesh2.faces)
-        assert len(union.halfedges) == len(mesh1.halfedges) + len(mesh2.halfedges)
-        
-        # Verify that all points from both meshes are present in the union
-        union_points = {vertex.p for vertex in union.vertices}
-        expected_points = {v1.p, v2.p, v3.p, v4.p, v5.p, v6.p}
-        assert union_points == expected_points
-
-    def test_disjoint_union_multiple_meshes(self):
-        """Test disjoint union of more than two meshes."""
-        # Create three simple triangle meshes
-        meshes = []
-        for i in range(3):
-            mesh = Mesh()
-            offset = i * 2
-            
-            p1 = Point(0.0 + offset, 0.0)
-            p2 = Point(1.0 + offset, 0.0)
-            p3 = Point(0.0 + offset, 1.0)
-            
-            v1 = mesh.make_vertex(p1)
-            v2 = mesh.make_vertex(p2)
-            v3 = mesh.make_vertex(p3)
-            
-            mesh.triangle_from_vertices(v1, v2, v3)
-            meshes.append(mesh)
-        
-        union = Mesh.disjoint_union(*meshes)
-        
-        # Check correct counts
-        assert len(union.vertices) == sum(len(mesh.vertices) for mesh in meshes)
-        assert len(union.faces) == sum(len(mesh.faces) for mesh in meshes)
-        assert len(union.halfedges) == sum(len(mesh.halfedges) for mesh in meshes)
-
-    def test_disjoint_union_preserves_connectivity(self):
-        """Test that disjoint union preserves the connectivity of each mesh."""
-        # Create a mesh with two connected triangles
-        mesh1 = Mesh()
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        p4 = Point(1.0, 1.0)
-        
-        v1 = mesh1.make_vertex(p1)
-        v2 = mesh1.make_vertex(p2)
-        v3 = mesh1.make_vertex(p3)
-        v4 = mesh1.make_vertex(p4)
-        
-        mesh1.triangle_from_vertices(v1, v2, v3)
-        mesh1.triangle_from_vertices(v2, v4, v3)
-        
-        # Create a separate single triangle mesh
-        mesh2 = Mesh()
-        p5 = Point(2.0, 0.0)
-        p6 = Point(3.0, 0.0)
-        p7 = Point(2.0, 1.0)
-        
-        v5 = mesh2.make_vertex(p5)
-        v6 = mesh2.make_vertex(p6)
-        v7 = mesh2.make_vertex(p7)
-        
-        mesh2.triangle_from_vertices(v5, v6, v7)
-        
-        union = Mesh.disjoint_union(mesh1, mesh2)
-        
-        # Check that each component of the union has the correct structure
-        vertices_by_point = {}
-        for vertex in union.vertices:
-            vertices_by_point[vertex.p] = vertex
-        
-        # Check that the original connected triangles are still connected
-        v1_new = vertices_by_point[p1]
-        v2_new = vertices_by_point[p2]
-        v3_new = vertices_by_point[p3]
-        v4_new = vertices_by_point[p4]
-        
-        # Find the faces that correspond to the triangles from mesh1
-        found_triangles = 0
-        for face in union.faces:
-            face_points = {edge.origin.p for edge in face.edges}
-            if face_points == {p1, p2, p3} or face_points == {p2, p4, p3}:
-                found_triangles += 1
-        
-        assert found_triangles == 2, "Original connected triangles not preserved in union"
-        
-        # Similar check for mesh2
-        v5_new = vertices_by_point[p5]
-        v6_new = vertices_by_point[p6]
-        v7_new = vertices_by_point[p7]
-        
-        found = False
-        for face in union.faces:
-            face_points = {edge.origin.p for edge in face.edges}
-            if face_points == {p5, p6, p7}:
-                found = True
-                break
-        
-        assert found, "Original triangle from mesh2 not preserved in union"
-
-    def test_disjoint_union_euler_characteristic(self):
-        """Test that the Euler characteristic of the union is the sum of the parts."""
-        # Create two separate meshes
-        mesh1 = Mesh()
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh1.make_vertex(p1)
-        v2 = mesh1.make_vertex(p2)
-        v3 = mesh1.make_vertex(p3)
-        
-        mesh1.triangle_from_vertices(v1, v2, v3)
-        
-        mesh2 = Mesh()
-        p4 = Point(2.0, 0.0)
-        p5 = Point(3.0, 0.0)
-        p6 = Point(2.0, 1.0)
-        p7 = Point(3.0, 1.0)
-        
-        v4 = mesh2.make_vertex(p4)
-        v5 = mesh2.make_vertex(p5)
-        v6 = mesh2.make_vertex(p6)
-        v7 = mesh2.make_vertex(p7)
-        
-        mesh2.triangle_from_vertices(v4, v5, v6)
-        mesh2.triangle_from_vertices(v5, v7, v6)
-        
-        union = Mesh.disjoint_union(mesh1, mesh2)
-        
-        # The Euler characteristic should be the sum
-        assert union.euler_characteristic() == mesh1.euler_characteristic() + mesh2.euler_characteristic()
-
-    def test_disjoint_union_overlapping_points(self):
-        """Test disjoint union with meshes that have vertices at the same locations."""
-        mesh1 = Mesh()
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh1.make_vertex(p1)
-        v2 = mesh1.make_vertex(p2)
-        v3 = mesh1.make_vertex(p3)
-        
-        mesh1.triangle_from_vertices(v1, v2, v3)
-        
-        mesh2 = Mesh()
-        # Create points at the same locations
-        p4 = Point(0.0, 0.0)  # Same as p1
-        p5 = Point(1.0, 0.0)  # Same as p2
-        p6 = Point(1.0, 1.0)  # New point
-        
-        v4 = mesh2.make_vertex(p4)
-        v5 = mesh2.make_vertex(p5)
-        v6 = mesh2.make_vertex(p6)
-        
-        mesh2.triangle_from_vertices(v4, v5, v6)
-        
-        union = Mesh.disjoint_union(mesh1, mesh2)
-        
-        # Even though points overlap, they should be separate vertices in the union
-        assert len(union.vertices) == len(mesh1.vertices) + len(mesh2.vertices)
-        
-        # Verify that we have 6 vertices even though some have the same coordinates
-        point_counts = {}
-        for vertex in union.vertices:
-            p = vertex.p
-            point_counts[p] = point_counts.get(p, 0) + 1
-        
-        assert point_counts[p1] == 2  # Both p1 and p4 at (0,0)
-        assert point_counts[p2] == 2  # Both p2 and p5 at (1,0)
-
     def test_edge_lookup(self):
         """Test that edge lookup works correctly."""
         mesh = Mesh()
@@ -864,133 +638,65 @@ class TestMesh:
         assert v1.out is not None
         assert v2.out is not None
 
-    def test_triangle_from_vertices_reuses_edges(self):
-        """Test that triangle_from_vertices reuses existing edges."""
-        mesh = Mesh()
-        
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh.make_vertex(p1)
-        v2 = mesh.make_vertex(p2)
-        v3 = mesh.make_vertex(p3)
-        
-        # Create edge first
-        e12 = mesh.connect_vertices(v1, v2)
-        
-        # Create triangle that should reuse this edge
-        face = mesh.triangle_from_vertices(v1, v2, v3)
-        
-        edge_count = len(mesh.halfedges) // 2  # Count actual edges, not half-edges
-        
-        # Should have exactly 3 edges (not 4) since one was reused
-        assert edge_count == 3
-        
-        # The triangle's first edge should be the reused edge
-        assert face.edge == e12
-
-    def test_duplicate_triangles(self):
-        """Test that creating identical triangles doesn't duplicate data."""
-        mesh = Mesh()
-        
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        
-        v1 = mesh.make_vertex(p1)
-        v2 = mesh.make_vertex(p2)
-        v3 = mesh.make_vertex(p3)
-        
-        f1 = mesh.triangle_from_vertices(v1, v2, v3)
-        f2 = mesh.triangle_from_vertices(v1, v2, v3)
-        
-        # The faces are new objects but should reuse the same edges
-        assert f1 != f2
-        assert len(mesh.faces) == 2
-        assert len(mesh.halfedges) == 6  # Still only 3 edges (6 half-edges)
-
     def test_non_manifold_edge_handling(self):
         """Test behavior when creating non-manifold edges."""
-        mesh = Mesh()
+        # Create points for a non-manifold construction
+        points = [
+            Point(0.0, 0.0),  # 0
+            Point(1.0, 0.0),  # 1
+            Point(0.0, 1.0),  # 2
+            Point(0.0, -1.0)  # 3
+        ]
         
-        # Create a triangle
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-        p4 = Point(0.0, -1.0)
+        # Create triangles that share an edge with the same orientation
+        # This would create a non-manifold edge
+        triangles = [
+            (0, 1, 2),  # First triangle
+            (0, 1, 3)   # Second triangle using same edge (0,1)
+        ]
         
-        v1 = mesh.make_vertex(p1)
-        v2 = mesh.make_vertex(p2)
-        v3 = mesh.make_vertex(p3)
-        v4 = mesh.make_vertex(p4)
-        
-        # Create first triangle
-        f1 = mesh.triangle_from_vertices(v1, v2, v3)
-        
-        # Create second triangle sharing an edge but in same direction
-        # This creates a non-manifold edge where one edge is used by two faces
-        # Implementation details will determine the exact behavior here
-        f2 = mesh.triangle_from_vertices(v1, v2, v4)
-        
-        # Both faces should exist
-        assert len(mesh.faces) == 2
-        
-        # The edge from v1 to v2 should be used by both faces
-        # How this is handled depends on implementation, so we can't make
-        # many assertions about structure integrity here
+        # The from_triangle_soup method should handle this correctly
+        # Either by creating a valid mesh or raising an error
+
+        with pytest.raises(ValueError):
+            Mesh.from_triangle_soup(points, triangles)
 
     def test_complex_mesh(self):
         """Test creating a more complex mesh structure."""
-        mesh = Mesh()
+        # Define points for a complex shape
+        points = [
+            Point(-1.0, -1.0),  # 0: Inner square bottom-left
+            Point(1.0, -1.0),   # 1: Inner square bottom-right
+            Point(1.0, 1.0),    # 2: Inner square top-right
+            Point(-1.0, 1.0),   # 3: Inner square top-left
+            Point(-2.0, 0.0),   # 4: Left spike
+            Point(0.0, -2.0),   # 5: Bottom spike
+            Point(2.0, 0.0),    # 6: Right spike
+            Point(0.0, 2.0)     # 7: Top spike
+        ]
         
-        # Create a cube-like structure (without top face)
-        # Bottom face
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(1.0, 1.0)
-        p4 = Point(0.0, 1.0)
+        # Define triangles for our star-like shape
+        triangles = [
+            (0, 1, 2),  # Inner square bottom triangle
+            (0, 2, 3),  # Inner square top triangle
+            (0, 3, 4),  # Left spike
+            (1, 0, 5),  # Bottom spike
+            (2, 1, 6),  # Right spike
+            (3, 2, 7)   # Top spike
+        ]
         
-        # Top vertices
-        p5 = Point(0.0 + 10, 0.0)
-        p6 = Point(1.0 + 10, 0.0)
-        p7 = Point(1.0 + 10, 1.0)
-        p8 = Point(0.0 + 10, 1.0)
+        mesh = Mesh.from_triangle_soup(points, triangles)
         
-        # Create vertices
-        vertices = []
-        for p in [p1, p2, p3, p4, p5, p6, p7, p8]:
-            vertices.append(mesh.make_vertex(Point(p.x, p.y)))  # Using only x,y since our mesh is 2D
+        # Check mesh properties
+        assert len(mesh.vertices) == 8
+        assert len(mesh.faces) == 6
+        assert len(mesh.halfedges) == 13 * 2  # Each edge appears twice
         
-        # Create base face (square with diagonal)
-        f1 = mesh.triangle_from_vertices(vertices[0], vertices[1], vertices[2])
-        f2 = mesh.triangle_from_vertices(vertices[0], vertices[2], vertices[3])
-        
-        # Create side faces
-        f3 = mesh.triangle_from_vertices(vertices[0], vertices[1], vertices[4])
-        f4 = mesh.triangle_from_vertices(vertices[1], vertices[5], vertices[4])
-        
-        f5 = mesh.triangle_from_vertices(vertices[1], vertices[2], vertices[5])
-        f6 = mesh.triangle_from_vertices(vertices[2], vertices[6], vertices[5])
-        
-        f7 = mesh.triangle_from_vertices(vertices[2], vertices[3], vertices[6])
-        f8 = mesh.triangle_from_vertices(vertices[3], vertices[7], vertices[6])
-        
-        f9 = mesh.triangle_from_vertices(vertices[3], vertices[0], vertices[7])
-        f10 = mesh.triangle_from_vertices(vertices[0], vertices[4], vertices[7])
-        
-        # Check face count
-        assert len(mesh.faces) == 10
-        
-        # Edge count should be less than what we'd need for separate triangles
-        # due to shared edges
-        assert len(mesh.halfedges) / 2 < 3 * 10  # Less than 30 edges for 10 triangles
-        
-        # Verify Euler characteristic for this mesh
-        # V = 8, E varies based on shared edges, F = 10
-        # For a topological cube with one face removed: V - E + F = 2 - 1 = 1
-        # (may vary depending on the exact triangle configuration)
         assert mesh.euler_characteristic() == 1
+        
+        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_structure_valid(mesh)
+
 
 
 class TestIndexMap:

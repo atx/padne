@@ -52,7 +52,7 @@ class Point:
         return Vector(self.x - other.x, self.y - other.y)
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, repr=False)
 class Vertex:
     p: Point
     out: Optional["HalfEdge"] = None
@@ -66,25 +66,36 @@ class Vertex:
                 break
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, repr=False)
 class HalfEdge:
     origin: Vertex
     twin: Optional["HalfEdge"] = None
     next: Optional["HalfEdge"] = None
+    prev: Optional["HalfEdge"] = None
     face: Optional["Face"] = None
 
     @property
     def is_boundary(self) -> bool:
-        return self.face is None
+        return self.face.is_boundary
 
-    @property
-    def prev(self) -> "HalfEdge":
-        return self.twin.next.twin
+    @staticmethod
+    def connect(e1: "HalfEdge", e2: "HalfEdge") -> None:
+        e1.next = e2
+        e2.prev = e1
+
+    def walk(self):
+        edge = self
+        while True:
+            yield edge
+            edge = edge.next
+            if edge == self:
+                break
 
 
 @dataclass(eq=False)
 class Face:
     edge: HalfEdge = None
+    is_boundary: bool = False
 
     @property
     def edges(self):
@@ -155,6 +166,7 @@ class Mesh:
         self.vertices = IndexMap[Vertex]()
         self.halfedges = IndexMap[HalfEdge]()
         self.faces = IndexMap[Face]()
+        self.boundaries = IndexMap[Face]()
         self._edge_map: dict[tuple[int, int], HalfEdge] = {}
 
     def make_vertex(self, p: Point) -> Vertex:
@@ -170,6 +182,7 @@ class Mesh:
         key12 = (self.vertices.to_index(v1), self.vertices.to_index(v2))
         key21 = (key12[1], key12[0])
         if key12 in self._edge_map:
+            assert key21 in self._edge_map, "Inconsistent half edge state"
             return self._edge_map[key12]
 
         # Assert that the twin also does not exist. It should not be possible
@@ -194,27 +207,79 @@ class Mesh:
 
         return e12
 
-    def triangle_from_vertices(self, v1: Vertex, v2: Vertex, v3: Vertex) -> Face:
-        """
-        Create a triangle face from the three vertices.
-        """
-        e12 = self.connect_vertices(v1, v2)
-        e23 = self.connect_vertices(v2, v3)
-        e31 = self.connect_vertices(v3, v1)
-
-        f = Face(e12)
-        e12.next = e23
-        e23.next = e31
-        e31.next = e12
-
-        e12.face = e23.face = e31.face = f
-
-        self.faces.add(f)
-
-        return f
-
     def euler_characteristic(self) -> int:
         return len(self.vertices) - len(self.halfedges) // 2 + len(self.faces)
+
+    @classmethod
+    def from_triangle_soup(cls,
+                           points: list[Point],
+                           triangles: list[tuple[int, int, int]]) -> "Mesh":
+        mesh = cls()
+
+        # First we create the vertices
+        vertices = [mesh.make_vertex(p) for p in points]
+
+        for tri in triangles:
+            assert len(tri) == 3
+            v1, v2, v3 = [vertices[i] for i in tri]
+
+            vertex_edge_pairs = [(v1, v2), (v2, v3), (v3, v1)]
+            # Create the _interior_ half-edges
+            face = Face()
+            mesh.faces.add(face)
+            current_hedges = []
+            for u, v in vertex_edge_pairs:
+                hedge = mesh.connect_vertices(u, v)
+                u.out = hedge
+                face.edge = hedge  # We just get the last one
+                hedge.face = face
+                current_hedges.append(hedge)
+
+            # Next, connect the interior hedges in a loop
+            for h1, h2 in zip(current_hedges, current_hedges[1:] + [current_hedges[0]]):
+                HalfEdge.connect(h1, h2)
+
+        # Now, comes the final stage, where we need to produce the boundary
+        # edges. We do this by iterating over all half-edges and checking if
+        # they have a twin. Then we handle the boundary connectivity update
+
+        for hedge in mesh.halfedges:
+            if hedge.face is not None:
+                continue
+            # Okay, we have a boundary hedge. Now we need to effectively
+            # "walk around" the boundary. We assume that there is always
+            # at most one "outgoing" boundary edge per vertex
+            face = Face(is_boundary=True)
+            mesh.boundaries.add(face)
+            face.edge = hedge
+            hedge.face = face
+
+            hedge_prev = hedge
+            while True:
+                vertex_next = hedge_prev.twin.origin
+                # Now, we need to find the next boundary edge
+                hedge_next_list = [
+                    h for h in mesh.halfedges
+                    if h.origin == vertex_next and h.face is None
+                ]
+                if len(hedge_next_list) == 0:
+                    # We have reached the end of the boundary
+                    break
+                if len(hedge_next_list) > 1:
+                    raise ValueError("Non-manifold mesh")
+
+                hedge_next = hedge_next_list[0]
+
+                assert hedge_next.next is None  # Sanity check, should not happen since we checked earlier
+
+                HalfEdge.connect(hedge_prev, hedge_next)
+                hedge_next.face = face
+                hedge_prev = hedge_next
+
+            # And finally, connect the last edge to the first
+            HalfEdge.connect(hedge_prev, hedge)
+
+        return mesh
 
 
 class Mesher:
@@ -295,23 +360,42 @@ class Mesher:
             tri_input["holes"] = np.array(hole_points)
         
         tri_output = tr.triangulate(tri_input, self._make_triangle_args())
+
+        mesh = Mesh.from_triangle_soup(
+            [Point(*p) for p in tri_output['vertices']],
+            tri_output['triangles']
+        )
+
+        return mesh
         
         # Create our mesh from the triangulation
-        mesh = Mesh()
-        
-        # Map triangle vertex indices to our mesh vertices
-        vertex_map = {}
-        for i, vertex_coords in enumerate(tri_output['vertices']):
-            x, y = vertex_coords
-            point = Point(x, y)
-            vertex = mesh.make_vertex(point)
-            vertex_map[i] = vertex
-        
-        # Create triangles from the triangulation
-        for triangle in tri_output['triangles']:
-            v1 = vertex_map[triangle[0]]
-            v2 = vertex_map[triangle[1]]
-            v3 = vertex_map[triangle[2]]
-            mesh.triangle_from_vertices(v1, v2, v3)
+        #mesh = Mesh()
+        #
+        ## Map triangle vertex indices to our mesh vertices
+        #vertex_map = {}
+        #for i, vertex_coords in enumerate(tri_output['vertices']):
+        #    x, y = vertex_coords
+        #    point = Point(x, y)
+        #    vertex = mesh.make_vertex(point)
+        #    vertex_map[i] = vertex
+
+        #with open("/tmp/out.json", "w") as f:
+        #    import json
+        #    # Those are ndarrays, so we need to convert them to lists
+        #    r = {}
+        #    r['vertices'] = tri_output['vertices'].tolist()
+        #    r['triangles'] = tri_output['triangles'].tolist()
+        #    json.dump(r, f)
+        #
+        ## Create triangles from the triangulation
+        #for triangle in tri_output['triangles']:
+        #    v1 = vertex_map[triangle[0]]
+        #    v2 = vertex_map[triangle[1]]
+        #    v3 = vertex_map[triangle[2]]
+
+        #    cross = (v2.p - v1.p) ^ (v3.p - v1.p)
+        #    assert cross > 0, "Triangle is not CCW"
+
+        #    mesh.triangle_from_vertices(v1, v2, v3)
         
         return mesh
