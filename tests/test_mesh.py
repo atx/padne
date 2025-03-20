@@ -388,7 +388,7 @@ class TestMeshStructure:
         assert face_dict[f2] == "face 2"
 
 
-def assert_mesh_boundaries_okay(mesh):
+def assert_mesh_topology_okay(mesh):
     # Walk over _every half edge_ and check that the loop it defines has
     # 3 edges if it is part of a face and any finite amount of edges if it
     # is a boundary edge
@@ -398,6 +398,35 @@ def assert_mesh_boundaries_okay(mesh):
             assert walk_len >= 3
         else:
             assert walk_len == 3
+
+    # Check that boundary loops have no self intersections (same vertex twice)
+    for boundary in mesh.boundaries:
+        # Get all vertices in this boundary loop
+        boundary_vertices = []
+        for edge in boundary.edges:
+            boundary_vertices.append(edge.origin)
+        
+        # Check that no vertex appears twice
+        vertex_set = set()
+        for vertex in boundary_vertices:
+            assert vertex not in vertex_set, "Boundary loop has self-intersection"
+            vertex_set.add(vertex)
+
+    # Validate the Euler's formula for the characteristic
+    # For a 2D mesh with b boundaries (including the outer boundary):
+    # χ = V - E + F = 2 - b
+    # Rearranging: V - E + F - (2 - b) = 0
+    num_vertices = len(mesh.vertices)
+    num_edges = len(mesh.halfedges) // 2  # Each edge has 2 half-edges
+    num_faces = len(mesh.faces)
+    num_boundaries = len(mesh.boundaries)
+    
+    # Calculate Euler characteristic in two ways
+    euler_calc = num_vertices - num_edges + num_faces
+    euler_expected = 2 - num_boundaries
+    
+    assert euler_calc == mesh.euler_characteristic(), "Calculated Euler characteristic doesn't match mesh.euler_characteristic()"
+    assert euler_calc == euler_expected, f"Euler's formula violated: V({num_vertices}) - E({num_edges}) + F({num_faces}) = {euler_calc}, expected {euler_expected} (2 - {num_boundaries})"
 
 
 def assert_mesh_structure_valid(mesh):
@@ -493,7 +522,7 @@ class TestMesh:
         # Walk around the boundary 
         assert len(list(face.edge.twin.walk())) == 3
 
-        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
     def test_create_multiple_triangles(self):
@@ -542,7 +571,7 @@ class TestMesh:
         boundary_edges = [e for e in mesh.halfedges if e.is_boundary]
         assert len(list(boundary_edges[0].walk())) == 4
 
-        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
     def test_square_from_four(self):
@@ -578,7 +607,7 @@ class TestMesh:
         boundary_edges = [e for e in mesh.halfedges if e.is_boundary]
         assert len(list(boundary_edges[0].walk())) == 4  # Square boundary has 4 edges
 
-        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
     def test_euler_characteristic(self):
@@ -705,7 +734,7 @@ class TestMesh:
         
         assert mesh.euler_characteristic() == 1
         
-        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
     def test_mesh_with_hole(self):
@@ -748,7 +777,7 @@ class TestMesh:
         
         assert mesh.euler_characteristic() == 0  # For a surface with one hole, χ = 2-2g-b = 0
         
-        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
 
