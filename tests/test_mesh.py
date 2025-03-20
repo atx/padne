@@ -404,10 +404,17 @@ def assert_mesh_structure_valid(mesh):
     # Check that every face has 3 edges
     for face in mesh.faces:
         assert len(list(face.edges)) == 3
+        assert face.edge is not None
+        assert face.edge.face == face
 
     # Check that every edge has a twin
     for halfedge in mesh.halfedges:
         assert halfedge.twin is not None
+        # Every halfedge should have an assigned face
+        assert halfedge.face is not None
+        # Check that at most one of the halfedges in a twin pair is a boundary
+        # edge
+        assert not (halfedge.is_boundary and halfedge.twin.is_boundary)
 
     # Check that every edge has a next and previous edge
     for halfedge in mesh.halfedges:
@@ -470,6 +477,7 @@ class TestMesh:
         assert len(mesh.vertices) == 3
         assert len(mesh.faces) == 1
         assert len(mesh.halfedges) == 6  # 3 edges * 2 half-edges each
+        assert len(mesh.boundaries) == 1
         
         # Get the vertices in order they appear in the face
         face = mesh.faces.to_object(0)
@@ -508,6 +516,7 @@ class TestMesh:
         # Check registration
         assert len(mesh.vertices) == 4
         assert len(mesh.faces) == 2
+        assert len(mesh.boundaries) == 1
         
         # Since some edges are shared, we expect fewer than 12 half-edges
         # Each triangle adds 3 edges (6 half-edges), but they share 1 edge (2 half-edges)
@@ -559,6 +568,7 @@ class TestMesh:
         # Check basic mesh properties
         assert len(mesh.vertices) == 5
         assert len(mesh.faces) == 4
+        assert len(mesh.boundaries) == 1
         
         # Check Euler characteristic
         # V=5, E=8, F=4 => χ=5-8+4=1
@@ -691,8 +701,52 @@ class TestMesh:
         assert len(mesh.vertices) == 8
         assert len(mesh.faces) == 6
         assert len(mesh.halfedges) == 13 * 2  # Each edge appears twice
+        assert len(mesh.boundaries) == 1
         
         assert mesh.euler_characteristic() == 1
+        
+        assert_mesh_boundaries_okay(mesh)
+        assert_mesh_structure_valid(mesh)
+
+    def test_mesh_with_hole(self):
+        # Define points for a shape with a hole
+        points = [
+            Point(0.0, 0.0),   # 0: Outer square bottom-left
+            Point(4.0, 0.0),   # 1: Outer square bottom-right
+            Point(4.0, 4.0),   # 2: Outer square top-right
+            Point(0.0, 4.0),   # 3: Outer square top-left
+            Point(1.0, 1.0),   # 4: Inner square bottom-left
+            Point(3.0, 1.0),   # 5: Inner square bottom-right
+            Point(3.0, 3.0),   # 6: Inner square top-right
+            Point(1.0, 3.0),   # 7: Inner square top-left
+        ]
+        
+        # Define triangles for our shape with hole
+        # We need to triangulate around the hole
+        triangles = [
+            # Bottom side
+            (0, 1, 4),
+            (1, 5, 4),
+            # Right side
+            (1, 2, 5),
+            (2, 6, 5),
+            # Top side
+            (2, 3, 6),
+            (3, 7, 6),
+            # Left side
+            (3, 0, 7),
+            (0, 4, 7)
+        ]
+        
+        mesh = Mesh.from_triangle_soup(points, triangles)
+        
+        # Check mesh properties
+        assert len(mesh.vertices) == 8
+        assert len(mesh.faces) == 8  # We have 8 triangles now
+        assert len(mesh.halfedges) == 16 * 2  # Each edge appears twice
+        assert len(mesh.boundaries) == 2  # Outer boundary and hole boundary
+        
+        assert mesh.euler_characteristic() == 0  # For a surface with one hole, χ = 2-2g-b = 0
         
         assert_mesh_boundaries_okay(mesh)
         assert_mesh_structure_valid(mesh)
