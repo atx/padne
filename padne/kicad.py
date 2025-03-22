@@ -8,6 +8,7 @@ import enum
 import pcbnew
 import tempfile
 import shapely
+import shapely.affinity
 import pygerber.gerber.api
 import pathlib
 
@@ -339,6 +340,10 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
             # TODO: Figure out if there is at least a way to check if the
             # gerber file is empty before we try to render it
             continue
+
+        # For reasons to be determined, the geometry generated like this has 
+        # a flipped y axis. Flip it back.
+        geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
 
         # Create a PlottedGerberLayer object
         plotted_layer = PlottedGerberLayer(
