@@ -1115,6 +1115,40 @@ class TestMesher:
         
         assert seed_points_found == len(seed_points), "Not all seed points were included in the mesh with hole"
 
+    def test_clockwise_polygon(self):
+        """Test meshing a polygon with clockwise orientation."""
+        # Create a polygon with clockwise orientation
+        clockwise_polygon = shapely.geometry.Polygon([
+            (0, 0),        # Bottom left
+            (0, 10),       # Top left
+            (10, 10),      # Top right
+            (10, 0),       # Bottom right
+            (0, 0)         # Back to bottom left
+        ], holes=None)
+        
+        # Verify the polygon is actually clockwise
+        assert not shapely.geometry.LinearRing(clockwise_polygon.exterior.coords).is_ccw
+        
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(clockwise_polygon)
+        
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+        assert mesh.euler_characteristic() == 1
+        
+        # Verify that all mesh triangles are valid
+        assert_mesh_topology_okay(mesh)
+        assert_mesh_structure_valid(mesh)
+        
+        # Check that vertices are within the original polygon bounds
+        for vertex in mesh.vertices:
+            x, y = vertex.p.x, vertex.p.y
+            assert 0 <= x <= 10
+            assert 0 <= y <= 10
+            assert clockwise_polygon.intersects(shapely.geometry.Point(x, y))
+
     def test_tiny_polygon(self):
         """Test meshing a very small polygon."""
         # Create a tiny square
