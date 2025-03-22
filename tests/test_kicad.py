@@ -236,3 +236,38 @@ class TestLoadKicadProject:
                 resistor.a_point.y == r3_1_point.y)
         assert (resistor.b_point.x == r3_2_point.x and 
                 resistor.b_point.y == r3_2_point.y)
+                
+    def test_lumped_points_inside_layers(self, kicad_test_projects):
+        """
+        Test that for all test projects, the start and end points of lumped elements 
+        are located inside their respective layer shapes.
+        """
+        # Skip if no projects were found
+        if not kicad_test_projects:
+            pytest.skip("No KiCad test projects found")
+        
+        for project_name, project in kicad_test_projects.items():
+            # Load the KiCad project
+            try:
+                kicad_problem = kicad.load_kicad_project(project.pro_path)
+            except Exception as e:
+                pytest.fail(f"Failed to load project {project_name}: {e}")
+            
+            # Skip if no lumped elements
+            if not kicad_problem.lumpeds:
+                continue
+                
+            # For each lumped element, verify that its endpoints are inside the layers
+            for i, lumped in enumerate(kicad_problem.lumpeds):
+                a_point_inside = lumped.a_layer.shape.contains(lumped.a_point)
+                b_point_inside = lumped.b_layer.shape.contains(lumped.b_point)
+                
+                assert a_point_inside, (
+                    f"Project {project_name}, lumped element {i} ({lumped.type.name}): "
+                    f"a_point {lumped.a_point} is not inside its layer shape {lumped.a_layer.name}"
+                )
+                    
+                assert b_point_inside, (
+                    f"Project {project_name}, lumped element {i} ({lumped.type.name}): "
+                    f"b_point {lumped.b_point} is not inside its layer shape {lumped.b_layer.name}"
+                )
