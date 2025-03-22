@@ -89,7 +89,7 @@ def solve(problem: problem.Problem) -> Solution:
         for m in layer_meshes:
             import random
             # Assign a random value to each vertex in the mesh
-            vertex_values = [random.uniform(0.0, 5.0) for _ in range(len(m.vertices))]
+            vertex_values = [random.uniform(0.0, 1.0) for _ in range(len(m.vertices))]
             layer_values.append(vertex_values)
         
         # Create a layer solution and add it to our results
