@@ -76,6 +76,24 @@ def solve(problem: problem.Problem) -> Solution:
     """
     mesher = mesh.Mesher()
     
-    # Implement a dummy solver that does everything in regards to meshing,
-    # but instead of doing FEM it just assigns random values to the nodes.
-    # AI!
+    # Initialize the layer solutions
+    layer_solutions = []
+    
+    # Process each layer in the problem
+    for layer in problem.layers:
+        # Generate meshes for the layer
+        layer_meshes = mesh_layer(mesher, problem, layer)
+        
+        # Generate random values for each mesh as a dummy solution
+        layer_values = []
+        for m in layer_meshes:
+            import random
+            # Assign a random value to each vertex in the mesh
+            vertex_values = [random.uniform(0.0, 5.0) for _ in range(len(m.vertices))]
+            layer_values.append(vertex_values)
+        
+        # Create a layer solution and add it to our results
+        layer_solutions.append(LayerSolution(meshes=layer_meshes, values=layer_values))
+    
+    # Return the complete solution
+    return Solution(problem=problem, layer_solutions=layer_solutions)
