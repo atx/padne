@@ -50,6 +50,15 @@ class Point:
         if not isinstance(other, Point):
             raise TypeError("Subtraction is only defined for Points")
         return Vector(self.x - other.x, self.y - other.y)
+        
+    def to_shapely(self) -> shapely.geometry.Point:
+        """
+        Convert this Point to a shapely.geometry.Point.
+        
+        Returns:
+            A shapely Point with the same coordinates
+        """
+        return shapely.geometry.Point(self.x, self.y)
 
 
 @dataclass(eq=False, repr=False)

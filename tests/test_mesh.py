@@ -96,6 +96,30 @@ class TestPoint:
         # Test subtraction with non-point
         with pytest.raises(TypeError):
             p1 - 5
+            
+    def test_point_to_shapely(self):
+        """Test conversion from Point to shapely.geometry.Point."""
+        p = Point(3.5, 4.2)
+        shapely_point = p.to_shapely()
+        
+        # Verify the type
+        assert isinstance(shapely_point, shapely.geometry.Point)
+        
+        # Verify the coordinates
+        assert shapely_point.x == 3.5
+        assert shapely_point.y == 4.2
+        
+        # Test with integer coordinates
+        p2 = Point(0, 0)
+        shapely_point2 = p2.to_shapely()
+        assert shapely_point2.x == 0
+        assert shapely_point2.y == 0
+        
+        # Test with negative coordinates
+        p3 = Point(-1.5, -2.7)
+        shapely_point3 = p3.to_shapely()
+        assert shapely_point3.x == -1.5
+        assert shapely_point3.y == -2.7
 
 
 class TestMeshStructure:
