@@ -367,35 +367,3 @@ class Mesher:
         )
 
         return mesh
-        
-        # Create our mesh from the triangulation
-        #mesh = Mesh()
-        #
-        ## Map triangle vertex indices to our mesh vertices
-        #vertex_map = {}
-        #for i, vertex_coords in enumerate(tri_output['vertices']):
-        #    x, y = vertex_coords
-        #    point = Point(x, y)
-        #    vertex = mesh.make_vertex(point)
-        #    vertex_map[i] = vertex
-
-        #with open("/tmp/out.json", "w") as f:
-        #    import json
-        #    # Those are ndarrays, so we need to convert them to lists
-        #    r = {}
-        #    r['vertices'] = tri_output['vertices'].tolist()
-        #    r['triangles'] = tri_output['triangles'].tolist()
-        #    json.dump(r, f)
-        #
-        ## Create triangles from the triangulation
-        #for triangle in tri_output['triangles']:
-        #    v1 = vertex_map[triangle[0]]
-        #    v2 = vertex_map[triangle[1]]
-        #    v3 = vertex_map[triangle[2]]
-
-        #    cross = (v2.p - v1.p) ^ (v3.p - v1.p)
-        #    assert cross > 0, "Triangle is not CCW"
-
-        #    mesh.triangle_from_vertices(v1, v2, v3)
-        
-        return mesh
