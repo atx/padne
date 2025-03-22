@@ -320,7 +320,8 @@ class Mesher:
 
         def insert_linear_ring(ring):
             assert ring.is_closed
-            assert ring.is_ccw  # TODO: Flip if needed
+            if not ring.is_ccw:
+                ring = shapely.geometry.LinearRing(reversed(ring.coords))
             # Add the first point
             i_first = len(vertices)
 
