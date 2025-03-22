@@ -76,4 +76,6 @@ def solve(problem: problem.Problem) -> Solution:
     """
     mesher = mesh.Mesher()
     
-    # TODO: Implement full solver
+    # Implement a dummy solver that does everything in regards to meshing,
+    # but instead of doing FEM it just assigns random values to the nodes.
+    # AI!
