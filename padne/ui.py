@@ -258,6 +258,21 @@ class MeshViewer(QOpenGLWidget):
         self.meshes = meshes
         self.mesh_values = values
         
+        # Calculate min and max values for scaling
+        self.min_value = float('inf')
+        self.max_value = float('-inf')
+        
+        if values:
+            for value_array in values:
+                if len(value_array) > 0:
+                    self.min_value = min(self.min_value, np.min(value_array))
+                    self.max_value = max(self.max_value, np.max(value_array))
+        
+        # If min_value is still infinity, set defaults
+        if self.min_value == float('inf'):
+            self.min_value = 0.0
+            self.max_value = 1.0
+        
         # Calculate the bounds of all meshes to set initial view
         min_x, min_y = float('inf'), float('inf')
         max_x, max_y = float('-inf'), float('-inf')
@@ -378,6 +393,16 @@ class MeshViewer(QOpenGLWidget):
             gl.glUniformMatrix4fv(
                 self.mesh_shader.shader_program.uniformLocation("mvp"),
                 1, gl.GL_TRUE, mvp.flatten()
+            )
+            
+            # Set the min/max value uniforms for color scaling
+            gl.glUniform1f(
+                self.mesh_shader.shader_program.uniformLocation("v_min"),
+                self.min_value
+            )
+            gl.glUniform1f(
+                self.mesh_shader.shader_program.uniformLocation("v_max"),
+                self.max_value
             )
             
             # Draw triangles
