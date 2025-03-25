@@ -204,7 +204,7 @@ class TestLoadKicadProject:
         
         # F.Cu layer should have the custom resistivity
         f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
-        assert f_cu_layer.resistivity == 123.4e-5
+        assert f_cu_layer.conductance == 212.0
 
     def test_lumped_elements(self, kicad_test_projects):
         """Test that lumped elements are loaded correctly."""

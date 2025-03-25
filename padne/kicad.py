@@ -60,7 +60,7 @@ class LayerSpec:
     This class contains material parameters for a layer.
     """
     name: str
-    resistivity: float
+    conductance: float  # Changed from resistivity
 
 
 @dataclass(frozen=True)
@@ -128,19 +128,19 @@ def process_directives(directives: list[ParsedDirective]) -> Directives:
 
 def parse_layer_spec_directive(directive: ParsedDirective) -> LayerSpec:
     # Parse a directive like
-    # !padne LAYER F.Cu 1.68e-8
+    # !padne LAYER F.Cu 5.95e7
     # Expected directive format:
-    # "!padne LAYER <LAYER_NAME> <RESISTIVITY>"
+    # "!padne LAYER <LAYER_NAME> <CONDUCTANCE>"
     # Examples:
-    #   "!padne LAYER F.Cu 1.68e-8"
+    #   "!padne LAYER F.Cu 5.95e7"
     # TODO: Also implement stuff like "1oz copper"
 
     if len(directive.params) < 2:
-        raise ValueError(f"LAYER directive must have at least 2 parameters (layer name and resistivity): {directive}")
+        raise ValueError(f"LAYER directive must have at least 2 parameters (layer name and conductance): {directive}")
     
     layer_name = directive.params[0]
-    resistivity = float(directive.params[1])
-    return LayerSpec(name=layer_name, resistivity=resistivity)
+    conductance = float(directive.params[1])
+    return LayerSpec(name=layer_name, conductance=conductance)
 
 
 def parse_value(value_str: str) -> float:
@@ -443,24 +443,24 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Extract directives from schematic
     directives = process_directives(extract_directives_from_eeschema(sch_file_path))
     
-    # Create a dictionary of layer resistivities from directives
-    layer_resistivity_dict = {}
-    default_resistivity = 1.68e-8  # Default copper resistivity
+    # Create a dictionary of layer conductances from directives
+    layer_conductance_dict = {}
+    default_conductance = 5.95e7  # Default copper conductance (1/resistivity)
     
     # Populate the dictionary from layer directives
     for layer_spec in directives.layers:
-        layer_resistivity_dict[layer_spec.name] = layer_spec.resistivity
+        layer_conductance_dict[layer_spec.name] = layer_spec.conductance
     
     # Create a dictionary mapping layer names to Layer objects
     layer_dict = {}
     for plotted_layer in plotted_layers:
-        # Use layer-specific resistivity if available, or default
-        resistivity = layer_resistivity_dict.get(plotted_layer.name, default_resistivity)
+        # Use layer-specific conductance if available, or default
+        conductance = layer_conductance_dict.get(plotted_layer.name, default_conductance)
         
         layer = problem.Layer(
             shape=plotted_layer.geometry,
             name=plotted_layer.name,
-            resistivity=resistivity
+            conductance=conductance
         )
         layer_dict[plotted_layer.name] = layer
     

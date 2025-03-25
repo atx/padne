@@ -329,7 +329,7 @@
 		)
 		(uuid "ac4780b8-51bc-445c-bd41-bbe24368054d")
 	)
-	(text "!padne LAYER F.Cu 123.4e-5"
+	(text "!padne LAYER F.Cu 212.0"
 		(exclude_from_sim no)
 		(at 70.358 123.444 0)
 		(effects

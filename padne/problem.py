@@ -21,7 +21,10 @@ class Layer:
     name: str
 
     # Hmm, TODO: maybe it should be polygon specific? For now out of scope
-    resistivity: float
+    # This is in Siemens
+    # Note that this is computed by
+    # conductivity [S/m] * thickness [m]
+    conductance: float
 
 
 @dataclass(frozen=True)
