@@ -104,15 +104,18 @@ def solve(prob: problem.Problem) -> Solution:
             global_index_to_vertex_index.append((mesh_idx, vertex_idx))
             mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
 
-    # TODO: This needs to be
-    # decremented by 1 for each connected component (we are just going to get one for now)
-    # incremented by 1 for each voltage source (for now we just set the RHS even for voltage sources)
+    voltage_source_count = sum(
+        1 for elem in prob.lumpeds
+        if elem.type == problem.Lumped.Type.VOLTAGE
+    )
 
     # We are solving the equation L * v = r
     # where L is the "laplace operator",
     # v is the voltage vector and
-    # r is the right-hand side vector
-    N = len(global_index_to_vertex_index)
+    # r is the right-hand side "source" vector
+    # TODO: This needs to be
+    # decremented by 1 for each connected component (we are just going to get one for now)
+    N = len(global_index_to_vertex_index) + voltage_source_count # - 1
     L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
     r = np.zeros(N, dtype=np.float32)
 
@@ -162,6 +165,7 @@ def solve(prob: problem.Problem) -> Solution:
         raise ValueError("Vertex not found")
 
     # Now we need to process the lumped elements
+    voltage_source_i = 0
     for elem in prob.lumpeds:
         i_a = get_vertex_global_index_by_point(elem.a_layer, elem.a_point)
         i_b = get_vertex_global_index_by_point(elem.b_layer, elem.b_point)
@@ -175,17 +179,25 @@ def solve(prob: problem.Problem) -> Solution:
                 # THIS IS WRONG, BUT JUST FOR NOW
                 # Normally, we need to inject additional rows and columns for this
                 # case
-                r[i_a] = elem.value * 5e-4
-                r[i_b] = -elem.value * 5e-4
+                i_v = len(global_index_to_vertex_index) + voltage_source_i
+                voltage_source_i += 1
+
+                L[i_v, i_a] = -1
+                L[i_a, i_v] = -1
+
+                L[i_v, i_b] = 1
+                L[i_b, i_v] = 1
+
+                r[i_v] = elem.value
             case problem.Lumped.Type.CURRENT:
-                r[i_a] = elem.value
-                r[i_b] = -elem.value
+                r[i_a] = elem.value / elem.a_layer.conductance
+                r[i_b] = -elem.value / elem.b_layer.conductance
             case problem.Lumped.Type.RESISTANCE:
-                val = elem.value * 5e-4
-                L[i_a, i_a] += 1 / val
-                L[i_b, i_b] += 1 / val
-                L[i_a, i_b] -= 1 / val
-                L[i_b, i_a] -= 1 / val
+                val = 1 / elem.value / elem.a_layer.conductance
+                L[i_a, i_a] -= val
+                L[i_b, i_b] -= val
+                L[i_a, i_b] += val
+                L[i_b, i_a] += val
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
