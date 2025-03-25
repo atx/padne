@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import shapely.geometry
+import numpy as np
+import scipy.sparse
 
 from . import problem, mesh
 
@@ -64,7 +66,7 @@ def mesh_layer(mesher: mesh.Mesher, problem: problem.Problem, layer: problem.Lay
     return ret
 
 
-def solve(problem: problem.Problem) -> Solution:
+def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
     
@@ -74,26 +76,136 @@ def solve(problem: problem.Problem) -> Solution:
     Returns:
         A Solution object with the computed results
     """
+    # References:
+    # https://www.cs.cmu.edu/~kmcrane/Projects/DDG/paper.pdf
+    # http://mobile.rodolphe-vaillant.fr/entry/101/definition-laplacian-matrix-for-triangle-meshes
+    # TODO: Eliminate disconnected regions
     mesher = mesh.Mesher()
-    
-    # Initialize the layer solutions
+
+    # As a first step, we flatten the Layer-Mesh structure to get a list of meshes
+    # (and store which layer they originally come from)
+
+    meshes = []
+    mesh_index_to_layer_index: list[int] = []
+
+    for layer_i, layer in enumerate(prob.layers):
+        layer_meshes = mesh_layer(mesher, prob, layer)
+        meshes.extend(layer_meshes)
+        mesh_index_to_layer_index.extend([layer_i] * len(layer_meshes))
+
+    # In the next step, we assign a global index to each vertex in every mesh
+    # this is needed since we need to somehow map the vertex indices to the
+    # matrix indices in the final system of equations
+    global_index_to_vertex_index: list[tuple[int, int]] = []
+    mesh_vertex_index_to_global_index: dict[tuple[int, int], int] = {}
+    for mesh_idx, msh in enumerate(meshes):
+        for vertex_idx, vertex in enumerate(msh.vertices):
+            global_index = len(global_index_to_vertex_index)
+            global_index_to_vertex_index.append((mesh_idx, vertex_idx))
+            mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
+
+    # TODO: This needs to be
+    # decremented by 1 for each connected component (we are just going to get one for now)
+    # incremented by 1 for each voltage source (for now we just set the RHS even for voltage sources)
+
+    # We are solving the equation L * v = r
+    # where L is the "laplace operator",
+    # v is the voltage vector and
+    # r is the right-hand side vector
+    N = len(global_index_to_vertex_index)
+    L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
+    r = np.zeros(N, dtype=np.float32)
+
+    # Okay, now we enumerate over every vertex
+    for i, (mesh_idx, vertex_idx) in enumerate(global_index_to_vertex_index):
+        vertex = meshes[mesh_idx].vertices.to_object(vertex_idx)
+        for edge in vertex.orbit():
+            vertex_other = edge.twin.origin
+            vertex_other_idx = meshes[mesh_idx].vertices.to_index(vertex_other)
+            k = mesh_vertex_index_to_global_index[(mesh_idx, vertex_other_idx)]
+
+            if not edge.face.is_boundary and not edge.twin.face.is_boundary:
+                # We are in "the interior"
+                ratio = 0.
+                for ed in [edge.next.next, edge.twin.next.next]:
+                    va = vertex.p - ed.origin.p
+                    vb = vertex_other.p - ed.origin.p
+                    ratio += abs(va.dot(vb) / (va ^ vb)) / 2
+            else:
+                # TODO: This boundary handling comes from my original code 
+                # written in 2019. It is very likely wrong.
+                # Do considerable amount of thinking here to figure out
+                # the correct way to force the normal derivative to zero
+                # Questionable:
+                eop = edge.next.next if not edge.face.is_boundary else edge.twin.next.next
+                va = vertex.p - eop.origin.p
+                vb = vertex_other.p - eop.origin.p
+                ratio = abs(va.dot(vb) / (va ^ vb)) / 2
+            L[i, i] -= ratio
+            # Note that we are iterating over everything, so the (k, i) pair gets 
+            # set in a different iteration
+            L[i, k] += ratio
+
+    def get_vertex_global_index_by_point(layer: problem.Layer,
+                                         pt: shapely.geometry.Point) -> int:
+        # TODO: This is not exactly efficient.
+        # At some point, we are going to either need to use a spatial index
+        # or track the seed points through the meshing process
+        for i, (mesh_idx, vertex_idx) in enumerate(global_index_to_vertex_index):
+            # Does the mesh index match the layer index?
+            if mesh_index_to_layer_index[mesh_idx] != prob.layers.index(layer):
+                continue
+            # *quack quack*
+            dist = meshes[mesh_idx].vertices.to_object(vertex_idx).p.distance(pt)
+            if dist < 1e-6:
+                return i
+        raise ValueError("Vertex not found")
+
+    # Now we need to process the lumped elements
+    for elem in prob.lumpeds:
+        i_a = get_vertex_global_index_by_point(elem.a_layer, elem.a_point)
+        i_b = get_vertex_global_index_by_point(elem.b_layer, elem.b_point)
+
+        # TODO: Note that these need to be multiplied by a conductance factor,
+        # since our laplace matrix is unitless.
+        # TODO: Maybe we actually want to actually scale the L matrix since different
+        # layers have different conductances anyway?
+        match elem.type:
+            case problem.Lumped.Type.VOLTAGE:
+                # THIS IS WRONG, BUT JUST FOR NOW
+                # Normally, we need to inject additional rows and columns for this
+                # case
+                r[i_a] = elem.value * 5e-4
+                r[i_b] = -elem.value * 5e-4
+            case problem.Lumped.Type.CURRENT:
+                r[i_a] = elem.value
+                r[i_b] = -elem.value
+            case problem.Lumped.Type.RESISTANCE:
+                val = elem.value * 5e-4
+                L[i_a, i_a] += 1 / val
+                L[i_b, i_b] += 1 / val
+                L[i_a, i_b] -= 1 / val
+                L[i_b, i_a] -= 1 / val
+
+    # Now we need to solve the system of equations
+    # We are going to use a direct solver for now
+    v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
+
+    # Great, now just convert it back to a Solution
     layer_solutions = []
-    
-    # Process each layer in the problem
-    for layer in problem.layers:
-        # Generate meshes for the layer
-        layer_meshes = mesh_layer(mesher, problem, layer)
-        
-        # Generate random values for each mesh as a dummy solution
+    for layer_i, layer in enumerate(prob.layers):
+        # TODO: Also unfuck this a bit
         layer_values = []
-        for m in layer_meshes:
-            import random
-            # Assign a random value to each vertex in the mesh
-            vertex_values = [random.uniform(0.0, 1.0) for _ in range(len(m.vertices))]
+        for mesh_idx, msh in enumerate(meshes):
+            if mesh_index_to_layer_index[mesh_idx] != layer_i:
+                continue
+            vertex_values = []
+            for vertex_idx, vertex in enumerate(msh.vertices):
+                global_index = mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
+                vertex_values.append(v[global_index])
             layer_values.append(vertex_values)
-        
-        # Create a layer solution and add it to our results
-        layer_solutions.append(LayerSolution(meshes=layer_meshes, values=layer_values))
-    
+
+        layer_solutions.append(LayerSolution(meshes=meshes, values=layer_values))
+
     # Return the complete solution
-    return Solution(problem=problem, layer_solutions=layer_solutions)
+    return Solution(problem=prob, layer_solutions=layer_solutions)
