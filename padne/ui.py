@@ -8,10 +8,10 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 from PySide6 import QtGui
-from PySide6.QtWidgets import QApplication, QMainWindow
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout
+from PySide6.QtCore import Qt, Signal, Slot, QRect
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtGui import QSurfaceFormat
+from PySide6.QtGui import QSurfaceFormat, QPainter, QPen, QColor
 from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 
 from padne import kicad, mesh, solver
@@ -240,6 +240,9 @@ class RenderedMesh:
 
 
 class MeshViewer(QOpenGLWidget):
+    # Signal to notify when the value range changes
+    valueRangeChanged = Signal(float, float)
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.meshes = []
@@ -272,6 +275,9 @@ class MeshViewer(QOpenGLWidget):
         if self.min_value == float('inf'):
             self.min_value = 0.0
             self.max_value = 1.0
+            
+        # Emit signal with the new value range
+        self.valueRangeChanged.emit(self.min_value, self.max_value)
         
         # Calculate the bounds of all meshes to set initial view
         min_x, min_y = float('inf'), float('inf')
@@ -446,16 +452,191 @@ class MeshViewer(QOpenGLWidget):
         self.update()
 
 
+class ColorScaleWidget(QWidget):
+    """Widget that displays a color scale with min/max values and units."""
+    
+    # Signal to notify when unit is changed manually
+    unitChanged = Signal(str)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.gradient = Gradient.rainbow
+        self.v_min = 0.0
+        self.v_max = 1.0
+        self.unit = "V"  # Default unit
+        
+        self.setMinimumWidth(80)  # Set a reasonable minimum width
+        self.setMinimumHeight(200)  # Set a reasonable minimum height
+        
+        self.setupUI()
+
+    @staticmethod
+    def _pretty_format_si_number(value: float, unit: str):
+        """Pretty format a number with SI prefix and unit."""
+        if value == 0:
+            return f"0 {unit}"
+            
+        # Define SI prefixes and their corresponding powers of 10
+        prefixes = {
+            -12: "p",  # pico
+            -9: "n",   # nano
+            -6: "μ",   # micro
+            -3: "m",   # milli
+            0: "",     # base unit
+            3: "k",    # kilo
+            6: "M",    # mega
+            9: "G",    # giga
+            12: "T"    # tera
+        }
+        
+        # Determine the appropriate prefix for the value
+        abs_value = abs(value)
+        exponent = 0
+        
+        if abs_value < 1e-10:
+            return f"0 {unit}"  # Treat very small values as zero
+            
+        if abs_value >= 1:
+            while abs_value >= 1000 and exponent < 12:
+                abs_value /= 1000
+                exponent += 3
+        else:
+            while abs_value < 1 and exponent > -12:
+                abs_value *= 1000
+                exponent -= 3
+        
+        # Format the value with the appropriate precision
+        # Use fewer decimal places for larger numbers
+        if abs_value >= 100:
+            formatted_value = f"{abs_value:.1f}"
+        elif abs_value >= 10:
+            formatted_value = f"{abs_value:.2f}"
+        else:
+            formatted_value = f"{abs_value:.3f}"
+        
+        # Remove trailing zeros after decimal point
+        if "." in formatted_value:
+            formatted_value = formatted_value.rstrip("0").rstrip(".")
+        
+        # Apply the sign from the original value
+        if value < 0:
+            formatted_value = "-" + formatted_value
+        
+        # Return the formatted string with prefix and unit
+        return f"{formatted_value} {prefixes[exponent]}{unit}"
+    
+    def setupUI(self):
+        """Set up the UI components."""
+        layout = QVBoxLayout(self)
+        
+        # Max value label at the top of the stretch area
+        self.max_label = QLabel(f"{self.v_max:.3f} {self.unit}")
+        self.max_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self.max_label)
+        
+        # This stretch is where we'll paint our gradient
+        layout.addStretch(10)
+        
+        # Min value label at the bottom of the stretch area
+        self.min_label = QLabel(f"{self.v_min:.3f} {self.unit}")
+        self.min_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self.min_label)
+    
+    @Slot(float, float)
+    def setRange(self, v_min, v_max):
+        """Set the minimum and maximum values for the scale."""
+        self.v_min = v_min
+        self.v_max = v_max
+        self.updateLabels()
+        self.update()  # Trigger repaint
+    
+    @Slot(str)
+    def setUnit(self, unit):
+        """Set the unit for the scale."""
+        self.unit = unit
+        self.updateLabels()
+    
+    def updateLabels(self):
+        """Update the min/max labels with current values and unit."""
+        self.min_label.setText(self._pretty_format_si_number(self.v_min, self.unit))
+        self.max_label.setText(self._pretty_format_si_number(self.v_max, self.unit))
+    
+    def paintEvent(self, event):
+        """Paint the color gradient scale."""
+        super().paintEvent(event)
+        
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Find the rectangle where we should draw the gradient
+        # This should be between the max_label and min_label
+        content_rect = self.rect()
+        top_margin = self.max_label.y() + self.max_label.height()
+        bottom_margin = self.height() - self.min_label.y()
+        
+        # Calculate the gradient bar rectangle centered horizontally
+        bar_width = 20
+        gradient_rect = QRect(
+            content_rect.left() + (content_rect.width() - bar_width) // 2,  # Center horizontally
+            top_margin,
+            bar_width,
+            content_rect.height() - top_margin - bottom_margin
+        )
+        
+        # Draw gradient bar border
+        painter.setPen(QPen(Qt.black, 1))
+        painter.drawRect(gradient_rect)
+        
+        # Draw the gradient
+        for i in range(gradient_rect.height()):
+            # Map position to color
+            t = 1.0 - (i / gradient_rect.height())
+            color = self.gradient.value(t)
+            
+            # Convert to QColor
+            qcolor = QColor(
+                int(color[0] * 255),
+                int(color[1] * 255),
+                int(color[2] * 255)
+            )
+            
+            painter.setPen(qcolor)
+            painter.drawLine(
+                gradient_rect.left() + 1,
+                gradient_rect.top() + i,
+                gradient_rect.right() - 1,
+                gradient_rect.top() + i
+            )
+
+
 class MainWindow(QMainWindow):
     def __init__(self, kicad_pro_path):
         super().__init__()
         
         self.setWindowTitle("PDN Simulator Viewer")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 900, 600)  # Slightly wider to accommodate color scale
         
-        # Create and set the mesh viewer as central widget
+        # Create main widget and layout
+        main_widget = QWidget()
+        main_layout = QHBoxLayout(main_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)  # Set zero padding/margin
+        main_layout.setSpacing(0)  # Remove spacing between widgets
+        
+        # Create the mesh viewer
         self.mesh_viewer = MeshViewer(self)
-        self.setCentralWidget(self.mesh_viewer)
+        
+        # Create color scale widget
+        self.color_scale = ColorScaleWidget(self)
+        
+        # Add widgets to layout
+        main_layout.addWidget(self.mesh_viewer, 9)  # Give mesh viewer 90% of space
+        main_layout.addWidget(self.color_scale, 1)  # Give color scale 10% of space
+        
+        # Set the main widget as central widget
+        self.setCentralWidget(main_widget)
+        
+        # Connect signals/slots
+        self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         
         # Load and mesh the KiCad project
         self.loadProject(kicad_pro_path)
@@ -488,6 +669,9 @@ class MainWindow(QMainWindow):
             print(f"Displaying {len(f_cu_solution.meshes)} mesh regions")
             # Pass both meshes and solution values to the mesh viewer
             self.mesh_viewer.setMeshes(f_cu_solution.meshes, f_cu_solution.values)
+            
+            # Set an appropriate unit (assuming voltage for now)
+            self.color_scale.setUnit("V")
             
         except Exception as e:
             print(f"Error loading project: {str(e)}")
