@@ -319,7 +319,7 @@
 		)
 		(uuid "875656d6-84fe-42e3-ae11-56c865590301")
 	)
-	(text "!padne RESISTANCE 1k R3.1 R3.2"
+	(text "!padne RESISTANCE 0.1 R3.1 R3.2"
 		(exclude_from_sim no)
 		(at 118.872 99.568 0)
 		(effects

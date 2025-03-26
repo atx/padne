@@ -135,7 +135,7 @@ class TestDirectiveParser:
             "Voltage directive endpoint B pad should be 2"
         
         # Validate the resistor directive
-        assert resistor_spec.value == 1000.0, "Resistor value should be 1000.0"
+        assert resistor_spec.value == 0.1
         assert resistor_spec.endpoint_a.designator == "R3", \
             "Resistor directive endpoint A designator should be R3"
         assert resistor_spec.endpoint_a.pad == "1", \
@@ -227,7 +227,7 @@ class TestLoadKicadProject:
                 voltage_source.b_point.y == r2_2_point.y)
         
         # Check resistor properties
-        assert resistor.value == 1000.0  # 1k
+        assert resistor.value == 0.1
         # Check that it's connected to component R3, pads 1 and 2
         r3_1_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R3", "1")[1]
         r3_2_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R3", "2")[1]
