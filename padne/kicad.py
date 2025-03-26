@@ -344,6 +344,10 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
         # For reasons to be determined, the geometry generated like this has 
         # a flipped y axis. Flip it back.
         geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
+        
+        # If the layer has only a single connected component, convert it to a MultiPolygon
+        if geometry.geom_type == "Polygon":
+            geometry = shapely.geometry.MultiPolygon([geometry])
 
         # Create a PlottedGerberLayer object
         plotted_layer = PlottedGerberLayer(

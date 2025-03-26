@@ -271,3 +271,25 @@ class TestLoadKicadProject:
                     f"Project {project_name}, lumped element {i} ({lumped.type.name}): "
                     f"b_point {lumped.b_point} is not inside its layer shape {lumped.b_layer.name}"
                 )
+
+    def test_all_layer_shapes_are_multipolygons(self, kicad_test_projects):
+        """
+        Test that for all test projects, the shapes of all layers are MultiPolygons.
+        This is regression testing for a bug where a layer with a single connected
+        component would be loaded as a Polygon instead of a MultiPolygon
+        (this originates in pygerber).
+        """
+        
+        for project_name, project in kicad_test_projects.items():
+            # Load the KiCad project
+            try:
+                kicad_problem = kicad.load_kicad_project(project.pro_path)
+            except Exception as e:
+                pytest.fail(f"Failed to load project {project_name}: {e}")
+                
+            # For each layer, verify that its shape is a MultiPolygon
+            for i, layer in enumerate(kicad_problem.layers):
+                assert layer.shape.geom_type == "MultiPolygon", (
+                    f"Project {project_name}, layer {i} ({layer.name}): "
+                    f"shape is not a MultiPolygon"
+                )

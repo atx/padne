@@ -80,3 +80,17 @@ class TestSolverMeshLayer:
                         break
                 
                 assert found, f"Seed point {seed_point} should be represented in the mesh"
+
+    def test_all_test_projects_solve(self, kicad_test_projects):
+        """Test that solver.solve works on all test projects."""
+        for project in kicad_test_projects.values():
+            # Load the problem from the KiCad project
+            prob = kicad.load_kicad_project(project.pro_path)
+
+            # Call the function under test
+            solution = solver.solve(prob)
+
+            assert solution is not None
+            assert isinstance(solution, solver.Solution)
+            # TODO: Add more checks on the solution object
+            # such as checking that layers exist etc
