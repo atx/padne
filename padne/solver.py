@@ -56,6 +56,7 @@ def mesh_layer(mesher: mesh.Mesher, problem: problem.Problem, layer: problem.Lay
     """
     seed_points = collect_seed_points(problem, layer)
     ret = []
+
     for subshape in layer.shape.geoms:
         # Filter seed points to only those contained in this subshape
         seed_points_in_subshape = [
@@ -113,13 +114,17 @@ def solve(prob: problem.Problem) -> Solution:
     # where L is the "laplace operator",
     # v is the voltage vector and
     # r is the right-hand side "source" vector
-    # TODO: This needs to be
-    # decremented by 1 for each connected component (we are just going to get one for now)
-    N = len(global_index_to_vertex_index) + voltage_source_count # - 1
+    # TODO: Maybe we need to force a ground somewhere? Honestly, I
+    # feel like as long as the solver can handle it, we can just leave everything
+    # floating and let the UI figure out. This can possibly lead to some
+    # numerical instability, so it needs more stress testing.
+    N = len(global_index_to_vertex_index) + voltage_source_count
     L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
     r = np.zeros(N, dtype=np.float32)
 
     # Okay, now we enumerate over every vertex
+    # TODO: Maybe it would be nicer to make a per-mesh matrix and then "stack"
+    # them together?
     for i, (mesh_idx, vertex_idx) in enumerate(global_index_to_vertex_index):
         vertex = meshes[mesh_idx].vertices.to_object(vertex_idx)
         for edge in vertex.orbit():
@@ -135,7 +140,7 @@ def solve(prob: problem.Problem) -> Solution:
                     vb = vertex_other.p - ed.origin.p
                     ratio += abs(va.dot(vb) / (va ^ vb)) / 2
             else:
-                # TODO: This boundary handling comes from my original code 
+                # TODO: This boundary handling comes from my original code
                 # written in 2019. It is very likely wrong.
                 # Do considerable amount of thinking here to figure out
                 # the correct way to force the normal derivative to zero
@@ -145,7 +150,7 @@ def solve(prob: problem.Problem) -> Solution:
                 vb = vertex_other.p - eop.origin.p
                 ratio = abs(va.dot(vb) / (va ^ vb)) / 2
             L[i, i] -= ratio
-            # Note that we are iterating over everything, so the (k, i) pair gets 
+            # Note that we are iterating over everything, so the (k, i) pair gets
             # set in a different iteration
             L[i, k] += ratio
 
@@ -170,10 +175,11 @@ def solve(prob: problem.Problem) -> Solution:
         i_a = get_vertex_global_index_by_point(elem.a_layer, elem.a_point)
         i_b = get_vertex_global_index_by_point(elem.b_layer, elem.b_point)
 
-        # TODO: Note that these need to be multiplied by a conductance factor,
-        # since our laplace matrix is unitless.
         # TODO: Maybe we actually want to actually scale the L matrix since different
         # layers have different conductances anyway?
+        # It is unclear how this ends up affecting the final solution.
+        # However, this can be postponed until multilayer support is properly
+        # implemented
         match elem.type:
             case problem.Lumped.Type.VOLTAGE:
                 # THIS IS WRONG, BUT JUST FOR NOW
@@ -199,8 +205,11 @@ def solve(prob: problem.Problem) -> Solution:
                 L[i_a, i_b] += val
                 L[i_b, i_a] += val
 
+
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
+    # TODO: This is a symmetric positive definite matrix, so we can theoretically
+    # use something like Conjugate Gradient
     v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
 
     # Great, now just convert it back to a Solution
