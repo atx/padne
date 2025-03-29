@@ -1,5 +1,6 @@
 import pytest
 import shapely.geometry
+import numpy as np
 from padne import solver, problem, mesh, kicad
 from pathlib import Path
 
@@ -100,5 +101,13 @@ class TestSolverMeshLayer:
             # live in the corresponding meshes
             for layer_solution in solution.layer_solutions:
                 assert len(layer_solution.meshes) == len(layer_solution.values)
+
+                for msh, value in zip(layer_solution.meshes, layer_solution.values):
+                    for vertex in msh.vertices:
+                        # This checks both that the value is valid number and
+                        # that it is finite
+                        # Note that isinstance check for float is not good enough
+                        # here, since the solver may decide to return np.float32 or something
+                        assert np.isfinite(value[vertex])
 
             # TODO: Add more checks on the solution object
