@@ -165,6 +165,37 @@ class TestPadFinder:
         assert abs(point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
 
 
+def test_extract_via_specs(kicad_test_projects):
+    """Test that via specifications are correctly extracted from a PCB."""
+    # Get the simple_via project
+    project = kicad_test_projects["simple_via"]
+    assert project.pcb_path.exists(), "PCB file of simple_via project does not exist"
+    
+    # Load the KiCad board
+    board = pcbnew.LoadBoard(str(project.pcb_path))
+    
+    # Extract via specifications
+    via_specs = kicad.extract_via_specs_from_pcb(board)
+    
+    # We expect exactly one via in the simple_via project
+    assert len(via_specs) == 1, f"Expected 1 via, got {len(via_specs)}"
+    
+    # Get the via specification
+    via_spec = via_specs[0]
+    
+    # Verify drill diameter (0.3mm)
+    assert abs(via_spec.drill_diameter - 0.3) < 1e-6, f"Expected drill diameter 0.3mm, got {via_spec.drill_diameter}mm"
+    
+    # Verify position (x=132, y=100)
+    assert abs(via_spec.point.x - 132) < 1e-3, f"Expected x=132, got {via_spec.point.x}"
+    assert abs(via_spec.point.y - 100) < 1e-3, f"Expected y=100, got {via_spec.point.y}"
+    
+    # Verify that the via connects F.Cu and B.Cu layers
+    expected_layers = ["F.Cu", "B.Cu"]
+    assert set(via_spec.layer_names) == set(expected_layers), \
+        f"Expected layers {expected_layers}, got {via_spec.layer_names}"
+
+
 class TestLoadKicadProject:
     """Tests for the load_kicad_project function."""
 
@@ -293,3 +324,43 @@ class TestLoadKicadProject:
                     f"Project {project_name}, layer {i} ({layer.name}): "
                     f"shape is not a MultiPolygon"
                 )
+
+    def test_flipped_pads_work(self, kicad_test_projects):
+        """Test that flipped pads are handled correctly."""
+        project = kicad_test_projects["simple_via"]
+        
+        # Load the project
+        result = kicad.load_kicad_project(project.pro_path)
+        
+        # Find the voltage source lumped element
+        voltage_source = next(
+            (l for l in result.lumpeds if l.type == problem.Lumped.Type.VOLTAGE),
+            None
+        )
+        
+        # Check that we found a voltage source
+        assert voltage_source is not None, "No voltage source found in the simple_via project"
+        
+        # Check that one endpoint is on F.Cu at position (122, 100)
+        if voltage_source.a_layer.name == "F.Cu":
+            f_cu_point = voltage_source.a_point
+            b_cu_point = voltage_source.b_point
+            f_cu_layer = voltage_source.a_layer
+            b_cu_layer = voltage_source.b_layer
+        else:
+            f_cu_point = voltage_source.b_point
+            b_cu_point = voltage_source.a_point
+            f_cu_layer = voltage_source.b_layer
+            b_cu_layer = voltage_source.a_layer
+        
+        # Verify F.Cu point is at expected coordinates (122, 100)
+        assert abs(f_cu_point.x - 122) < 1e-3, f"F.Cu point X should be 122, got {f_cu_point.x}"
+        assert abs(f_cu_point.y - 100) < 1e-3, f"F.Cu point Y should be 100, got {f_cu_point.y}"
+        
+        # Verify B.Cu point is at expected coordinates (142, 100)
+        assert abs(b_cu_point.x - 142) < 1e-3, f"B.Cu point X should be 142, got {b_cu_point.x}"
+        assert abs(b_cu_point.y - 100) < 1e-3, f"B.Cu point Y should be 100, got {b_cu_point.y}"
+        
+        # Verify the layer names
+        assert f_cu_layer.name == "F.Cu", f"Expected F.Cu layer, got {f_cu_layer.name}"
+        assert b_cu_layer.name == "B.Cu", f"Expected B.Cu layer, got {b_cu_layer.name}"

@@ -300,7 +300,8 @@ class Mesh:
 class ZeroForm:
     mesh: Mesh
     values: dict[Vertex, float] = field(
-        default_factory=lambda: collections.defaultdict(float)
+        default_factory=lambda: collections.defaultdict(float),
+        repr=False,
     )
 
     def __getitem__(self, vertex: Vertex) -> float:

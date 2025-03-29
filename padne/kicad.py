@@ -5,6 +5,7 @@ import warnings
 warnings.simplefilter("ignore", DeprecationWarning)
 
 import enum
+import math
 import pcbnew
 import tempfile
 import shapely
@@ -34,6 +35,9 @@ import padne.problem as problem
 # But we can fairly easily compute them and have a lot of work done for us
 # by using the gerber pathway
 
+def nm_to_mm(f: float) -> float:
+    return f / 1000000
+
 
 @dataclass(frozen=True)
 class LumpedSpec:
@@ -61,6 +65,77 @@ class LayerSpec:
     """
     name: str
     conductance: float  # Changed from resistivity
+
+
+@dataclass(frozen=True)
+class ViaSpec:
+    """
+    This class contains material parameters for a via.
+    """
+    point: shapely.geometry.Point
+    drill_diameter: float
+    layer_names: list[str]
+
+    def compute_resistance(self) -> float:
+        # TODO: This is very temporary solution. Will ultimately need to take
+        # into account layer plating thickness etc
+        # Resistance of a 1.6mm long via with 1mm diameter
+        ref_resistance = 0.00027
+        ref_area = math.pi * (0.5) ** 2
+        area = math.pi * (self.drill_diameter / 2) ** 2
+        return ref_resistance * (area / ref_area)
+
+
+def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
+    """
+    Extract via specifications from a KiCad PCB.
+    
+    Args:
+        board: The KiCad board object
+        
+    Returns:
+        A list of ViaSpec objects containing information about vias in the PCB
+    """
+    via_specs = []
+    
+    # Get the tracks (which include vias)
+    for track in board.GetTracks():
+        # Check if the track is a via
+        if track.Type() != pcbnew.PCB_VIA_T:
+            continue
+        
+        # Cast to a via object
+        via = track.Cast()
+        
+        # Get the via drill diameter (convert from nm to mm)
+        drill_diameter = nm_to_mm(via.GetDrillValue())
+        
+        # Get the layers this via connects
+        layer_names = []
+        layer_set = via.GetLayerSet()
+        
+        for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
+            if layer_set.Contains(layer_id):
+                layer_name = board.GetLayerName(layer_id)
+                # Only include copper layers
+                if "Cu" in layer_name:
+                    layer_names.append(layer_name)
+        
+        # Get the via's position (convert from KiCad internal units - nanometers to mm)
+        pos_x = nm_to_mm(via.GetPosition().x)
+        pos_y = nm_to_mm(via.GetPosition().y)
+        via_point = shapely.geometry.Point(pos_x, pos_y)
+        
+        # Create a ViaSpec object
+        via_spec = ViaSpec(
+            point=via_point,
+            drill_diameter=drill_diameter,
+            layer_names=layer_names
+        )
+        
+        via_specs.append(via_spec)
+    
+    return via_specs
 
 
 @dataclass(frozen=True)
@@ -380,6 +455,7 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
     for footprint in board.GetFootprints():
         if footprint.GetReference() != designator:
             continue
+
         # Find the pad with the given number/name
         for pad_obj in footprint.Pads():
             if pad_obj.GetName() != pad:
@@ -389,23 +465,31 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
             position = pad_obj.GetPosition()
             
             # Convert from KiCad internal units (nanometers) to mm
-            x_mm = position.x / 1000000.0
-            y_mm = position.y / 1000000.0
+            x_mm = nm_to_mm(position.x)
+            y_mm = nm_to_mm(position.y)
             point = shapely.geometry.Point(x_mm, y_mm)
             
             # For SMD pads, get the layer directly
             if pad_obj.GetAttribute() == pcbnew.PAD_ATTRIB_SMD:
                 layer_id = pad_obj.GetLayer()
+
+                if footprint.IsFlipped():
+                    match layer_id:
+                        case pcbnew.F_Cu:
+                            layer_id = pcbnew.B_Cu
+                        case pcbnew.B_Cu:
+                            layer_id = pcbnew.F_Cu
+                        case _:
+                            raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
+                    footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
+                    y_mm = 2 * footprint_pos_y - y_mm
+                    point = shapely.geometry.Point(x_mm, y_mm)
+
                 layer_name = board.GetLayerName(layer_id)
                 return layer_name, point
-            
-            # For through-hole pads, use the component's layer
-            # This is a simplification - through-hole pads exist on multiple layers
-            # For now, we do not handle this case
-            layer_id = footprint.GetLayer()
-            layer_name = board.GetLayerName(layer_id)
-            return layer_name, point
-        
+
+            raise NotImplementedError("Footprints with through hole pads are not yet supported")
+
         raise ValueError(f"Pad {pad} not found on component {designator}")
     
     raise ValueError(f"Component {designator} not found")
@@ -498,6 +582,25 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
             value=spec.value
         )
         
+        lumpeds.append(lumped)
+
+    # TODO: We need to do something similar but for through hole pads
+    via_specs = extract_via_specs_from_pcb(board)
+    for via_spec in via_specs:
+        # Get the layer names for the via
+        layer_names = via_spec.layer_names
+        if set(layer_names) != {"F.Cu", "B.Cu"}:
+            raise NotImplementedError("Multi-layer vias are not yet supported")
+
+        lumped = problem.Lumped(
+            type=problem.Lumped.Type.RESISTANCE,
+            a_layer=layer_dict["F.Cu"],
+            a_point=via_spec.point,
+            b_layer=layer_dict["B.Cu"],
+            b_point=via_spec.point,
+            value=via_spec.compute_resistance()
+        )
+
         lumpeds.append(lumped)
 
     # Get all layers as a list
