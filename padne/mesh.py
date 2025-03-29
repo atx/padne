@@ -165,6 +165,10 @@ class IndexMap[T: Hashable]:
     def __iter__(self) -> Iterable[T]:
         return iter(self._idx_to_obj)
 
+    def __contains__(self, obj: T) -> bool:
+        """Check if an object is in the index map."""
+        return obj in self._obj_to_idx
+
     def items(self) -> Iterable[tuple[int, T]]:
         for idx, obj in enumerate(self._idx_to_obj):
             yield idx, obj

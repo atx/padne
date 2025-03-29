@@ -880,6 +880,26 @@ class TestIndexMap:
             assert idx == i
             assert obj == objects[i]
 
+    def test_contains(self):
+        # Test the 'in' operator
+        index_map = IndexMap()
+        index_map.add("apple")
+        index_map.add("banana")
+        
+        assert "apple" in index_map
+        assert "banana" in index_map
+        assert "orange" not in index_map
+        
+        # Test with other types
+        index_map = IndexMap()
+        index_map.add(1)
+        index_map.add((2, 3))
+        
+        assert 1 in index_map
+        assert (2, 3) in index_map
+        assert "string" not in index_map
+        assert 2 not in index_map
+
     def test_different_object_types(self):
         # Test with various object types
         index_map = IndexMap()
