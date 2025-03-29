@@ -92,5 +92,13 @@ class TestSolverMeshLayer:
 
             assert solution is not None
             assert isinstance(solution, solver.Solution)
+
+            # Check that every layer has a solution
+            assert len(solution.layer_solutions) == len(prob.layers)
+
+            # Next, we iterate over all the solutions and check that the ZeroForms
+            # live in the corresponding meshes
+            for layer_solution in solution.layer_solutions:
+                assert len(layer_solution.meshes) == len(layer_solution.values)
+
             # TODO: Add more checks on the solution object
-            # such as checking that layers exist etc

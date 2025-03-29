@@ -216,10 +216,12 @@ def solve(prob: problem.Problem) -> Solution:
     # Great, now just convert it back to a Solution
     layer_solutions = []
     for layer_i, layer in enumerate(prob.layers):
+        layer_meshes = []
         layer_values = []
         for mesh_idx, msh in enumerate(meshes):
             if mesh_index_to_layer_index[mesh_idx] != layer_i:
                 continue
+            layer_meshes.append(msh)
             # Create a ZeroForm for this mesh's vertices
             vertex_values = ZeroForm(msh)  # Initialize ZeroForm with the mesh
             for vertex_idx, vertex in enumerate(msh.vertices):
@@ -227,7 +229,7 @@ def solve(prob: problem.Problem) -> Solution:
                 vertex_values[vertex] = v[global_index]  # Set values using indexing
             layer_values.append(vertex_values)
 
-        layer_solutions.append(LayerSolution(meshes=meshes, values=layer_values))
+        layer_solutions.append(LayerSolution(meshes=layer_meshes, values=layer_values))
 
     # Return the complete solution
     return Solution(problem=prob, layer_solutions=layer_solutions)
