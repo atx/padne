@@ -613,7 +613,7 @@ class ColorScaleWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, kicad_pro_path):
         super().__init__()
-        
+
         self.setWindowTitle("PDN Simulator Viewer")
         self.setGeometry(100, 100, 900, 600)  # Slightly wider to accommodate color scale
         
@@ -628,10 +628,11 @@ class MainWindow(QMainWindow):
         
         # Create color scale widget
         self.color_scale = ColorScaleWidget(self)
+        self.color_scale.setFixedWidth(100)  # Fixed width of 100 pixels
         
         # Add widgets to layout
-        main_layout.addWidget(self.mesh_viewer, 9)  # Give mesh viewer 90% of space
-        main_layout.addWidget(self.color_scale, 1)  # Give color scale 10% of space
+        main_layout.addWidget(self.mesh_viewer)  # Mesh viewer takes remaining space
+        main_layout.addWidget(self.color_scale)  # Color scale has fixed width
         
         # Set the main widget as central widget
         self.setCentralWidget(main_widget)
