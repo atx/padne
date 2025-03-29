@@ -506,9 +506,28 @@ class MeshViewer(QOpenGLWidget):
     def mouseMoveEvent(self, event):
         """Handle mouse movement for panning."""
         if event.buttons() & Qt.LeftButton and self.last_pos is not None:
+            # Calculate the current aspect ratio
+            aspect = self.width() / self.height() if self.height() > 0 else 1.0
+            
+            # Convert screen coordinates to world coordinates
             delta = event.position() - self.last_pos
-            self.offset_x += delta.x() / self.scale / self.width() * 2
-            self.offset_y -= delta.y() / self.scale / self.height() * 2
+            
+            # The conversion factor should consider:
+            # 1. The current scale 
+            # 2. The viewport size
+            # 3. The orthographic projection bounds
+            
+            # Horizontal movement (adjusted for aspect ratio)
+            dx_world = (delta.x() / self.width()) * (2.0 / self.scale) * aspect
+            
+            # Vertical movement (note: Qt's y axis points down, OpenGL's points up)
+            dy_world = -(delta.y() / self.height()) * (2.0 / self.scale)
+            
+            # Update offsets
+            self.offset_x += dx_world
+            self.offset_y += dy_world
+            
+            # Update the last position
             self.last_pos = event.position()
             self.update()
 
