@@ -1,7 +1,8 @@
 
+import collections
 import numpy as np
 import shapely.geometry
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Iterable, Hashable
 
 # The purpose of this module is to generate triangular meshes from Shapely
@@ -293,6 +294,120 @@ class Mesh:
             HalfEdge.connect(hedge_prev, hedge)
 
         return mesh
+
+
+@dataclass
+class ZeroForm:
+    mesh: Mesh
+    values: dict[Vertex, float] = field(
+        default_factory=lambda: collections.defaultdict(float)
+    )
+
+    def __getitem__(self, vertex: Vertex) -> float:
+        if vertex not in self.mesh.vertices:
+            raise KeyError("Vertex not in mesh")
+        return self.values[vertex]
+
+    def __setitem__(self, vertex: Vertex, value: float) -> None:
+        if vertex not in self.mesh.vertices:
+            raise KeyError("Vertex not in mesh")
+        self.values[vertex] = value
+
+    def __add__(self, other: "ZeroForm") -> "ZeroForm":
+        """Add two ZeroForms element-wise.
+        
+        Args:
+            other: The ZeroForm to add to this one
+            
+        Returns:
+            A new ZeroForm with the sum of values
+            
+        Raises:
+            ValueError: If the two ZeroForms are on different meshes
+        """
+        if self.mesh is not other.mesh:
+            raise ValueError("Cannot add ZeroForms on different meshes")
+        
+        result = ZeroForm(self.mesh)
+        for vertex in self.mesh.vertices:
+            result[vertex] = self[vertex] + other[vertex]
+        return result
+
+    def __sub__(self, other: "ZeroForm") -> "ZeroForm":
+        """Subtract another ZeroForm element-wise.
+        
+        Args:
+            other: The ZeroForm to subtract from this one
+            
+        Returns:
+            A new ZeroForm with the difference of values
+            
+        Raises:
+            ValueError: If the two ZeroForms are on different meshes
+        """
+        if self.mesh is not other.mesh:
+            raise ValueError("Cannot subtract ZeroForms on different meshes")
+        
+        result = ZeroForm(self.mesh)
+        for vertex in self.mesh.vertices:
+            result[vertex] = self[vertex] - other[vertex]
+        return result
+
+    def __mul__(self, scalar: float) -> "ZeroForm":
+        """Multiply this ZeroForm by a scalar.
+        
+        Args:
+            scalar: The scalar value to multiply by
+            
+        Returns:
+            A new ZeroForm with scaled values
+        """
+        result = ZeroForm(self.mesh)
+        for vertex in self.mesh.vertices:
+            result[vertex] = self[vertex] * scalar
+        return result
+
+    def __rmul__(self, scalar: float) -> "ZeroForm":
+        """Right multiplication by a scalar.
+        
+        Args:
+            scalar: The scalar value to multiply by
+            
+        Returns:
+            A new ZeroForm with scaled values
+        """
+        return self.__mul__(scalar)
+
+    def __truediv__(self, scalar: float) -> "ZeroForm":
+        """Divide this ZeroForm by a scalar.
+        
+        Args:
+            scalar: The scalar value to divide by
+            
+        Returns:
+            A new ZeroForm with divided values
+            
+        Raises:
+            ZeroDivisionError: If scalar is zero
+        """
+        if scalar == 0:
+            raise ZeroDivisionError("Cannot divide ZeroForm by zero")
+        
+        result = ZeroForm(self.mesh)
+        for vertex in self.mesh.vertices:
+            result[vertex] = self[vertex] / scalar
+        return result
+
+    def __neg__(self) -> "ZeroForm":
+        """Negate all values in this ZeroForm.
+        
+        Returns:
+            A new ZeroForm with negated values
+        """
+        result = ZeroForm(self.mesh)
+        for vertex in self.mesh.vertices:
+            result[vertex] = -self[vertex]
+        return result
 
 
 class Mesher:

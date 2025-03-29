@@ -15,6 +15,7 @@ from PySide6.QtGui import QSurfaceFormat, QPainter, QPen, QColor
 from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 
 from padne import kicad, mesh, solver
+from padne.mesh import ZeroForm
 
 # Define shader source code
 VERTEX_SHADER_MESH = """
@@ -144,7 +145,7 @@ class RenderedMesh:
     edge_count: int
 
     @classmethod
-    def from_mesh(cls, msh: mesh.Mesh, values: np.ndarray):
+    def from_mesh(cls, msh: mesh.Mesh, values: ZeroForm):
         triangle_vertices = []
         triangle_colors = []
         edge_vertices = []
@@ -157,9 +158,7 @@ class RenderedMesh:
             # Vertex data
             for vertex in face.vertices:
                 triangle_vertices.extend([vertex.p.x, vertex.p.y])
-                vertex_idx = msh.vertices.to_index(vertex)
-                # TODO: This needs some more thinkies
-                triangle_colors.extend([values[vertex_idx]])
+                triangle_colors.extend([values[vertex]])
 
             # Edge data
             for edge in face.edges:
@@ -266,10 +265,12 @@ class MeshViewer(QOpenGLWidget):
         self.max_value = float('-inf')
         
         if values:
-            for value_array in values:
-                if len(value_array) > 0:
-                    self.min_value = min(self.min_value, np.min(value_array))
-                    self.max_value = max(self.max_value, np.max(value_array))
+            for zeroform in values:
+                # Get min/max from all vertices in the mesh
+                for vertex in zeroform.mesh.vertices:
+                    value = zeroform[vertex]
+                    self.min_value = min(self.min_value, value)
+                    self.max_value = max(self.max_value, value)
         
         # If min_value is still infinity, set defaults
         if self.min_value == float('inf'):

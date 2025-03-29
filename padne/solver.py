@@ -6,12 +6,13 @@ import numpy as np
 import scipy.sparse
 
 from . import problem, mesh
+from .mesh import ZeroForm
 
 
 @dataclass
 class LayerSolution:
     meshes: list[mesh.Mesh]
-    values: list[list[float]]
+    values: list[ZeroForm]
 
 
 @dataclass
@@ -215,15 +216,15 @@ def solve(prob: problem.Problem) -> Solution:
     # Great, now just convert it back to a Solution
     layer_solutions = []
     for layer_i, layer in enumerate(prob.layers):
-        # TODO: Also unfuck this a bit
         layer_values = []
         for mesh_idx, msh in enumerate(meshes):
             if mesh_index_to_layer_index[mesh_idx] != layer_i:
                 continue
-            vertex_values = []
+            # Create a ZeroForm for this mesh's vertices
+            vertex_values = ZeroForm(msh)  # Initialize ZeroForm with the mesh
             for vertex_idx, vertex in enumerate(msh.vertices):
                 global_index = mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
-                vertex_values.append(v[global_index])
+                vertex_values[vertex] = v[global_index]  # Set values using indexing
             layer_values.append(vertex_values)
 
         layer_solutions.append(LayerSolution(meshes=meshes, values=layer_values))

@@ -2,7 +2,7 @@ import pytest
 import shapely.geometry
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
-        Mesher
+        Mesher, ZeroForm
 
 
 class TestVector:
@@ -926,6 +926,165 @@ class TestIndexMap:
         assert index_map.to_object(int_idx) == 42
         assert index_map.to_object(tuple_idx) == (1, 2, 3)
         assert index_map.to_object(point_idx) == point
+
+
+class TestZeroForm:
+    @pytest.fixture
+    def simple_mesh(self):
+        """Create a simple mesh for testing ZeroForm operations."""
+        # Create a simple triangular mesh
+        points = [
+            Point(0.0, 0.0),
+            Point(1.0, 0.0),
+            Point(0.0, 1.0),
+            Point(1.0, 1.0)
+        ]
+        triangles = [(0, 1, 2), (1, 3, 2)]
+        
+        return Mesh.from_triangle_soup(points, triangles)
+    
+    def test_zeroform_initialization(self, simple_mesh):
+        """Test basic initialization of a ZeroForm."""
+        zf = ZeroForm(simple_mesh)
+        
+        # Initial values should be zero
+        for vertex in simple_mesh.vertices:
+            assert zf[vertex] == 0.0
+    
+    def test_zeroform_set_get(self, simple_mesh):
+        """Test setting and getting values in a ZeroForm."""
+        zf = ZeroForm(simple_mesh)
+        
+        # Set some values
+        values = {}
+        for i, vertex in enumerate(simple_mesh.vertices):
+            value = float(i + 1)
+            zf[vertex] = value
+            values[vertex] = value
+        
+        # Check values were set correctly
+        for vertex in simple_mesh.vertices:
+            assert zf[vertex] == values[vertex]
+    
+    def test_zeroform_invalid_vertex(self, simple_mesh):
+        """Test that accessing an invalid vertex raises an error."""
+        zf = ZeroForm(simple_mesh)
+        
+        # Create a vertex that's not in the mesh
+        invalid_vertex = Vertex(Point(999.0, 999.0))
+        
+        with pytest.raises(KeyError):
+            zf[invalid_vertex] = 1.0
+            
+        with pytest.raises(KeyError):
+            value = zf[invalid_vertex]
+    
+    def test_zeroform_addition(self, simple_mesh):
+        """Test addition of two ZeroForms."""
+        zf1 = ZeroForm(simple_mesh)
+        zf2 = ZeroForm(simple_mesh)
+        
+        # Set different values in the two forms
+        for i, vertex in enumerate(simple_mesh.vertices):
+            zf1[vertex] = float(i)
+            zf2[vertex] = float(i * 2)
+        
+        # Add them
+        result = zf1 + zf2
+        
+        # Check the result
+        for i, vertex in enumerate(simple_mesh.vertices):
+            assert result[vertex] == float(i) + float(i * 2)
+    
+    def test_zeroform_subtraction(self, simple_mesh):
+        """Test subtraction of two ZeroForms."""
+        zf1 = ZeroForm(simple_mesh)
+        zf2 = ZeroForm(simple_mesh)
+        
+        # Set different values in the two forms
+        for i, vertex in enumerate(simple_mesh.vertices):
+            zf1[vertex] = float(i * 10)
+            zf2[vertex] = float(i * 2)
+        
+        # Subtract
+        result = zf1 - zf2
+        
+        # Check the result
+        for i, vertex in enumerate(simple_mesh.vertices):
+            assert result[vertex] == float(i * 10) - float(i * 2) == float(i * 8)
+    
+    def test_zeroform_scalar_multiplication(self, simple_mesh):
+        """Test multiplication of a ZeroForm by a scalar."""
+        zf = ZeroForm(simple_mesh)
+        
+        # Set some values
+        for i, vertex in enumerate(simple_mesh.vertices):
+            zf[vertex] = float(i)
+        
+        # Multiply by scalar
+        scalar = 3.5
+        result = zf * scalar
+        
+        # Check result
+        for i, vertex in enumerate(simple_mesh.vertices):
+            assert result[vertex] == float(i) * scalar
+        
+        # Test right multiplication
+        result2 = scalar * zf
+        for vertex in simple_mesh.vertices:
+            assert result2[vertex] == result[vertex]
+    
+    def test_zeroform_division(self, simple_mesh):
+        """Test division of a ZeroForm by a scalar."""
+        zf = ZeroForm(simple_mesh)
+        
+        # Set some values
+        for i, vertex in enumerate(simple_mesh.vertices):
+            zf[vertex] = float(i * 10)
+        
+        # Divide by scalar
+        scalar = 2.0
+        result = zf / scalar
+        
+        # Check result
+        for i, vertex in enumerate(simple_mesh.vertices):
+            assert result[vertex] == float(i * 10) / scalar
+        
+        # Test division by zero
+        with pytest.raises(ZeroDivisionError):
+            result = zf / 0.0
+    
+    def test_zeroform_negation(self, simple_mesh):
+        """Test negation of a ZeroForm."""
+        zf = ZeroForm(simple_mesh)
+        
+        # Set some values
+        for i, vertex in enumerate(simple_mesh.vertices):
+            zf[vertex] = float(i * 10 - 15)  # Include positive and negative values
+        
+        # Negate
+        result = -zf
+        
+        # Check result
+        for i, vertex in enumerate(simple_mesh.vertices):
+            assert result[vertex] == -(float(i * 10 - 15))
+    
+    def test_zeroform_different_meshes(self, simple_mesh):
+        """Test operations between ZeroForms on different meshes."""
+        # Create another mesh
+        points = [Point(0.0, 0.0), Point(2.0, 0.0), Point(0.0, 2.0)]
+        triangles = [(0, 1, 2)]
+        other_mesh = Mesh.from_triangle_soup(points, triangles)
+        
+        zf1 = ZeroForm(simple_mesh)
+        zf2 = ZeroForm(other_mesh)
+        
+        # Operations between forms on different meshes should fail
+        with pytest.raises(ValueError):
+            result = zf1 + zf2
+            
+        with pytest.raises(ValueError):
+            result = zf1 - zf2
 
 
 class TestMesher:
