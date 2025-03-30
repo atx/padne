@@ -15,7 +15,7 @@ import pathlib
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 import padne.problem as problem
 
@@ -37,6 +37,111 @@ import padne.problem as problem
 
 def nm_to_mm(f: float) -> float:
     return f / 1000000
+
+
+@dataclass
+class StackupItem:
+
+    class Type(enum.Enum):
+        DIELECTRIC = "DIELECTRIC"
+        COPPER = "COPPER"
+
+    name: str
+    thickness: float
+    # Beware that this field is in S/mm, not S/m (!!!)
+    conductivity: Optional[float] = None
+
+    @property
+    def conductance(self):
+        return self.thickness * self.conductivity
+
+
+@dataclass
+class Stackup:
+    items: list[StackupItem]
+
+
+DEFAULT_STACKUP = Stackup(
+    items=[
+        StackupItem(name="F.Cu", thickness=0.035, conductivity=5.95e4),
+        StackupItem(name="dielectric 1", thickness=1.51),
+        StackupItem(name="B.Cu", thickness=0.035, conductivity=5.95e4),
+    ]
+)
+
+
+def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
+    # Unfortunately, the Python pcbnew API does not support reading the stackup
+    # directly. We need to parse the file manually...
+    with open(board.GetFileName(), "r") as f:
+        import sexpdata
+        sexpr = sexpdata.load(f)
+
+    stackup_items = []
+
+    if sexpr[0] != sexpdata.Symbol("kicad_pcb"):
+        raise ValueError("Unknown initial key in the PCB file")
+    
+    setup = next((item for item in sexpr if isinstance(item, list) and 
+                 item and item[0] == sexpdata.Symbol('setup')), None)
+    
+    if not setup:
+        raise ValueError("Could not find setup section in PCB file")
+    
+    stackup = next((item for item in setup if isinstance(item, list) and 
+                   item and item[0] == sexpdata.Symbol('stackup')), None)
+    
+    if not stackup:
+        # TODO: Return verify that the board only has two layers
+        # I am not sure if it is possible to have no stackup section and
+        # more than two layers. It seems KiCad generates the section
+        # on every change in the stackup window...
+        return DEFAULT_STACKUP
+    
+    # Process each layer in the stackup
+    for item in stackup:
+        if not item[0] == sexpdata.Symbol("layer"):
+            continue
+        
+        layer_name = item[1]
+        layer_type = None
+        thickness = None
+        conductivity = None
+        
+        # Find properties in the layer definition
+        for prop in item:
+            if not isinstance(prop, list) or len(prop) < 2:
+                continue
+
+            match str(prop[0]):
+                case "type":
+                    layer_type_str = prop[1].lower()
+                    if "copper" in layer_type_str:
+                        layer_type = StackupItem.Type.COPPER
+                        conductivity = 5.95e4  # S/mm (!!! not S/m)
+                    elif any(x in layer_type_str for x in ['core', 'prepreg']):
+                        layer_type = StackupItem.Type.DIELECTRIC
+                    else:
+                        # We do not care just yet. Those are usually silkscreen
+                        # and mask layers
+                        pass
+                case "thickness":
+                    thickness = float(prop[1])
+                case _:
+                    pass
+
+        if not layer_type or thickness is None:
+            # Shrug
+            continue
+
+        stackup_items.append(StackupItem(
+            name=layer_name,
+            thickness=thickness,
+            conductivity=conductivity
+        ))
+    
+    return Stackup(items=stackup_items)
+
 
 
 @dataclass(frozen=True)
@@ -76,14 +181,16 @@ class ViaSpec:
     drill_diameter: float
     layer_names: list[str]
 
-    def compute_resistance(self) -> float:
+    def compute_resistance(self, length: float) -> float:
         # TODO: This is very temporary solution. Will ultimately need to take
         # into account layer plating thickness etc
         # Resistance of a 1.6mm long via with 1mm diameter
         ref_resistance = 0.00027
         ref_area = math.pi * (0.5) ** 2
+        ref_length = 1.6
+
         area = math.pi * (self.drill_diameter / 2) ** 2
-        return ref_resistance * (area / ref_area)
+        return ref_resistance * (area / ref_area) * length / ref_length
 
 
 def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
@@ -527,23 +634,25 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     
     # Extract layer geometry from PCB file
     plotted_layers = render_gerbers_from_kicad(pcb_file_path)
+    stackup = extract_stackup_from_kicad_pcb(board)
+    # Verify that every plotted layer is contained within the stackup
+    # Do note that the stackup can theoretically contain more copper layers
+    # than the ones plotted. This is because empty layers do not get plotted.
+    for pl in plotted_layers:
+        if not any(pl.name == stackup_item.name for stackup_item in stackup.items):
+            raise ValueError(f"Layer {pl.name} not found in stackup")
     
     # Extract directives from schematic
     directives = process_directives(extract_directives_from_eeschema(sch_file_path))
-    
-    # Create a dictionary of layer conductances from directives
-    layer_conductance_dict = {}
-    default_conductance = 5.95e7  # Default copper conductance (1/resistivity)
-    
-    # Populate the dictionary from layer directives
-    for layer_spec in directives.layers:
-        layer_conductance_dict[layer_spec.name] = layer_spec.conductance
     
     # Create a dictionary mapping layer names to Layer objects
     layer_dict = {}
     for plotted_layer in plotted_layers:
         # Use layer-specific conductance if available, or default
-        conductance = layer_conductance_dict.get(plotted_layer.name, default_conductance)
+        stackup_layer = next(
+            (item for item in stackup.items if item.name == plotted_layer.name)
+        )
+        conductance = stackup_layer.conductance
         
         layer = problem.Layer(
             shape=plotted_layer.geometry,
@@ -588,9 +697,13 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     via_specs = extract_via_specs_from_pcb(board)
     for via_spec in via_specs:
         # Get the layer names for the via
+        # TODO: Also verify that the layer names in the via spec are in 
+        # "matching order" with the stackup info
         layer_names = via_spec.layer_names
         if set(layer_names) != {"F.Cu", "B.Cu"}:
             raise NotImplementedError("Multi-layer vias are not yet supported")
+
+        via_length = sum(si.thickness for si in stackup.items)
 
         lumped = problem.Lumped(
             type=problem.Lumped.Type.RESISTANCE,
@@ -598,7 +711,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
             a_point=via_spec.point,
             b_layer=layer_dict["B.Cu"],
             b_point=via_spec.point,
-            value=via_spec.compute_resistance()
+            value=via_spec.compute_resistance(via_length)
         )
 
         lumpeds.append(lumped)

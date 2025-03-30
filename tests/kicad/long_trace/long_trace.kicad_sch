@@ -118,16 +118,6 @@
 		)
 		(uuid "8a5ccbbb-9c9f-421c-b52a-458d30813606")
 	)
-	(text "!padne LAYER F.Cu 212.0"
-		(exclude_from_sim no)
-		(at 75.692 109.982 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "56a92207-23d9-473a-bb5c-e458d9373161")
-	)
 	(text "!padne VOLTAGE 1.0V TP1.1 TP2.1"
 		(exclude_from_sim no)
 		(at 79.756 107.188 0)

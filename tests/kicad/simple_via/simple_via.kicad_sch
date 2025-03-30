@@ -128,26 +128,6 @@
 		)
 		(uuid "36842f63-be3e-4eed-89bb-a75584ede647")
 	)
-	(text "!padne LAYER F.Cu 212.0"
-		(exclude_from_sim no)
-		(at 98.552 85.852 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "6ab04301-d2fe-4ef1-b4cf-49d85df35d8d")
-	)
-	(text "!padne LAYER B.Cu 212.0"
-		(exclude_from_sim no)
-		(at 98.552 88.9 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "75067926-3614-4710-baea-52a3529145cc")
-	)
 	(symbol
 		(lib_id "Connector:TestPoint")
 		(at 133.35 74.93 0)

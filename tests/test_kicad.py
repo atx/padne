@@ -196,6 +196,56 @@ def test_extract_via_specs(kicad_test_projects):
         f"Expected layers {expected_layers}, got {via_spec.layer_names}"
 
 
+def test_extract_stackup(kicad_test_projects):
+    """Test that the stackup is correctly extracted from a KiCad PCB file."""
+    # Get the simple_via project
+    project = kicad_test_projects["simple_via"]
+    assert project.pcb_path.exists(), "PCB file of simple_via project does not exist"
+    
+    # Load the KiCad board
+    board = pcbnew.LoadBoard(str(project.pcb_path))
+    
+    # Extract stackup
+    stackup = kicad.extract_stackup_from_kicad_pcb(board)
+    
+    # Check that we got a valid Stackup object
+    assert isinstance(stackup, kicad.Stackup)
+    assert len(stackup.items) == 3, f"Expected 3 stackup items, got {len(stackup.items)}"
+    
+    # Check F.Cu layer
+    f_cu = next((item for item in stackup.items if item.name == "F.Cu"), None)
+    assert f_cu is not None, "F.Cu layer not found in stackup"
+    assert f_cu.thickness == 0.035, f"Expected F.Cu thickness 0.035mm, got {f_cu.thickness}mm"
+    assert f_cu.conductivity == 5.95e4, "Expected F.Cu conductivity to be 5.95e7 S/m"
+    
+    # Check dielectric layer
+    dielectric = next((item for item in stackup.items 
+                      if item.conductivity is None), None)
+    assert dielectric is not None, "Dielectric layer not found in stackup"
+    assert dielectric.thickness == 1.51, f"Expected dielectric thickness 1.51mm, got {dielectric.thickness}mm"
+    
+    # Check B.Cu layer
+    b_cu = next((item for item in stackup.items if item.name == "B.Cu"), None)
+    assert b_cu is not None, "B.Cu layer not found in stackup"
+    assert b_cu.thickness == 0.035, f"Expected B.Cu thickness 0.035mm, got {b_cu.thickness}mm"
+    assert b_cu.conductivity == 5.95e4, "Expected B.Cu conductivity to be 5.95e7 S/m"
+
+
+def test_extract_stackup_extracts_every_project(kicad_test_projects):
+
+    for project_name, project in kicad_test_projects.items():
+
+        # Load the KiCad board
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+        
+        # Extract stackup
+        stackup = kicad.extract_stackup_from_kicad_pcb(board)
+        
+        # Check that we got a valid Stackup object
+        assert isinstance(stackup, kicad.Stackup), f"Stackup extraction failed for {project_name}"
+        assert len(stackup.items) > 0, f"No stackup items found for {project_name}"
+
+
 class TestLoadKicadProject:
     """Tests for the load_kicad_project function."""
 
@@ -227,7 +277,7 @@ class TestLoadKicadProject:
         assert isinstance(f_cu_layer.shape, shapely.geometry.MultiPolygon)
         assert not f_cu_layer.shape.is_empty
 
-    def test_custom_resistivity(self, kicad_test_projects, monkeypatch):
+    def test_conductance_vaguely_makes_sense(self, kicad_test_projects, monkeypatch):
         """Test that custom resistivity is applied correctly."""
         project = kicad_test_projects["simple_geometry"]
 
@@ -235,7 +285,7 @@ class TestLoadKicadProject:
         
         # F.Cu layer should have the custom resistivity
         f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
-        assert f_cu_layer.conductance == 212.0
+        assert 1900 < f_cu_layer.conductance < 2300
 
     def test_lumped_elements(self, kicad_test_projects):
         """Test that lumped elements are loaded correctly."""
