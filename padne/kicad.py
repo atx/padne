@@ -442,7 +442,7 @@ def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
         # Get layer name first
         layer_name = board.GetLayerName(layer_id)
         # Only process enabled layers that are copper layers (e.g. contain "Cu")
-        if not board.IsLayerEnabled(layer_id) or "Cu" not in layer_name:
+        if not board.IsLayerEnabled(layer_id) or not layer_name.endswith("Cu"):
             continue
         
         # Open plot file
