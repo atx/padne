@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import collections
 import sys
 import numpy as np
 import contextlib
@@ -296,7 +297,7 @@ class RenderedMesh:
         return cls(vao_triangles,
                    len(triangle_vertices) // 2,
                    vao_edges,
-                   len(edge_vertices) // 2)
+                   len(edge_vertices))
 
     def render_triangles(self):
         gl.glBindVertexArray(self.vao_triangles)
@@ -310,76 +311,145 @@ class RenderedMesh:
 class MeshViewer(QOpenGLWidget):
     # Signal to notify when the value range changes
     valueRangeChanged = Signal(float, float)
+    # Signal to notify when the current layer changes
+    currentLayerChanged = Signal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.meshes = []
-        self.mesh_values = None
+        self.solution: None | solver.Solution = None
+        # Layer name -> RenderedMesh
+        self.rendered_meshes: dict[str, list] = {}
+
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
         self.last_pos = None
         self.setMouseTracking(True)
         
+        # Set focus policy to receive keyboard events
+        self.setFocusPolicy(Qt.StrongFocus)
+        
+        # Layer management
+        self.current_layer_index = 0
+        self.visible_layers = []  # Will hold names of layers in order
+        
         # OpenGL objects
         self.mesh_shader = None
         self.edge_shader = None
 
-    def setMeshes(self, meshes, values=None):
-        self.meshes = meshes
-        self.mesh_values = values
+    def autoscaleValue(self):
+        """
+        Automatically adjust the min/max values for color scaling.
+        Finds the minimum and maximum values across all layer solutions.
+        """
+        if not self.solution or not self.solution.layer_solutions:
+            return  # Nothing to scale if no solution is loaded
         
-        # Calculate min and max values for scaling
+        # Initialize min and max values
         self.min_value = float('inf')
         self.max_value = float('-inf')
         
-        if values:
-            for zeroform in values:
-                # Get min/max from all vertices in the mesh
-                for vertex in zeroform.mesh.vertices:
-                    value = zeroform[vertex]
+        # Go through all layer solutions to find min/max values
+        for layer_solution in self.solution.layer_solutions:
+            # Each layer solution has multiple meshes and their corresponding values
+            for msh, values in zip(layer_solution.meshes, layer_solution.values):
+                # Check values at each vertex
+                for vertex in msh.vertices:
+                    value = values[vertex]
                     self.min_value = min(self.min_value, value)
                     self.max_value = max(self.max_value, value)
         
-        # If min_value is still infinity, set defaults
-        if self.min_value == float('inf'):
+        # If no values were found or if all values are the same
+        if self.min_value == float('inf') or self.min_value == self.max_value:
             self.min_value = 0.0
             self.max_value = 1.0
-            
-        # Emit signal with the new value range
-        self.valueRangeChanged.emit(self.min_value, self.max_value)
         
-        # Calculate the bounds of all meshes to set initial view
+        # Emit signal to notify about the new value range
+        self.valueRangeChanged.emit(self.min_value, self.max_value)
+
+    def autoscaleXY(self):
+        """
+        Automatically adjust the offset and scale to fit all meshes in the view.
+        Sets the view to display all meshes with a small margin around them.
+        """
+        if not self.solution or not self.solution.layer_solutions:
+            return  # Nothing to scale if no solution is loaded
+        
+        # Find the bounds of all meshes across all layers
         min_x, min_y = float('inf'), float('inf')
         max_x, max_y = float('-inf'), float('-inf')
         
-        for m in meshes:
-            for vertex in m.vertices:
-                x, y = vertex.p.x, vertex.p.y
-                min_x = min(min_x, x)
-                min_y = min(min_y, y)
-                max_x = max(max_x, x)
-                max_y = max(max_y, y)
+        for layer_solution in self.solution.layer_solutions:
+            # Iterate through all meshes in the layer solution
+            for msh in layer_solution.meshes:
+                for vertex in msh.vertices:
+                    x, y = vertex.p.x, vertex.p.y
+                    min_x = min(min_x, x)
+                    min_y = min(min_y, y)
+                    max_x = max(max_x, x)
+                    max_y = max(max_y, y)
         
-        # Set initial view to show all meshes
-        if min_x != float('inf'):
-            center_x = (max_x + min_x) / 2
-            center_y = (max_y + min_y) / 2
-            width = max_x - min_x
-            height = max_y - min_y
-            
-            self.offset_x = -center_x
-            self.offset_y = -center_y
-            
-            # Set scale to fit everything with a small margin
-            if width > 0 and height > 0:
-                self.scale = min(1.8 / width, 1.8 / height)
+        # Check if we found any vertices
+        if min_x == float('inf'):
+            return  # No vertices found
         
-        # If OpenGL is initialized, setup the mesh data in GPU
+        # Calculate center point and dimensions
+        center_x = (max_x + min_x) / 2
+        center_y = (max_y + min_y) / 2
+        width = max_x - min_x
+        height = max_y - min_y
+        
+        # Set view center (negative offset to move view)
+        self.offset_x = -center_x
+        self.offset_y = -center_y
+        
+        # Set scale to fit everything with a 10% margin
+        # Consider the aspect ratio of the viewport
+        margin_factor = 0.9  # 10% margin
+        aspect = self.width() / self.height() if self.height() > 0 else 1.0
+        
+        if width > 0 and height > 0:
+            # Scale based on the larger dimension, accounting for aspect ratio
+            if width * aspect > height:
+                self.scale = margin_factor * 2.0 / width
+            else:
+                self.scale = margin_factor * 2.0 / (height / aspect)
+
+    def setSolution(self, solution: solver.Solution):
+        """Set the solution for the mesh viewer."""
+        self.solution = solution
+
+        # Initialize the list of layers from the solution
+        self.visible_layers = [layer.name for layer in solution.problem.layers]
+        self.current_layer_index = 0
+        
+        # Emit signal with initial layer
+        if self.visible_layers:
+            self.currentLayerChanged.emit(self.visible_layers[self.current_layer_index])
+
+        self.autoscaleValue()
+        self.autoscaleXY()
+
         if self.mesh_shader is not None:
-            self.setup_mesh_data()
-        
+            self.setupMeshData()
+
         self.update()
+
+    def setupMeshData(self):
+        """Set up the mesh data for rendering."""
+
+        # TODO: Clear previously rendered meshes
+        assert self.solution is not None
+
+        for layer, lsol in zip(self.solution.problem.layers, self.solution.layer_solutions):
+            if layer.name not in self.rendered_meshes:
+                self.rendered_meshes[layer.name] = []
+            
+            for msh, values in zip(lsol.meshes, lsol.values):
+                # Create a RenderedMesh object for each mesh
+                self.rendered_meshes[layer.name].append(
+                    RenderedMesh.from_mesh(msh, values)
+                )
 
     def initializeGL(self):
         """Initialize OpenGL settings."""
@@ -404,8 +474,8 @@ class MeshViewer(QOpenGLWidget):
             gl.glUniform3fv(color_map_uniform, 256, colors)
         
         # If meshes are already set, setup the mesh data
-        if self.meshes:
-            self.setup_mesh_data()
+        if self.solution:
+            self.setupMeshData()
             
     def setup_mesh_data(self):
         """Set up the VAOs and VBOs for rendering."""
@@ -457,11 +527,18 @@ class MeshViewer(QOpenGLWidget):
         """Render the mesh using shaders."""
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         
-        if not self.mesh_shader or not self.meshes:
+        if not self.mesh_shader or not self.rendered_meshes or not self.visible_layers:
             print("No shader program or meshes to render")
             return
         
         mvp = self._compute_mvp()
+        
+        # Get current layer name
+        current_layer = self.visible_layers[self.current_layer_index]
+        
+        # Only proceed if the current layer has rendered meshes
+        if current_layer not in self.rendered_meshes:
+            return
         
         # Draw triangles with mesh shader
         with self.mesh_shader.use():
@@ -481,9 +558,9 @@ class MeshViewer(QOpenGLWidget):
                 self.max_value
             )
             
-            # Draw triangles
-            for rendered_mesh in self.rendered_meshes:
-                rendered_mesh.render_triangles()
+            # Draw triangles for current layer only
+            for rmesh in self.rendered_meshes[current_layer]:
+                rmesh.render_triangles()
         
         # Draw edges with edge shader
         with self.edge_shader.use():
@@ -493,15 +570,16 @@ class MeshViewer(QOpenGLWidget):
                 1, gl.GL_TRUE, mvp.flatten()
             )
             
-            # Draw edges
-            for rendered_mesh in self.rendered_meshes:
-                rendered_mesh.render_edges()
+            # Draw edges for current layer only
+            for rmesh in self.rendered_meshes[current_layer]:
+                rmesh.render_edges()
         
         gl.glBindVertexArray(0)
 
     def mousePressEvent(self, event):
         """Handle mouse press events for panning."""
         self.last_pos = event.position()
+        self.setFocus()  # Ensure the widget gets focus when clicked
 
     def mouseMoveEvent(self, event):
         """Handle mouse movement for panning."""
@@ -538,6 +616,28 @@ class MeshViewer(QOpenGLWidget):
             self.scale *= zoom_factor
         else:
             self.scale /= zoom_factor
+        self.update()
+        
+    def keyPressEvent(self, event):
+        """Handle keyboard events."""
+        if event.key() == Qt.Key_V:
+            self.switchToNextLayer()
+        else:
+            super().keyPressEvent(event)
+
+    def switchToNextLayer(self):
+        """Switch to the next layer in the cycle."""
+        if not self.visible_layers:
+            return
+            
+        # Move to next layer index
+        self.current_layer_index = (self.current_layer_index + 1) % len(self.visible_layers)
+        current_layer = self.visible_layers[self.current_layer_index]
+        
+        # Emit signal with the current layer name
+        self.currentLayerChanged.emit(current_layer)
+        
+        # Refresh the display
         self.update()
 
 
@@ -689,22 +789,26 @@ class MainWindow(QMainWindow):
             solution = solver.solve(prob)
             
             # Find the F.Cu layer and its solution
-            f_cu_layer = None
-            f_cu_solution = None
-            for i, layer in enumerate(prob.layers):
-                if layer.name == "F.Cu":
-                    f_cu_layer = layer
-                    f_cu_solution = solution.layer_solutions[i]
-                    break
+            #f_cu_layer = None
+            #f_cu_solution = None
+            #for i, layer in enumerate(prob.layers):
+            #    if layer.name == "F.Cu":
+            #        f_cu_layer = layer
+            #        f_cu_solution = solution.layer_solutions[i]
+            #        break
+            #
+            #if f_cu_layer is None:
+            #    print("Error: F.Cu layer not found in the project")
+            #    return
+            #
+            ## Display the meshes from the solution
+            #print(f"Displaying {len(f_cu_solution.meshes)} mesh regions")
+            ## Pass both meshes and solution values to the mesh viewer
+            #self.mesh_viewer.setMeshes(f_cu_solution.meshes, f_cu_solution.values)
+            self.mesh_viewer.setSolution(solution)
             
-            if f_cu_layer is None:
-                print("Error: F.Cu layer not found in the project")
-                return
-            
-            # Display the meshes from the solution
-            print(f"Displaying {len(f_cu_solution.meshes)} mesh regions")
-            # Pass both meshes and solution values to the mesh viewer
-            self.mesh_viewer.setMeshes(f_cu_solution.meshes, f_cu_solution.values)
+            # Connect the layer change signal to update the window title
+            self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
             
             # Set an appropriate unit (assuming voltage for now)
             self.color_scale.setUnit("V")
@@ -713,6 +817,10 @@ class MainWindow(QMainWindow):
             print(f"Error loading project: {str(e)}")
             import traceback
             traceback.print_exc()
+            
+    def updateCurrentLayer(self, layer_name):
+        """Update the window title to show the current layer."""
+        self.setWindowTitle(f"PDN Simulator Viewer - Layer: {layer_name}")
 
 
 def configure_opengl():
