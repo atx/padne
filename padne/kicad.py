@@ -164,15 +164,6 @@ class LumpedSpec:
 
 
 @dataclass(frozen=True)
-class LayerSpec:
-    """
-    This class contains material parameters for a layer.
-    """
-    name: str
-    conductance: float  # Changed from resistivity
-
-
-@dataclass(frozen=True)
 class ViaSpec:
     """
     This class contains material parameters for a via.
@@ -264,7 +255,6 @@ class ParsedDirective:
 class Directives:
     # Surface resistivity
     # TODO: Add default value for 1oz copper
-    layers: list[LayerSpec]
     lumpeds: list[LumpedSpec]
 
 
@@ -291,7 +281,6 @@ def parse_lumped_spec_directive(directive: ParsedDirective) -> LumpedSpec:
 
 
 def process_directives(directives: list[ParsedDirective]) -> Directives:
-    layers = []
     lumpeds = []
 
     for directive in directives:
@@ -299,30 +288,10 @@ def process_directives(directives: list[ParsedDirective]) -> Directives:
             case "VOLTAGE" | "CURRENT" | "RESISTANCE":
                 lumped = parse_lumped_spec_directive(directive)
                 lumpeds.append(lumped)
-            case "LAYER":
-                layer = parse_layer_spec_directive(directive)
-                layers.append(layer)
             case _:
                 warnings.warn(f"Unknown directive: {directive.key}")
 
-    return Directives(layers=layers, lumpeds=lumpeds)
-
-
-def parse_layer_spec_directive(directive: ParsedDirective) -> LayerSpec:
-    # Parse a directive like
-    # !padne LAYER F.Cu 5.95e7
-    # Expected directive format:
-    # "!padne LAYER <LAYER_NAME> <CONDUCTANCE>"
-    # Examples:
-    #   "!padne LAYER F.Cu 5.95e7"
-    # TODO: Also implement stuff like "1oz copper"
-
-    if len(directive.params) < 2:
-        raise ValueError(f"LAYER directive must have at least 2 parameters (layer name and conductance): {directive}")
-    
-    layer_name = directive.params[0]
-    conductance = float(directive.params[1])
-    return LayerSpec(name=layer_name, conductance=conductance)
+    return Directives(lumpeds=lumpeds)
 
 
 def parse_value(value_str: str) -> float:
