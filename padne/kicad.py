@@ -143,12 +143,16 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
     return Stackup(items=stackup_items)
 
 
-
 @dataclass(frozen=True)
 class LumpedSpec:
     """
     This is what comes out of the eeschema parser (which does not yet exist)
     """
+
+    class Type(enum.Enum):
+        VOLTAGE = "VOLTAGE"
+        CURRENT = "CURRENT"
+        RESISTANCE = "RESISTANCE"
 
     @dataclass(frozen=True)
     class Endpoint:
@@ -159,7 +163,7 @@ class LumpedSpec:
     endpoint_b: Endpoint
 
     # Use the unified lumped type from the problem module.
-    type: problem.Lumped.Type
+    type: "LumpedSpec.Type"
     value: float
 
 
@@ -264,7 +268,7 @@ def parse_lumped_spec_directive(directive: ParsedDirective) -> LumpedSpec:
         raise ValueError(f"Invalid directive format: {directive}")
 
     try:
-        type_enum = problem.Lumped.Type(directive.key)
+        type_enum = LumpedSpec.Type(directive.key)
     except ValueError:
         raise ValueError(f"Unknown directive type: {directive.key}")
 
@@ -650,17 +654,37 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         a_layer = layer_dict[a_layer_name]
         b_layer = layer_dict[b_layer_name]
         
-        # Create Lumped object
-        lumped = problem.Lumped(
-            type=spec.type,
-            a_layer=a_layer,
-            a_point=a_point,
-            b_layer=b_layer,
-            b_point=b_point,
-            value=spec.value
-        )
-        
-        lumpeds.append(lumped)
+        # Create Terminal objects
+        terminal_a = problem.Terminal(layer=a_layer, point=a_point)
+        terminal_b = problem.Terminal(layer=b_layer, point=b_point)
+
+        # Create the specific lumped element subclass instance
+        match spec.type:
+            case LumpedSpec.Type.RESISTANCE:
+                lumped_element = problem.Resistor(
+                    a=terminal_a,
+                    b=terminal_b,
+                    resistance=spec.value
+                )
+            case LumpedSpec.Type.VOLTAGE:
+                # Assuming endpoint_a is positive (p) and endpoint_b is negative (n)
+                lumped_element = problem.VoltageSource(
+                    p=terminal_a,
+                    n=terminal_b,
+                    voltage=spec.value
+                )
+            case LumpedSpec.Type.CURRENT:
+                # Assuming current flows from endpoint_a (f) to endpoint_b (t)
+                lumped_element = problem.CurrentSource(
+                    f=terminal_a,
+                    t=terminal_b,
+                    current=spec.value
+                )
+            case _:
+                # This case should ideally not be reached if parse_lumped_spec_directive is correct
+                raise ValueError(f"Unhandled lumped element type: {spec.type}")
+
+        lumpeds.append(lumped_element)
 
     # TODO: We need to do something similar but for through hole pads
     via_specs = extract_via_specs_from_pcb(board)
@@ -674,16 +698,21 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
 
         via_length = sum(si.thickness for si in stackup.items)
 
-        lumped = problem.Lumped(
-            type=problem.Lumped.Type.RESISTANCE,
-            a_layer=layer_dict["F.Cu"],
-            a_point=via_spec.point,
-            b_layer=layer_dict["B.Cu"],
-            b_point=via_spec.point,
-            value=via_spec.compute_resistance(via_length)
+        # Create Terminal objects for the via connection points
+        terminal_a = problem.Terminal(layer=layer_dict["F.Cu"], point=via_spec.point)
+        terminal_b = problem.Terminal(layer=layer_dict["B.Cu"], point=via_spec.point)
+        
+        # Calculate resistance
+        resistance = via_spec.compute_resistance(via_length)
+
+        # Create Resistor object for the via
+        via_resistor = problem.Resistor(
+            a=terminal_a,
+            b=terminal_b,
+            resistance=resistance
         )
 
-        lumpeds.append(lumped)
+        lumpeds.append(via_resistor)
 
     # Get all layers as a list
     layers = list(layer_dict.values())

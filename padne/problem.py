@@ -1,8 +1,9 @@
 
+import enum
 import shapely
 
-import enum
 from dataclasses import dataclass
+from typing import Protocol
 
 
 # This file should specify the data structure that gets passed to the mesher
@@ -28,27 +29,76 @@ class Layer:
 
 
 @dataclass(frozen=True)
-class Lumped:
+class Terminal:
     """
-    This is a two-terminal device that is connected to two physical points in the circuit.
+    Represents a connection point of a lumped element to a layer.
     """
+    layer: Layer
+    point: shapely.geometry.Point
 
-    class Type(enum.Enum):
-        VOLTAGE = "VOLTAGE"
-        CURRENT = "CURRENT"
-        RESISTANCE = "RESISTANCE"
 
-    type: Type
+@dataclass(frozen=True)
+class BaseLumped(Protocol):
 
-    a_layer: Layer
-    a_point: shapely.geometry.Point
-    b_layer: Layer
-    b_point: shapely.geometry.Point
+    def __post_init__(self):
+        assert self.terminals, "Lumped elements must have terminals"
 
-    value: float
+    @property
+    def terminals(self) -> list[Terminal]:
+        ...
+
+
+@dataclass(frozen=True)
+class Resistor(BaseLumped):
+    a: Terminal
+    b: Terminal
+    resistance: float
+
+    @property
+    def terminals(self) -> list[Terminal]:
+        return [self.a, self.b]
+
+
+@dataclass(frozen=True)
+class VoltageSource(BaseLumped):
+    p: Terminal
+    n: Terminal
+    voltage: float
+
+    @property
+    def terminals(self) -> list[Terminal]:
+        return [self.p, self.n]
+
+
+@dataclass(frozen=True)
+class CurrentSource(BaseLumped):
+    f: Terminal
+    t: Terminal
+    current: float
+
+    @property
+    def terminals(self) -> list[Terminal]:
+        return [self.f, self.t]
+
+
+@dataclass(frozen=True)
+class VoltageRegulator(BaseLumped):
+    """
+    This is effectivelly a CCCS, but the current is determined by a current
+    through a voltage source.
+    """
+    v_p: Terminal
+    v_n: Terminal
+
+    i_f: Terminal
+    i_t: Terminal
+
+    @property
+    def terminals(self) -> list[Terminal]:
+        return [self.v_p, self.v_n, self.i_f, self.i_t]
 
 
 @dataclass(frozen=True)
 class Problem:
     layers: list[Layer]
-    lumpeds: list[Lumped]
+    lumpeds: list[BaseLumped]

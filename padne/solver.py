@@ -35,11 +35,9 @@ def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[
     seed_points = []
     for elem in problem.lumpeds:
         # Check if this lumped element connects to our layer
-        if elem.a_layer == layer:
-            # Convert from shapely Point to our mesh.Point
-            seed_points.append(mesh.Point(elem.a_point.x, elem.a_point.y))
-        if elem.b_layer == layer:
-            seed_points.append(mesh.Point(elem.b_point.x, elem.b_point.y))
+        for terminal in elem.terminals:
+            if terminal.layer == layer:
+                seed_points.append(mesh.Point(terminal.point.x, terminal.point.y))
     return seed_points
 
 
@@ -108,7 +106,7 @@ def solve(prob: problem.Problem) -> Solution:
 
     voltage_source_count = sum(
         1 for elem in prob.lumpeds
-        if elem.type == problem.Lumped.Type.VOLTAGE
+        if isinstance(elem, problem.VoltageSource)
     )
 
     # We are solving the equation L * v = r
@@ -155,6 +153,7 @@ def solve(prob: problem.Problem) -> Solution:
             # set in a different iteration
             L[i, k] += ratio
 
+    # TODO: Make this accept a Terminal instance
     def get_vertex_global_index_by_point(layer: problem.Layer,
                                          pt: shapely.geometry.Point) -> int:
         # TODO: This is not exactly efficient.
@@ -173,38 +172,46 @@ def solve(prob: problem.Problem) -> Solution:
     # Now we need to process the lumped elements
     voltage_source_i = 0
     for elem in prob.lumpeds:
-        i_a = get_vertex_global_index_by_point(elem.a_layer, elem.a_point)
-        i_b = get_vertex_global_index_by_point(elem.b_layer, elem.b_point)
 
         # TODO: Maybe we actually want to actually scale the L matrix since different
         # layers have different conductances anyway?
         # It is unclear how this ends up affecting the final solution.
         # However, this can be postponed until multilayer support is properly
         # implemented
-        match elem.type:
-            case problem.Lumped.Type.VOLTAGE:
-                # THIS IS WRONG, BUT JUST FOR NOW
-                # Normally, we need to inject additional rows and columns for this
-                # case
-                i_v = len(global_index_to_vertex_index) + voltage_source_i
-                voltage_source_i += 1
-
-                L[i_v, i_a] = -1
-                L[i_a, i_v] = -1
-
-                L[i_v, i_b] = 1
-                L[i_b, i_v] = 1
-
-                r[i_v] = elem.value
-            case problem.Lumped.Type.CURRENT:
-                r[i_a] = elem.value / elem.a_layer.conductance
-                r[i_b] = -elem.value / elem.b_layer.conductance
-            case problem.Lumped.Type.RESISTANCE:
-                val = 1 / elem.value / elem.a_layer.conductance
+        match elem:
+            case problem.Resistor(a=a, b=b, resistance=resistance):
+                # TODO: What if the conductances of the layers differ?
+                val = 1 / resistance / a.layer.conductance
+                i_a = get_vertex_global_index_by_point(a.layer, a.point)
+                i_b = get_vertex_global_index_by_point(b.layer, b.point)
                 L[i_a, i_a] -= val
                 L[i_b, i_b] -= val
                 L[i_a, i_b] += val
                 L[i_b, i_a] += val
+            case problem.VoltageSource(p=p, n=n, voltage=voltage):
+                # TODO: The sign convention may not be correct here
+                i_v = len(global_index_to_vertex_index) + voltage_source_i
+                voltage_source_i += 1
+
+                i_p = get_vertex_global_index_by_point(p.layer, p.point)
+                i_n = get_vertex_global_index_by_point(n.layer, n.point)
+
+                L[i_v, i_p] = -1
+                L[i_p, i_v] = -1
+
+                L[i_v, i_n] = 1
+                L[i_n, i_v] = 1
+
+                r[i_v] = voltage
+            case problem.CurrentSource(f=f, t=t, current=current):
+                i_f = get_vertex_global_index_by_point(f.layer, f.point)
+                i_t = get_vertex_global_index_by_point(t.layer, t.point)
+
+                r[i_f] = current / f.layer.conductance
+                r[i_t] = -current / t.layer.conductance
+
+            case problem.VoltageRegulator():
+                raise NotImplementedError("Voltage regulators are not yet supported")
 
 
     # Now we need to solve the system of equations

@@ -61,7 +61,7 @@ class TestDirectiveParser:
     def test_valid_voltage_directive(self):
         directive = kicad.ParsedDirective.from_string("!padne VOLTAGE 5V R1.1 R2.1")
         spec = kicad.parse_lumped_spec_directive(directive)
-        assert spec.type == problem.Lumped.Type.VOLTAGE
+        assert spec.type == kicad.LumpedSpec.Type.VOLTAGE
         assert spec.value == 5.0
         assert spec.endpoint_a.designator == "R1"
         assert spec.endpoint_a.pad == "1"
@@ -71,7 +71,7 @@ class TestDirectiveParser:
     def test_valid_resistor_directive(self):
         directive = kicad.ParsedDirective.from_string("!padne RESISTANCE 1k R3.2 R4.3")
         spec = kicad.parse_lumped_spec_directive(directive)
-        assert spec.type == problem.Lumped.Type.RESISTANCE
+        assert spec.type == kicad.LumpedSpec.Type.RESISTANCE
         assert spec.value == 1000.0  # "1k" becomes 1000.0
         assert spec.endpoint_a.designator == "R3"
         assert spec.endpoint_a.pad == "2"
@@ -81,7 +81,7 @@ class TestDirectiveParser:
     def test_valid_current_directive(self):
         directive = kicad.ParsedDirective.from_string("!padne CURRENT 1A R5.1 R6.1")
         spec = kicad.parse_lumped_spec_directive(directive)
-        assert spec.type == problem.Lumped.Type.CURRENT
+        assert spec.type == kicad.LumpedSpec.Type.CURRENT
         assert spec.value == 1.0
         assert spec.endpoint_a.designator == "R5"
         assert spec.endpoint_a.pad == "1"
@@ -116,11 +116,11 @@ class TestDirectiveParser:
         # Parse each directive, then assign by type
         voltage_spec = next(
             spec for spec in directives.lumpeds
-            if spec.type == problem.Lumped.Type.VOLTAGE
+            if spec.type == kicad.LumpedSpec.Type.VOLTAGE
         )
         resistor_spec = next(
             spec for spec in directives.lumpeds
-            if spec.type == problem.Lumped.Type.RESISTANCE
+            if spec.type == kicad.LumpedSpec.Type.RESISTANCE
         )
         
         # Validate the voltage directive
@@ -293,30 +293,37 @@ class TestLoadKicadProject:
         result = kicad.load_kicad_project(project.pro_path)
         
         # Find the voltage source and resistor
-        voltage_source = next(l for l in result.lumpeds if l.type == problem.Lumped.Type.VOLTAGE)
-        resistor = next(l for l in result.lumpeds if l.type == problem.Lumped.Type.RESISTANCE)
+        voltage_source = next(
+            l for l in result.lumpeds
+            if isinstance(l, problem.VoltageSource)
+        )
+        resistor = next(
+            l for l in result.lumpeds
+            if isinstance(l, problem.Resistor)
+        )
         
         # Check voltage source properties
-        assert voltage_source.value == 1.0
+        assert voltage_source.voltage == 1.0
         # Check that it's connected to component R2, pads 1 and 2
-        r2_1_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R2", "1")[1]
-        r2_2_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R2", "2")[1]
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+        r2_1_point = kicad.find_pad_location(board, "R2", "1")[1]
+        r2_2_point = kicad.find_pad_location(board, "R2", "2")[1]
         
-        assert (voltage_source.a_point.x == r2_1_point.x and 
-                voltage_source.a_point.y == r2_1_point.y)
-        assert (voltage_source.b_point.x == r2_2_point.x and 
-                voltage_source.b_point.y == r2_2_point.y)
+        assert (voltage_source.p.point.x == r2_1_point.x and 
+                voltage_source.p.point.y == r2_1_point.y)
+        assert (voltage_source.n.point.x == r2_2_point.x and 
+                voltage_source.n.point.y == r2_2_point.y)
         
         # Check resistor properties
-        assert resistor.value == 0.01
+        assert resistor.resistance == 0.01
         # Check that it's connected to component R3, pads 1 and 2
-        r3_1_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R3", "1")[1]
-        r3_2_point = kicad.find_pad_location(pcbnew.LoadBoard(str(project.pcb_path)), "R3", "2")[1]
+        r3_1_point = kicad.find_pad_location(board, "R3", "1")[1]
+        r3_2_point = kicad.find_pad_location(board, "R3", "2")[1]
         
-        assert (resistor.a_point.x == r3_1_point.x and 
-                resistor.a_point.y == r3_1_point.y)
-        assert (resistor.b_point.x == r3_2_point.x and 
-                resistor.b_point.y == r3_2_point.y)
+        assert (resistor.a.point.x == r3_1_point.x and 
+                resistor.a.point.y == r3_1_point.y)
+        assert (resistor.b.point.x == r3_2_point.x and 
+                resistor.b.point.y == r3_2_point.y)
                 
     def test_lumped_points_inside_layers(self, kicad_test_projects):
         """
@@ -329,29 +336,17 @@ class TestLoadKicadProject:
         
         for project_name, project in kicad_test_projects.items():
             # Load the KiCad project
-            try:
-                kicad_problem = kicad.load_kicad_project(project.pro_path)
-            except Exception as e:
-                pytest.fail(f"Failed to load project {project_name}: {e}")
-            
-            # Skip if no lumped elements
-            if not kicad_problem.lumpeds:
-                continue
+            kicad_problem = kicad.load_kicad_project(project.pro_path)
                 
             # For each lumped element, verify that its endpoints are inside the layers
             for i, lumped in enumerate(kicad_problem.lumpeds):
-                a_point_inside = lumped.a_layer.shape.contains(lumped.a_point)
-                b_point_inside = lumped.b_layer.shape.contains(lumped.b_point)
-                
-                assert a_point_inside, (
-                    f"Project {project_name}, lumped element {i} ({lumped.type.name}): "
-                    f"a_point {lumped.a_point} is not inside its layer shape {lumped.a_layer.name}"
-                )
-                    
-                assert b_point_inside, (
-                    f"Project {project_name}, lumped element {i} ({lumped.type.name}): "
-                    f"b_point {lumped.b_point} is not inside its layer shape {lumped.b_layer.name}"
-                )
+                for terminal in lumped.terminals:
+                    point_inside = terminal.layer.shape.contains(terminal.point)
+
+                    assert point_inside, (
+                        f"Project {project_name}, lumped element {i} ({lumped.type.name}): "
+                        f"point {terminal.point} is not inside its layer shape {terminal.layer.name}"
+                    )
 
     def test_all_layer_shapes_are_multipolygons(self, kicad_test_projects):
         """
@@ -384,7 +379,7 @@ class TestLoadKicadProject:
         
         # Find the voltage source lumped element
         voltage_source = next(
-            (l for l in result.lumpeds if l.type == problem.Lumped.Type.VOLTAGE),
+            (l for l in result.lumpeds if isinstance(l, problem.VoltageSource)),
             None
         )
         
@@ -392,16 +387,16 @@ class TestLoadKicadProject:
         assert voltage_source is not None, "No voltage source found in the simple_via project"
         
         # Check that one endpoint is on F.Cu at position (122, 100)
-        if voltage_source.a_layer.name == "F.Cu":
-            f_cu_point = voltage_source.a_point
-            b_cu_point = voltage_source.b_point
-            f_cu_layer = voltage_source.a_layer
-            b_cu_layer = voltage_source.b_layer
+        if voltage_source.p.layer.name == "F.Cu":
+            f_cu_point = voltage_source.p.point
+            b_cu_point = voltage_source.n.point
+            f_cu_layer = voltage_source.p.layer
+            b_cu_layer = voltage_source.n.layer
         else:
-            f_cu_point = voltage_source.b_point
-            b_cu_point = voltage_source.a_point
-            f_cu_layer = voltage_source.b_layer
-            b_cu_layer = voltage_source.a_layer
+            f_cu_point = voltage_source.n.point
+            b_cu_point = voltage_source.p.point
+            f_cu_layer = voltage_source.n.layer
+            b_cu_layer = voltage_source.p.layer
         
         # Verify F.Cu point is at expected coordinates (122, 100)
         assert abs(f_cu_point.x - 122) < 1e-3, f"F.Cu point X should be 122, got {f_cu_point.x}"
