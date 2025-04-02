@@ -196,11 +196,11 @@ def solve(prob: problem.Problem) -> Solution:
                 i_p = get_vertex_global_index_by_point(p.layer, p.point)
                 i_n = get_vertex_global_index_by_point(n.layer, n.point)
 
-                L[i_v, i_p] = -1
-                L[i_p, i_v] = -1
+                L[i_v, i_p] = 1
+                L[i_p, i_v] = 1
 
-                L[i_v, i_n] = 1
-                L[i_n, i_v] = 1
+                L[i_v, i_n] = -1
+                L[i_n, i_v] = -1
 
                 r[i_v] = voltage
             case problem.CurrentSource(f=f, t=t, current=current):

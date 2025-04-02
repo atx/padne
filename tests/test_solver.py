@@ -110,4 +110,58 @@ class TestSolverMeshLayer:
                         # here, since the solver may decide to return np.float32 or something
                         assert np.isfinite(value[vertex])
 
-            # TODO: Add more checks on the solution object
+
+    def test_voltage_sources_work(self, kicad_test_projects):
+        for project in kicad_test_projects.values():
+            # Load the problem from the KiCad project
+            prob = kicad.load_kicad_project(project.pro_path)
+            # Check if there is a voltage source in the project
+            has_voltage_source = any(
+                isinstance(el, problem.VoltageSource) for el in prob.lumpeds
+            )
+            if not has_voltage_source:
+                continue
+
+            # Call the function under test
+            solution = solver.solve(prob)
+
+            assert solution is not None
+            assert isinstance(solution, solver.Solution)
+
+            # Check that every layer has a solution
+            assert len(solution.layer_solutions) == len(prob.layers)
+
+            # Helper function to find the voltage at the vertex closest to a terminal
+            # TODO: This should be abstracted elsewhere
+            def find_vertex_value(sol: solver.Solution, term: problem.Terminal) -> float:
+                target_layer_idx = sol.problem.layers.index(term.layer)
+                target_point_shapely = term.point # Terminal point is already shapely
+
+                layer_sol = sol.layer_solutions[target_layer_idx]
+                
+                best_dist = float('inf')
+                found_value = None
+
+                for msh, values in zip(layer_sol.meshes, layer_sol.values):
+                    for vertex in msh.vertices:
+                        # vertex.p is mesh.Point, convert to shapely for distance comparison
+                        dist = vertex.p.to_shapely().distance(target_point_shapely)
+                        if dist < best_dist:
+                            best_dist = dist
+                            found_value = values[vertex]
+                
+                # Ensure a vertex was found reasonably close
+                # This tolerance should match or be slightly larger than the one used in the solver
+                assert best_dist < 1e-5, f"Could not find a close vertex for terminal {term}"
+                assert found_value is not None
+                return found_value
+
+            # Check each voltage source
+            for elem in prob.lumpeds:
+                if isinstance(elem, problem.VoltageSource):
+                    voltage_p = find_vertex_value(solution, elem.p)
+                    voltage_n = find_vertex_value(solution, elem.n)
+                    
+                    # Verify the voltage difference matches the source voltage
+                    assert voltage_p - voltage_n == pytest.approx(elem.voltage), \
+                        f"Voltage difference for {elem} does not match expected value."
