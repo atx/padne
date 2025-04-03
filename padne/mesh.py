@@ -464,11 +464,6 @@ class Mesher:
 
         insert_linear_ring(poly.exterior)
 
-        # Insert the seed points to the vertices list
-        # Those points are not part of any segment
-        for seed_point in seed_points:
-            vertices.append((seed_point.x, seed_point.y))
-
         hole_points = []
         for hole in poly.interiors:
             # Note that we need to convert the LinearRing into a Polygon here.
@@ -478,6 +473,19 @@ class Mesher:
             hole_points.append(rep_point.coords[0])
 
             insert_linear_ring(hole)
+
+        # Insert the seed points to the vertices list
+        # Those points are not part of any segment
+        vertices_set = set(vertices)
+        for seed_point in seed_points:
+            pt = (seed_point.x, seed_point.y)
+            # We have to check we are not passing duplicate points to triangle.
+            # This causes a malformed mesh to be generated at best and a segfault at worst.
+            # TODO: It seems that even a 1e-100 difference in coordinates is sufficient
+            # to prevent this bug. Not quite sure whether we should allow that though
+            if pt in vertices_set:
+                continue
+            vertices.append(pt)
 
         tri_input = {
             "vertices": np.array(vertices),

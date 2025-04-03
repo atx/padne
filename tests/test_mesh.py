@@ -1364,3 +1364,40 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
+
+    def test_seed_points_in_polygon_vertex(self):
+        seed_points = [
+            shapely.geometry.Point(0.0, 0.0),
+        ]
+
+        rectangle = shapely.geometry.box(0, 0, 1.0, 1.0)
+
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(rectangle, seed_points)
+
+        for vertex in mesh.vertices:
+            assert 0 <= vertex.p.x <= 1.0
+            assert 0 <= vertex.p.y <= 1.0
+
+            for edge in vertex.orbit():
+                # Passing a seed point to the mesher that is also a vertex
+                # of the mesh caused a malformed mesh to be produced
+                assert edge is not None
+
+        assert_mesh_structure_valid(mesh)
+        assert_mesh_topology_okay(mesh)
+
+    def test_seed_points_in_hole_vertex(self):
+        seed_points = [
+            shapely.geometry.Point(4, 4),
+        ]
+
+        exterior = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        interior = [(4, 4), (6, 4), (6, 6), (4, 6), (4, 4)]
+        poly_with_hole = shapely.geometry.Polygon(exterior, [interior])
+
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(poly_with_hole, seed_points)
+
+        assert_mesh_structure_valid(mesh)
+        assert_mesh_topology_okay(mesh)
