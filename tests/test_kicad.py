@@ -165,6 +165,19 @@ class TestPadFinder:
         assert abs(point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
 
 
+def test_extract_tht_component_pad_specs(kicad_test_projects):
+    project = kicad_test_projects["tht_component"]
+
+    board = pcbnew.LoadBoard(str(project.pcb_path))
+
+    via_specs = kicad.extract_tht_pad_specs_from_pcb(board)
+    assert len(via_specs) == 10
+
+    # Check that there is a pad located on x=139 y=103.46
+    pad = next((pad for pad in via_specs if pad.point.x == 139 and pad.point.y == 103.46), None)
+    assert pad is not None, "Pad not found at expected location"
+
+
 def test_extract_via_specs(kicad_test_projects):
     """Test that via specifications are correctly extracted from a PCB."""
     # Get the simple_via project
@@ -344,7 +357,7 @@ class TestLoadKicadProject:
                     point_inside = terminal.layer.shape.contains(terminal.point)
 
                     assert point_inside, (
-                        f"Project {project_name}, lumped element {i} ({lumped.type.name}): "
+                        f"Project {project_name}, lumped element {lumped} "
                         f"point {terminal.point} is not inside its layer shape {terminal.layer.name}"
                     )
 

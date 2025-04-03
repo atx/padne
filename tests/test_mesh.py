@@ -1401,3 +1401,38 @@ class TestMesher:
 
         assert_mesh_structure_valid(mesh)
         assert_mesh_topology_okay(mesh)
+
+    def test_duplicate_seed_points(self):
+        """Test that duplicate seed points are handled correctly."""
+        # Create a square polygon for testing
+        square = shapely.geometry.box(0, 0, 1, 1)
+        
+        # Create a list of seed points with duplicates
+        seed_points = [
+            Point(0.25, 0.25),  # First seed point
+            Point(0.75, 0.75),  # Second seed point
+            Point(0.25, 0.25),  # Duplicate of first seed point
+            Point(0.75, 0.75),  # Duplicate of second seed point
+            Point(0.25, 0.25)   # Another duplicate of first seed point
+        ]
+        
+        # Create a mesher and generate mesh with duplicate seed points
+        mesher = Mesher()
+        mesh = mesher.poly_to_mesh(square, seed_points)
+        
+        # Verify the mesh is valid
+        assert isinstance(mesh, Mesh)
+        assert_mesh_structure_valid(mesh)
+        assert_mesh_topology_okay(mesh)
+        
+        # Count how many vertices are near our seed points
+        seed_point_vertices = 0
+        for vertex in mesh.vertices:
+            for seed_point in [Point(0.25, 0.25), Point(0.75, 0.75)]:
+                if vertex.p.distance(seed_point) < 1e-6:
+                    seed_point_vertices += 1
+                    break
+        
+        # We should have exactly 2 vertices at our seed points (one for each unique point)
+        # not 5 (which would happen if duplicates weren't handled correctly)
+        assert seed_point_vertices == 2, "Duplicate seed points weren't properly handled"

@@ -240,6 +240,57 @@ def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
     return via_specs
 
 
+def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
+    """
+    Extract through-hole pad specifications from a KiCad PCB.
+    
+    Args:
+        board: The KiCad board object
+        
+    Returns:
+        A list of ViaSpec objects representing through-hole pads in the PCB
+    """
+    tht_specs = []
+    
+    # Walk through all footprints on the PCB
+    for footprint in board.GetFootprints():
+        # For each footprint, examine all pads
+        for pad in footprint.Pads():
+            # Check if the pad is through-hole type
+            if pad.GetAttribute() != pcbnew.PAD_ATTRIB_PTH:
+                continue
+            # Get the pad position and convert from nm to mm
+            pos_x = nm_to_mm(pad.GetPosition().x)
+            pos_y = nm_to_mm(pad.GetPosition().y)
+            pad_point = shapely.geometry.Point(pos_x, pos_y)
+            
+            # Get the drill diameter
+            # For oval/slot drills, use average of width and height as an approximation
+            drill_diameter = nm_to_mm((pad.GetDrillSize().x + pad.GetDrillSize().y) / 2)
+            
+            # Determine which layers this pad connects
+            layer_names = []
+            layer_set = pad.GetLayerSet()
+            
+            for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
+                if layer_set.Contains(layer_id):
+                    layer_name = board.GetLayerName(layer_id)
+                    # Only include copper layers
+                    if "Cu" in layer_name and board.IsLayerEnabled(layer_id):
+                        layer_names.append(layer_name)
+            
+            # Create a ViaSpec object for this through-hole pad
+            tht_spec = ViaSpec(
+                point=pad_point,
+                drill_diameter=drill_diameter,
+                layer_names=layer_names
+            )
+            
+            tht_specs.append(tht_spec)
+    
+    return tht_specs
+
+
 @dataclass(frozen=True)
 class ParsedDirective:
     key: str
@@ -568,7 +619,24 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
                 layer_name = board.GetLayerName(layer_id)
                 return layer_name, point
 
-            raise NotImplementedError("Footprints with through hole pads are not yet supported")
+            # Handle through-hole pads
+            if pad_obj.GetAttribute() == pcbnew.PAD_ATTRIB_PTH:
+                layer_set = pad_obj.GetLayerSet()
+                # Find first copper layer in the layer set
+                for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
+                    if not layer_set.Contains(layer_id):
+                        continue
+                    layer_name = board.GetLayerName(layer_id)
+                    if "Cu" not in layer_name:
+                        continue
+                    # For flipped footprints, adjust the y coordinate similar to SMD pads
+                    #if footprint.IsFlipped():
+                    #    footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
+                    #    y_mm = 2 * footprint_pos_y - y_mm
+                    #    point = shapely.geometry.Point(x_mm, y_mm)
+                    return layer_name, point
+                
+                raise ValueError(f"No copper layer found for through-hole pad {pad} on component {designator}")
 
         raise ValueError(f"Pad {pad} not found on component {designator}")
     
@@ -687,14 +755,14 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         lumpeds.append(lumped_element)
 
     # TODO: We need to do something similar but for through hole pads
-    via_specs = extract_via_specs_from_pcb(board)
+    via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
     for via_spec in via_specs:
         # Get the layer names for the via
         # TODO: Also verify that the layer names in the via spec are in 
         # "matching order" with the stackup info
         layer_names = via_spec.layer_names
         if set(layer_names) != {"F.Cu", "B.Cu"}:
-            raise NotImplementedError("Multi-layer vias are not yet supported")
+            raise NotImplementedError(f"Multi-layer vias ({layer_names}) are not yet supported")
 
         via_length = sum(si.thickness for si in stackup.items)
 

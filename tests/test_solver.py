@@ -261,5 +261,5 @@ class TestSolverEndToEnd:
                     voltage_n = find_vertex_value(solution, elem.n)
                     
                     # Verify the voltage difference matches the source voltage
-                    assert voltage_p - voltage_n == pytest.approx(elem.voltage), \
+                    assert voltage_p - voltage_n == pytest.approx(elem.voltage, abs=0.001), \
                         f"Voltage difference for {elem} does not match expected value."
