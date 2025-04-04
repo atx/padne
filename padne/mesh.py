@@ -486,6 +486,8 @@ class Mesher:
             if pt in vertices_set:
                 continue
             vertices.append(pt)
+            # This is to make sure duplicate seed points are also handled
+            vertices_set.add(pt)
 
         tri_input = {
             "vertices": np.array(vertices),
