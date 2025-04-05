@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import contextlib
 import OpenGL.GL as gl
+from typing import Optional
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -337,6 +338,64 @@ class MeshViewer(QOpenGLWidget):
         self.mesh_shader = None
         self.edge_shader = None
 
+    def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
+        """
+        Find the value at the vertex closest to the specified world coordinates.
+        
+        Args:
+            world_x: X-coordinate in world space
+            world_y: Y-coordinate in world space
+            
+        Returns:
+            The value at the nearest vertex, or None if no vertices are found
+        """
+        if not self.solution or not self.visible_layers or self.current_layer_index >= len(self.visible_layers):
+            return None
+
+        # TODO: Eventually, we want to have a spatial index for this
+        
+        # Get current layer name
+        current_layer = self.visible_layers[self.current_layer_index]
+        
+        # Check if this layer has rendered meshes
+        if current_layer not in self.rendered_meshes:
+            return None
+        
+        # Create a point at the specified world coordinates
+        target_point = mesh.Point(world_x, world_y)
+        
+        # Initialize variables to track the closest vertex
+        closest_distance = float('inf')
+        closest_value = None
+        
+        # Find the corresponding layer solution
+        layer_index = None
+        for i, layer in enumerate(self.solution.problem.layers):
+            if layer.name == current_layer:
+                layer_index = i
+                break
+        
+        if layer_index is None:
+            return None
+        
+        layer_solution = self.solution.layer_solutions[layer_index]
+        
+        # Check each mesh in the current layer
+        for mesh_index, msh in enumerate(layer_solution.meshes):
+            values = layer_solution.values[mesh_index]
+            
+            # Check each vertex in the mesh
+            for vertex in msh.vertices:
+                # Calculate distance to this vertex
+                distance = vertex.p.distance(target_point)
+                
+                # Update closest vertex if this one is closer
+                if distance < closest_distance:
+                    closest_distance = distance
+                    closest_value = values[vertex]
+        
+        return closest_value
+
     def autoscaleValue(self):
         """
         Automatically adjust the min/max values for color scaling.
@@ -476,17 +535,6 @@ class MeshViewer(QOpenGLWidget):
         # If meshes are already set, setup the mesh data
         if self.solution:
             self.setupMeshData()
-            
-    def setup_mesh_data(self):
-        """Set up the VAOs and VBOs for rendering."""
-        # TODO: Clean up previous rendered meshes
-        self.rendered_meshes = []
-        
-        print(f"Setting up mesh data for {len(self.meshes)} meshes")
-        
-        for m, mesh_values in zip(self.meshes, self.mesh_values):
-            # Process each face to create triangle data
-            self.rendered_meshes.append(RenderedMesh.from_mesh(m, mesh_values))
 
     def resizeGL(self, width, height):
         """Handle window resizing."""
@@ -581,32 +629,41 @@ class MeshViewer(QOpenGLWidget):
         self.last_pos = event.position()
         self.setFocus()  # Ensure the widget gets focus when clicked
 
+    def _handlePanning(self, current_pos):
+        """
+        Handle the panning logic when the user drags with the left mouse button.
+        
+        Args:
+            current_pos: The current mouse position
+        """
+        # Calculate the current aspect ratio
+        aspect = self.width() / self.height() if self.height() > 0 else 1.0
+        
+        # Convert screen coordinates to world coordinates
+        delta = current_pos - self.last_pos
+        
+        # The conversion factor should consider:
+        # 1. The current scale 
+        # 2. The viewport size
+        # 3. The orthographic projection bounds
+        
+        # Horizontal movement (adjusted for aspect ratio)
+        dx_world = (delta.x() / self.width()) * (2.0 / self.scale) * aspect
+        
+        # Vertical movement (note: Qt's y axis points down, OpenGL's points up)
+        dy_world = -(delta.y() / self.height()) * (2.0 / self.scale)
+        
+        # Update offsets
+        self.offset_x += dx_world
+        self.offset_y += dy_world
+        
+        # Update the last position
+        self.last_pos = current_pos
+
     def mouseMoveEvent(self, event):
         """Handle mouse movement for panning."""
         if event.buttons() & Qt.LeftButton and self.last_pos is not None:
-            # Calculate the current aspect ratio
-            aspect = self.width() / self.height() if self.height() > 0 else 1.0
-            
-            # Convert screen coordinates to world coordinates
-            delta = event.position() - self.last_pos
-            
-            # The conversion factor should consider:
-            # 1. The current scale 
-            # 2. The viewport size
-            # 3. The orthographic projection bounds
-            
-            # Horizontal movement (adjusted for aspect ratio)
-            dx_world = (delta.x() / self.width()) * (2.0 / self.scale) * aspect
-            
-            # Vertical movement (note: Qt's y axis points down, OpenGL's points up)
-            dy_world = -(delta.y() / self.height()) * (2.0 / self.scale)
-            
-            # Update offsets
-            self.offset_x += dx_world
-            self.offset_y += dy_world
-            
-            # Update the last position
-            self.last_pos = event.position()
+            self._handlePanning(event.position())
             self.update()
 
     def wheelEvent(self, event):
@@ -622,8 +679,63 @@ class MeshViewer(QOpenGLWidget):
         """Handle keyboard events."""
         if event.key() == Qt.Key_V:
             self.switchToNextLayer()
+        elif event.key() == Qt.Key_M:
+            # Shift+M: Set maximum value from cursor position
+            if event.modifiers() & Qt.ShiftModifier:
+                self.setMaxValueFromCursor()
+            # m: Set minimum value from cursor position
+            else:
+                self.setMinValueFromCursor()
         else:
             super().keyPressEvent(event)
+            
+    def _getValueFromCursor(self) -> float:
+        """
+        Helper method to get the value at the cursor position in world coordinates.
+        
+        Returns:
+            The value at the nearest vertex, or None if no value could be found
+        """
+        # Get cursor position in screen coordinates
+        cursor_pos = self.mapFromGlobal(QtGui.QCursor.pos())
+        
+        # Convert to OpenGL viewport coordinates
+        viewport_x = cursor_pos.x()
+        viewport_y = self.height() - cursor_pos.y()  # Flip y-coordinate for OpenGL
+        
+        # Convert to normalized device coordinates (NDC)
+        ndc_x = 2.0 * viewport_x / self.width() - 1.0
+        ndc_y = 2.0 * viewport_y / self.height() - 1.0
+        
+        # Convert to world coordinates
+        aspect = self.width() / self.height() if self.height() > 0 else 1.0
+        world_x = (ndc_x * aspect / self.scale) - self.offset_x
+        world_y = (ndc_y / self.scale) - self.offset_y
+        
+        # Get nearest value at this position
+        return self._getNearestValue(world_x, world_y)
+        
+    def setMinValueFromCursor(self):
+        """Set the minimum value of the color scale from the cursor position."""
+        value = self._getValueFromCursor()
+        
+        # Update minimum value if a valid value was found
+        if value is not None:
+            self.min_value = value
+            # Emit signal to notify about the new value range
+            self.valueRangeChanged.emit(self.min_value, self.max_value)
+            self.update()
+
+    def setMaxValueFromCursor(self):
+        """Set the maximum value of the color scale from the cursor position."""
+        value = self._getValueFromCursor()
+        
+        # Update maximum value if a valid value was found
+        if value is not None:
+            self.max_value = value
+            # Emit signal to notify about the new value range
+            self.valueRangeChanged.emit(self.min_value, self.max_value)
+            self.update()
 
     def switchToNextLayer(self):
         """Switch to the next layer in the cycle."""
