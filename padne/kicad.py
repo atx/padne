@@ -547,7 +547,7 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
             # gerber file is empty before we try to render it
             continue
 
-        # For reasons to be determined, the geometry generated like this has 
+        # For reasons to be determined, the geometry generated like this has
         # a flipped y axis. Flip it back.
         geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
         

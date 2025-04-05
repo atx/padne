@@ -540,7 +540,7 @@ class MeshViewer(QOpenGLWidget):
         """Handle window resizing."""
         gl.glViewport(0, 0, width, height)
 
-    def _compute_mvp(self):
+    def _computeMVP(self):
         aspect = self.width() / self.height() if self.height() > 0 else 1.0
         
         # Create a 2D orthographic projection matrix
@@ -552,10 +552,11 @@ class MeshViewer(QOpenGLWidget):
         near = -1.0
         far = 1.0
         
-        # Define the matrix components
+        # Define the matrix components with Y-axis flip
+        # Change the row for Y projection to add the flip
         proj_matrix = np.array([
             [2.0 / (right - left), 0, 0, -(right + left) / (right - left)],
-            [0, 2.0 / (top - bottom), 0, -(top + bottom) / (top - bottom)],
+            [0, -2.0 / (top - bottom), 0, -(top + bottom) / (top - bottom)],  # Note the negative sign here
             [0, 0, -2.0 / (far - near), -(far + near) / (far - near)],
             [0, 0, 0, 1]
         ], dtype=np.float32)
@@ -579,7 +580,7 @@ class MeshViewer(QOpenGLWidget):
             print("No shader program or meshes to render")
             return
         
-        mvp = self._compute_mvp()
+        mvp = self._computeMVP()
         
         # Get current layer name
         current_layer = self.visible_layers[self.current_layer_index]
@@ -650,8 +651,8 @@ class MeshViewer(QOpenGLWidget):
         # Horizontal movement (adjusted for aspect ratio)
         dx_world = (delta.x() / self.width()) * (2.0 / self.scale) * aspect
         
-        # Vertical movement (note: Qt's y axis points down, OpenGL's points up)
-        dy_world = -(delta.y() / self.height()) * (2.0 / self.scale)
+        # Vertical movement (note: Qt's y axis points down, now consistent with flipped OpenGL Y-axis)
+        dy_world = (delta.y() / self.height()) * (2.0 / self.scale)
         
         # Update offsets
         self.offset_x += dx_world
@@ -701,7 +702,7 @@ class MeshViewer(QOpenGLWidget):
         
         # Convert to OpenGL viewport coordinates
         viewport_x = cursor_pos.x()
-        viewport_y = self.height() - cursor_pos.y()  # Flip y-coordinate for OpenGL
+        viewport_y = cursor_pos.y()  # No need to flip y-coordinate since we flipped the projection matrix
         
         # Convert to normalized device coordinates (NDC)
         ndc_x = 2.0 * viewport_x / self.width() - 1.0
