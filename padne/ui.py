@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import collections
 import sys
 import numpy as np
 import contextlib
@@ -644,7 +643,7 @@ class MeshViewer(QOpenGLWidget):
         delta = current_pos - self.last_pos
         
         # The conversion factor should consider:
-        # 1. The current scale 
+        # 1. The current scale
         # 2. The viewport size
         # 3. The orthographic projection bounds
         
@@ -892,44 +891,21 @@ class MainWindow(QMainWindow):
         
     def loadProject(self, kicad_pro_path):
         """Load a KiCad project and display the F.Cu layer."""
-        try:
-            # Load the KiCad project
-            print(f"Loading project: {kicad_pro_path}")
-            prob = kicad.load_kicad_project(Path(kicad_pro_path))
-            
-            # Solve the problem to get the values for visualization
-            print("Solving problem...")
-            solution = solver.solve(prob)
-            
-            # Find the F.Cu layer and its solution
-            #f_cu_layer = None
-            #f_cu_solution = None
-            #for i, layer in enumerate(prob.layers):
-            #    if layer.name == "F.Cu":
-            #        f_cu_layer = layer
-            #        f_cu_solution = solution.layer_solutions[i]
-            #        break
-            #
-            #if f_cu_layer is None:
-            #    print("Error: F.Cu layer not found in the project")
-            #    return
-            #
-            ## Display the meshes from the solution
-            #print(f"Displaying {len(f_cu_solution.meshes)} mesh regions")
-            ## Pass both meshes and solution values to the mesh viewer
-            #self.mesh_viewer.setMeshes(f_cu_solution.meshes, f_cu_solution.values)
-            self.mesh_viewer.setSolution(solution)
-            
-            # Connect the layer change signal to update the window title
-            self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
-            
-            # Set an appropriate unit (assuming voltage for now)
-            self.color_scale.setUnit("V")
-            
-        except Exception as e:
-            print(f"Error loading project: {str(e)}")
-            import traceback
-            traceback.print_exc()
+        # Load the KiCad project
+        print(f"Loading project: {kicad_pro_path}")
+        prob = kicad.load_kicad_project(Path(kicad_pro_path))
+        
+        # Solve the problem to get the values for visualization
+        print("Solving problem...")
+        solution = solver.solve(prob)
+        
+        self.mesh_viewer.setSolution(solution)
+        
+        # Connect the layer change signal to update the window title
+        self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
+        
+        # Set an appropriate unit (assuming voltage for now)
+        self.color_scale.setUnit("V")
             
     def updateCurrentLayer(self, layer_name):
         """Update the window title to show the current layer."""

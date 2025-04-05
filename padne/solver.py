@@ -213,7 +213,6 @@ def solve(prob: problem.Problem) -> Solution:
             case problem.VoltageRegulator():
                 raise NotImplementedError("Voltage regulators are not yet supported")
 
-
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
     # TODO: This is a symmetric positive definite matrix, so we can theoretically

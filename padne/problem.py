@@ -1,5 +1,4 @@
 
-import enum
 import shapely
 
 from dataclasses import dataclass
@@ -12,6 +11,9 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class Layer:
+    """
+    Represents a single copper layer of the input circuit board.
+    """
     # TODO: Theoretically, the solver does not need to distinguish layers,
     # just a bunch of polygons with resistivity connected via lumped elements.
     # However, the renderer _will_ need to know this.
@@ -39,6 +41,9 @@ class Terminal:
 
 @dataclass(frozen=True)
 class BaseLumped(Protocol):
+    """
+    Represents a lumped element in the problem.
+    """
 
     def __post_init__(self):
         assert self.terminals, "Lumped elements must have terminals"
@@ -84,7 +89,7 @@ class CurrentSource(BaseLumped):
 @dataclass(frozen=True)
 class VoltageRegulator(BaseLumped):
     """
-    This is effectivelly a CCCS, but the current is determined by a current
+    This is effectively a CCCS, but the current is determined by a current
     through a voltage source.
     """
     v_p: Terminal

@@ -35,6 +35,7 @@ import padne.problem as problem
 # But we can fairly easily compute them and have a lot of work done for us
 # by using the gerber pathway
 
+
 def nm_to_mm(f: float) -> float:
     return f / 1000000
 
@@ -82,13 +83,13 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
     if sexpr[0] != sexpdata.Symbol("kicad_pcb"):
         raise ValueError("Unknown initial key in the PCB file")
     
-    setup = next((item for item in sexpr if isinstance(item, list) and 
+    setup = next((item for item in sexpr if isinstance(item, list) and
                  item and item[0] == sexpdata.Symbol('setup')), None)
     
     if not setup:
         raise ValueError("Could not find setup section in PCB file")
     
-    stackup = next((item for item in setup if isinstance(item, list) and 
+    stackup = next((item for item in setup if isinstance(item, list) and
                    item and item[0] == sexpdata.Symbol('stackup')), None)
     
     if not stackup:
@@ -629,11 +630,6 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
                     layer_name = board.GetLayerName(layer_id)
                     if "Cu" not in layer_name:
                         continue
-                    # For flipped footprints, adjust the y coordinate similar to SMD pads
-                    #if footprint.IsFlipped():
-                    #    footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
-                    #    y_mm = 2 * footprint_pos_y - y_mm
-                    #    point = shapely.geometry.Point(x_mm, y_mm)
                     return layer_name, point
                 
                 raise ValueError(f"No copper layer found for through-hole pad {pad} on component {designator}")
