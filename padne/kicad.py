@@ -15,7 +15,7 @@ import tempfile
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Iterator
 
 from . import problem
 
@@ -69,6 +69,13 @@ DEFAULT_STACKUP = Stackup(
         StackupItem(name="B.Cu", thickness=0.035, conductivity=5.95e4),
     ]
 )
+
+
+def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
+    for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
+        if not board.IsLayerEnabled(layer_id) or not pcbnew.IsCopperLayer(layer_id):
+            continue
+        yield layer_id
 
 
 def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
@@ -216,13 +223,11 @@ def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
         # Get the layers this via connects
         layer_names = []
         layer_set = via.GetLayerSet()
-        
-        for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
-            if layer_set.Contains(layer_id):
-                layer_name = board.GetLayerName(layer_id)
-                # Only include copper layers
-                if "Cu" in layer_name:
-                    layer_names.append(layer_name)
+
+        for layer_id in copper_layers(board):
+            if not layer_set.Contains(layer_id):
+                continue
+            layer_names.append(board.GetLayerName(layer_id))
         
         # Get the via's position (convert from KiCad internal units - nanometers to mm)
         pos_x = nm_to_mm(via.GetPosition().x)
@@ -272,13 +277,11 @@ def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
             # Determine which layers this pad connects
             layer_names = []
             layer_set = pad.GetLayerSet()
-            
-            for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
-                if layer_set.Contains(layer_id):
-                    layer_name = board.GetLayerName(layer_id)
-                    # Only include copper layers
-                    if "Cu" in layer_name and board.IsLayerEnabled(layer_id):
-                        layer_names.append(layer_name)
+
+            for layer_id in copper_layers(board):
+                if not layer_set.Contains(layer_id):
+                    continue
+                layer_names.append(board.GetLayerName(layer_id))
             
             # Create a ViaSpec object for this through-hole pad
             tht_spec = ViaSpec(
@@ -494,12 +497,9 @@ def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
     gerber_layers = {}
     
     # Plot each copper layer
-    for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
+    for layer_id in copper_layers(board):
         # Get layer name first
         layer_name = board.GetLayerName(layer_id)
-        # Only process enabled layers that are copper layers (e.g. contain "Cu")
-        if not board.IsLayerEnabled(layer_id) or not layer_name.endswith("Cu"):
-            continue
         
         # Open plot file
         plot_controller.SetLayer(layer_id)
