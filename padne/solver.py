@@ -66,6 +66,50 @@ def mesh_layer(mesher: mesh.Mesher, problem: problem.Problem, layer: problem.Lay
     return ret
 
 
+def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
+    """
+    Compute the Laplace operator for a given mesh. This is in "mesh-local"
+    indices, so the variable indices are given by the mesh.vertices indices.
+    """
+    N = len(mesh.vertices)
+    L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
+
+    for i, vertex_i in enumerate(mesh.vertices):
+        for edge in vertex_i.orbit():
+            # Grab the vertex on the other side of the edge
+            vertex_k = edge.twin.origin
+            k = mesh.vertices.to_index(vertex_k)
+
+            if not edge.face.is_boundary and not edge.twin.face.is_boundary:
+                ratio = 0.
+                for ed in [edge.next.next, edge.twin.next.next]:
+                    vi = vertex_i.p - ed.origin.p
+                    vk = vertex_k.p - ed.origin.p
+                    # TODO: THIS IS ACTUALLY DOUBLE COUNTING SOMETHING AAAA
+                    # 1. compute manually the value for u_5 on the paper you have at your table
+                    # Then everything should be obvious
+                    # Be very careful
+                    ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
+            else:
+                # TODO: This boundary handling comes from my original code
+                # written in 2019. It is very likely wrong.
+                # Do considerable amount of thinking here to figure out
+                # the correct way to force the normal derivative to zero
+                # Questionable:
+                # Grab whichever edge is not the boundary one
+                # TODO: I suspect this can be merged with the above...
+                eop = edge.next.next if not edge.face.is_boundary else edge.twin.next.next
+                vi = vertex_i.p - eop.origin.p
+                vk = vertex_k.p - eop.origin.p
+                ratio = abs(vi.dot(vk) / (vi ^ vk)) / 2
+            L[i, i] -= ratio
+            # Note that we are iterating over everything, so the (k, i) pair gets
+            # set in a different iteration
+            L[i, k] += ratio
+
+    return L
+
+
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -121,37 +165,16 @@ def solve(prob: problem.Problem) -> Solution:
     L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
     r = np.zeros(N, dtype=np.float32)
 
-    # Okay, now we enumerate over every vertex
-    # TODO: Maybe it would be nicer to make a per-mesh matrix and then "stack"
-    # them together?
-    for i, (mesh_idx, vertex_idx) in enumerate(global_index_to_vertex_index):
-        vertex = meshes[mesh_idx].vertices.to_object(vertex_idx)
-        for edge in vertex.orbit():
-            vertex_other = edge.twin.origin
-            vertex_other_idx = meshes[mesh_idx].vertices.to_index(vertex_other)
-            k = mesh_vertex_index_to_global_index[(mesh_idx, vertex_other_idx)]
+    # Now we compute the Laplace operator for each mesh
+    for mesh_idx, msh in enumerate(meshes):
 
-            if not edge.face.is_boundary and not edge.twin.face.is_boundary:
-                # We are in "the interior"
-                ratio = 0.
-                for ed in [edge.next.next, edge.twin.next.next]:
-                    va = vertex.p - ed.origin.p
-                    vb = vertex_other.p - ed.origin.p
-                    ratio += abs(va.dot(vb) / (va ^ vb)) / 2
-            else:
-                # TODO: This boundary handling comes from my original code
-                # written in 2019. It is very likely wrong.
-                # Do considerable amount of thinking here to figure out
-                # the correct way to force the normal derivative to zero
-                # Questionable:
-                eop = edge.next.next if not edge.face.is_boundary else edge.twin.next.next
-                va = vertex.p - eop.origin.p
-                vb = vertex_other.p - eop.origin.p
-                ratio = abs(va.dot(vb) / (va ^ vb)) / 2
-            L[i, i] -= ratio
-            # Note that we are iterating over everything, so the (k, i) pair gets
-            # set in a different iteration
-            L[i, k] += ratio
+        L_msh = laplace_operator(msh)
+
+        # Glue them together into the global matrix
+        for local_i, local_j in zip(*L_msh.nonzero()):
+            global_i = mesh_vertex_index_to_global_index[(mesh_idx, local_i)]
+            global_j = mesh_vertex_index_to_global_index[(mesh_idx, local_j)]
+            L[global_i, global_j] = L_msh[local_i, local_j]
 
     # TODO: Make this accept a Terminal instance
     def get_vertex_global_index_by_point(layer: problem.Layer,

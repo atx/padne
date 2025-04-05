@@ -1,4 +1,5 @@
 import pytest
+import itertools
 import shapely.geometry
 import numpy as np
 
@@ -203,6 +204,107 @@ class TestSyntheticProblems:
             # and mesher. I feel like it should be _way_ more accurate...
             assert actual_voltage == pytest.approx(expected_voltage, abs=0.05), \
                 f"Voltage at vertex {vertex.p} ({actual_voltage:.3f}) is not proportional to x ({expected_voltage:.3f})"
+
+
+class TestLaplaceOperator:
+
+    @staticmethod
+    def assert_matrix_is_laplacian(L):
+        N = L.shape[0]
+        assert L.shape == (N, N), "Laplace operator should be square"
+        # Check that the diagonal entries are negative
+        for i in range(N):
+            assert L[i, i] < 0, f"Diagonal entry {i} should be negative"
+
+        # Check that the off-diagonal entries are non-negative
+        for i, j in itertools.product(range(N), range(N)):
+            if i != j:
+                assert L[i, j] >= 0, f"Off-diagonal entry ({i}, {j}) should be non-negative"
+            assert L[i, j] == L[j, i], f"Laplace operator should be symmetric ({i}, {j})"
+
+        # And finally, check that the diagonal is the sum of the off-diagonal entries
+        for i in range(N):
+            row_sum = np.sum(L[i, :])
+            assert abs(row_sum) < 1e-5, f"Row {i} does not sum to zero (sum={row_sum})"
+
+
+    def test_laplace_operator_unit_square_with_center(self):
+        """
+        Test the laplace_operator function using a unit square with a central vertex.
+        The resulting mesh has 4 triangles, and we can analytically compute the
+        expected Laplace operator matrix.
+        """
+        # Create a simple mesh: unit square with a central vertex
+        # Points at the corners of the square and one at the center
+        points = [
+            mesh.Point(0.0, 0.0),  # bottom left (0)
+            mesh.Point(1.0, 0.0),  # bottom right (1)
+            mesh.Point(1.0, 1.0),  # top right (2)
+            mesh.Point(0.0, 1.0),  # top left (3)
+            mesh.Point(0.5, 0.5),  # center (4)
+        ]
+        
+        # Define the triangles (counter-clockwise order)
+        triangles = [
+            (0, 1, 4),  # bottom triangle
+            (1, 2, 4),  # right triangle
+            (2, 3, 4),  # top triangle
+            (3, 0, 4),  # left triangle
+        ]
+        
+        # Create the mesh
+        test_mesh = mesh.Mesh.from_triangle_soup(points, triangles)
+        
+        # Call the function under test
+        L = solver.laplace_operator(test_mesh)
+
+        assert L.shape == (5, 5), "Laplace operator should be a 5x5 matrix"
+        
+        # Convert to dense matrix for easier testing
+        L_dense = L.toarray()
+
+        self.assert_matrix_is_laplacian(L_dense)
+
+        # Manually calculate the expected Laplace matrix
+        # For this regular structure with right isosceles triangles:
+        # - Each corner vertex connects to two other vertices (center and adjacent corners)
+        # - The center vertex connects to all four corners
+        # - For right isosceles triangles, the cotangent of the angle is 1.0
+        
+        # For the center vertex (index 4):
+        # It connects to vertices 0, 1, 2, 3 with cotangent weights
+        # Each triangle has two 45° angles (cotangent = 1) and one 90° angle (cotangent = 0)
+        # So the center vertex gets 4 connections, each with weight 0.5 (average of cotangents)
+        
+        # For each corner vertex (indices 0-3):
+        # It connects to the center and two adjacent corners
+        # The connections to adjacent corners have weight 0 (90° angle, cotangent = 0)
+        # The connection to center has weight 0.5 (same as above)
+        
+        # Create the expected matrix (initialized to zeros)
+        expected_L = np.zeros((5, 5), dtype=np.float32)
+
+        # Fill the diagonal entries (negative sum of off-diagonal entries in the same row)
+        # Center vertex (index 4) connects to all corners with weight 1.0
+        # since
+        # 1/2 * (cot 45 + cot 45) = 1.0
+        expected_L[4, 0] = 1
+        expected_L[4, 1] = 1
+        expected_L[4, 2] = 1
+        expected_L[4, 3] = 1
+        expected_L[4, 4] = -4.0  # -sum(0.5 * 4)
+        
+        # Corner vertices
+        # Each corner vertex connects to the center with weight 1.0 (as above)
+        # and to two adjacent corners with weight 0.0 (cot 90° = 0)
+        for i in range(4):
+            # Connection to center
+            expected_L[i, 4] = 1.0
+            expected_L[i, i] = -1.0
+        
+        # Verify the Laplace operator matches our expectations
+        np.testing.assert_allclose(L_dense, expected_L, rtol=1e-5, atol=1e-5,
+                                   err_msg="Laplace operator matrix does not match expected values")
 
 
 class TestSolverEndToEnd:
