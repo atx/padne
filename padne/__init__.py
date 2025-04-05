@@ -1,6 +1,9 @@
 
-from . import kicad
+from . import kicad, mesh, solver, problem
 
 __all__ = [
-    "kicad"
+    "kicad",
+    "mesh",
+    "solver",
+    "problem",
 ]

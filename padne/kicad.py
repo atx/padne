@@ -6,18 +6,18 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 import enum
 import math
+import pathlib
 import pcbnew
-import tempfile
+import pygerber.gerber.api
 import shapely
 import shapely.affinity
-import pygerber.gerber.api
-import pathlib
+import tempfile
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-import padne.problem as problem
+from . import problem
 
 # This file is responsible for loading KiCad files and converting them to our
 # internal representation. The idea is that we:

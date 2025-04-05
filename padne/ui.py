@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 
-import sys
-import numpy as np
 import contextlib
+import numpy as np
+import sys
 import OpenGL.GL as gl
+
 from typing import Optional
 from pathlib import Path
 from dataclasses import dataclass, field
 
 from PySide6 import QtGui
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout
 from PySide6.QtCore import Qt, Signal, Slot, QRect
-from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtGui import QSurfaceFormat, QPainter, QPen, QColor
 from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout
 
-from padne import kicad, mesh, solver
-from padne.mesh import ZeroForm
+from . import kicad, mesh, solver
 
 
 def pretty_format_si_number(value: float, unit: str):
@@ -215,7 +215,7 @@ class RenderedMesh:
     edge_count: int
 
     @classmethod
-    def from_mesh(cls, msh: mesh.Mesh, values: ZeroForm):
+    def from_mesh(cls, msh: mesh.Mesh, values: mesh.ZeroForm):
         triangle_vertices = []
         triangle_colors = []
         edge_vertices = []

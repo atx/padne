@@ -2,6 +2,7 @@
 import collections
 import numpy as np
 import shapely.geometry
+
 from dataclasses import dataclass, field
 from typing import Optional, Iterable, Hashable
 

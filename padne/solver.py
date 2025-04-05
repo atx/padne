@@ -1,18 +1,18 @@
 
 
-from dataclasses import dataclass
-import shapely.geometry
 import numpy as np
 import scipy.sparse
+import shapely.geometry
+
+from dataclasses import dataclass
 
 from . import problem, mesh
-from .mesh import ZeroForm
 
 
 @dataclass
 class LayerSolution:
     meshes: list[mesh.Mesh]
-    values: list[ZeroForm]
+    values: list[mesh.ZeroForm]
 
 
 @dataclass
@@ -229,7 +229,7 @@ def solve(prob: problem.Problem) -> Solution:
                 continue
             layer_meshes.append(msh)
             # Create a ZeroForm for this mesh's vertices
-            vertex_values = ZeroForm(msh)  # Initialize ZeroForm with the mesh
+            vertex_values = mesh.ZeroForm(msh)  # Initialize ZeroForm with the mesh
             for vertex_idx, vertex in enumerate(msh.vertices):
                 global_index = mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
                 vertex_values[vertex] = v[global_index]  # Set values using indexing
