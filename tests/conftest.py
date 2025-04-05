@@ -4,6 +4,7 @@ import warnings
 warnings.simplefilter("ignore", DeprecationWarning)
 
 import pytest
+import functools
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -18,15 +19,7 @@ class KicadTestProject:
     sch_path: Optional[Path] = None  # Path to .kicad_sch file
 
 
-@pytest.fixture
-def kicad_test_projects():
-    """
-    Fixture that provides a dictionary of KiCad test projects.
-    
-    Returns a dictionary where:
-    - Keys are the project names (folder names in tests/kicad/)
-    - Values are KicadTestProject objects containing paths to project files
-    """
+def _kicad_test_projects():
     kicad_dir = Path(__file__).parent / "kicad"
     
     # Dictionary to store all discovered projects
@@ -70,3 +63,46 @@ def kicad_test_projects():
         projects[project_name] = project
     
     return projects
+
+
+def for_all_kicad_projects(_func=None, *, include=None, exclude=None):
+    """
+    Fixture that provides a list of all KiCad test projects.
+    
+    Returns:
+        list: A list of KicadTestProject objects.
+    """
+    if include is not None and exclude is not None:
+        raise ValueError("Cannot specify both include and exclude.")
+
+    def decorator(func):
+        filtered_projects = [
+            project
+            for project in _kicad_test_projects().values()
+            if (include is None or project.name in include)
+                and (exclude is None or project.name not in exclude)
+        ]
+
+        @pytest.mark.parametrize(
+            "project",
+            filtered_projects,
+        )
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+
+    if _func is None:
+        return decorator
+    return decorator(_func)
+
+
+@pytest.fixture
+def kicad_test_projects():
+    """
+    Fixture that provides a dictionary of KiCad test projects.
+    
+    Returns:
+        dict: A dictionary where keys are project names and values are KicadTestProject objects.
+    """
+    return _kicad_test_projects()

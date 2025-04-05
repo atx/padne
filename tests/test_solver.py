@@ -1,8 +1,10 @@
 import pytest
 import shapely.geometry
 import numpy as np
+
 from padne import solver, problem, mesh, kicad
-from pathlib import Path
+
+from conftest import for_all_kicad_projects
 
 
 # Helper function to find the voltage at the vertex closest to a terminal
@@ -205,61 +207,60 @@ class TestSyntheticProblems:
 
 class TestSolverEndToEnd:
 
-    def test_all_test_projects_solve(self, kicad_test_projects):
+    @for_all_kicad_projects(exclude=["tht_component"])
+    def test_all_test_projects_solve(self, project):
         """Test that solver.solve works on all test projects."""
-        for project in kicad_test_projects.values():
-            # Load the problem from the KiCad project
-            prob = kicad.load_kicad_project(project.pro_path)
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
 
-            # Call the function under test
-            solution = solver.solve(prob)
+        # Call the function under test
+        solution = solver.solve(prob)
 
-            assert solution is not None
-            assert isinstance(solution, solver.Solution)
+        assert solution is not None
+        assert isinstance(solution, solver.Solution)
 
-            # Check that every layer has a solution
-            assert len(solution.layer_solutions) == len(prob.layers)
+        # Check that every layer has a solution
+        assert len(solution.layer_solutions) == len(prob.layers)
 
-            # Next, we iterate over all the solutions and check that the ZeroForms
-            # live in the corresponding meshes
-            for layer_solution in solution.layer_solutions:
-                assert len(layer_solution.meshes) == len(layer_solution.values)
+        # Next, we iterate over all the solutions and check that the ZeroForms
+        # live in the corresponding meshes
+        for layer_solution in solution.layer_solutions:
+            assert len(layer_solution.meshes) == len(layer_solution.values)
 
-                for msh, value in zip(layer_solution.meshes, layer_solution.values):
-                    for vertex in msh.vertices:
-                        # This checks both that the value is valid number and
-                        # that it is finite
-                        # Note that isinstance check for float is not good enough
-                        # here, since the solver may decide to return np.float32 or something
-                        assert np.isfinite(value[vertex])
+            for msh, value in zip(layer_solution.meshes, layer_solution.values):
+                for vertex in msh.vertices:
+                    # This checks both that the value is valid number and
+                    # that it is finite
+                    # Note that isinstance check for float is not good enough
+                    # here, since the solver may decide to return np.float32 or something
+                    assert np.isfinite(value[vertex])
 
+    @for_all_kicad_projects(exclude=["tht_component"])
+    def test_voltage_sources_work(self, project):
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+        # Check if there is a voltage source in the project
+        has_voltage_source = any(
+            isinstance(el, problem.VoltageSource) for el in prob.lumpeds
+        )
+        if not has_voltage_source:
+            pytest.skip("No voltage sources in this project.")
 
-    def test_voltage_sources_work(self, kicad_test_projects):
-        for project in kicad_test_projects.values():
-            # Load the problem from the KiCad project
-            prob = kicad.load_kicad_project(project.pro_path)
-            # Check if there is a voltage source in the project
-            has_voltage_source = any(
-                isinstance(el, problem.VoltageSource) for el in prob.lumpeds
-            )
-            if not has_voltage_source:
-                continue
+        # Call the function under test
+        solution = solver.solve(prob)
 
-            # Call the function under test
-            solution = solver.solve(prob)
+        assert solution is not None
+        assert isinstance(solution, solver.Solution)
 
-            assert solution is not None
-            assert isinstance(solution, solver.Solution)
+        # Check that every layer has a solution
+        assert len(solution.layer_solutions) == len(prob.layers)
 
-            # Check that every layer has a solution
-            assert len(solution.layer_solutions) == len(prob.layers)
-
-            # Check each voltage source
-            for elem in prob.lumpeds:
-                if isinstance(elem, problem.VoltageSource):
-                    voltage_p = find_vertex_value(solution, elem.p)
-                    voltage_n = find_vertex_value(solution, elem.n)
-                    
-                    # Verify the voltage difference matches the source voltage
-                    assert voltage_p - voltage_n == pytest.approx(elem.voltage, abs=0.001), \
-                        f"Voltage difference for {elem} does not match expected value."
+        # Check each voltage source
+        for elem in prob.lumpeds:
+            if isinstance(elem, problem.VoltageSource):
+                voltage_p = find_vertex_value(solution, elem.p)
+                voltage_n = find_vertex_value(solution, elem.n)
+                
+                # Verify the voltage difference matches the source voltage
+                assert voltage_p - voltage_n == pytest.approx(elem.voltage, abs=0.001), \
+                    f"Voltage difference for {elem} does not match expected value."

@@ -13,25 +13,33 @@ from typing import Optional
 
 from padne import kicad, problem
 
+from conftest import for_all_kicad_projects
 
-def test_fixture_files_exist(kicad_test_projects):
-    """Test that all the projects in the test fixture have existing files."""
-    # Skip if no projects were found
-    if not kicad_test_projects:
-        pytest.skip("No KiCad test projects found")
-    
-    # Check that at least one project was found
-    assert len(kicad_test_projects) > 0, "No KiCad test projects were found"
-    
-    # Check that all project files that were identified actually exist
-    for project_name, project in kicad_test_projects.items():
-        # Check project name is not empty
-        assert project.name, f"Project has empty name"
+
+class TestFixture:
+
+    def test_fixture_files_exist(self, kicad_test_projects):
+        """Test that all the projects in the test fixture have existing files."""
+        # Check that at least one project was found
+        assert len(kicad_test_projects) > 0, "No KiCad test projects were found"
         
-        # Check that project files exist if they were found
-        assert project.pro_path.exists(), f"Project file does not exist: {project.pro_path}"
-        assert project.pcb_path.exists(), f"PCB file does not exist: {project.pcb_path}"
-        assert project.sch_path.exists(), f"Schematic file does not exist: {project.sch_path}"
+        # Check that all project files that were identified actually exist
+        for project_name, project in kicad_test_projects.items():
+            # Check project name is not empty
+            assert project.name, f"Project has empty name"
+            
+            # Check that project files exist if they were found
+            assert project.pro_path.exists(), f"Project file does not exist: {project.pro_path}"
+            assert project.pcb_path.exists(), f"PCB file does not exist: {project.pcb_path}"
+            assert project.sch_path.exists(), f"Schematic file does not exist: {project.sch_path}"
+
+    @for_all_kicad_projects(exclude=["simple_geometry"])
+    def test_fixture_exclude(self, project):
+        assert project.name != "simple_geometry"
+
+    @for_all_kicad_projects(include=["simple_geometry"])
+    def test_fixture_include(self, project):
+        assert project.name == "simple_geometry"
 
 
 def test_gerber_render_outputs_something(kicad_test_projects):
@@ -244,19 +252,17 @@ def test_extract_stackup(kicad_test_projects):
     assert b_cu.conductivity == 5.95e4, "Expected B.Cu conductivity to be 5.95e7 S/m"
 
 
-def test_extract_stackup_extracts_every_project(kicad_test_projects):
-
-    for project_name, project in kicad_test_projects.items():
-
-        # Load the KiCad board
-        board = pcbnew.LoadBoard(str(project.pcb_path))
+@for_all_kicad_projects
+def test_extract_stackup_extracts_every_project(project):
+    # Load the KiCad board
+    board = pcbnew.LoadBoard(str(project.pcb_path))
         
-        # Extract stackup
-        stackup = kicad.extract_stackup_from_kicad_pcb(board)
+    # Extract stackup
+    stackup = kicad.extract_stackup_from_kicad_pcb(board)
         
-        # Check that we got a valid Stackup object
-        assert isinstance(stackup, kicad.Stackup), f"Stackup extraction failed for {project_name}"
-        assert len(stackup.items) > 0, f"No stackup items found for {project_name}"
+    # Check that we got a valid Stackup object
+    assert isinstance(stackup, kicad.Stackup), f"Stackup extraction failed for {project_name}"
+    assert len(stackup.items) > 0, f"No stackup items found for {project.name}"
 
 
 class TestLoadKicadProject:
@@ -338,50 +344,43 @@ class TestLoadKicadProject:
         assert (resistor.b.point.x == r3_2_point.x and 
                 resistor.b.point.y == r3_2_point.y)
                 
-    def test_lumped_points_inside_layers(self, kicad_test_projects):
+    @for_all_kicad_projects
+    def test_lumped_points_inside_layers(self, project):
         """
         Test that for all test projects, the start and end points of lumped elements 
         are located inside their respective layer shapes.
         """
-        # Skip if no projects were found
-        if not kicad_test_projects:
-            pytest.skip("No KiCad test projects found")
         
-        for project_name, project in kicad_test_projects.items():
-            # Load the KiCad project
-            kicad_problem = kicad.load_kicad_project(project.pro_path)
-                
-            # For each lumped element, verify that its endpoints are inside the layers
-            for i, lumped in enumerate(kicad_problem.lumpeds):
-                for terminal in lumped.terminals:
-                    point_inside = terminal.layer.shape.contains(terminal.point)
+        # Load the KiCad project
+        kicad_problem = kicad.load_kicad_project(project.pro_path)
+            
+        # For each lumped element, verify that its endpoints are inside the layers
+        for i, lumped in enumerate(kicad_problem.lumpeds):
+            for terminal in lumped.terminals:
+                point_inside = terminal.layer.shape.contains(terminal.point)
 
-                    assert point_inside, (
-                        f"Project {project_name}, lumped element {lumped} "
-                        f"point {terminal.point} is not inside its layer shape {terminal.layer.name}"
-                    )
+                assert point_inside, (
+                    f"Project {project.name}, lumped element {lumped} "
+                    f"point {terminal.point} is not inside its layer shape {terminal.layer.name}"
+                )
 
-    def test_all_layer_shapes_are_multipolygons(self, kicad_test_projects):
+    @for_all_kicad_projects
+    def test_all_layer_shapes_are_multipolygons(self, project):
         """
         Test that for all test projects, the shapes of all layers are MultiPolygons.
         This is regression testing for a bug where a layer with a single connected
         component would be loaded as a Polygon instead of a MultiPolygon
         (this originates in pygerber).
         """
-        
-        for project_name, project in kicad_test_projects.items():
-            # Load the KiCad project
-            try:
-                kicad_problem = kicad.load_kicad_project(project.pro_path)
-            except Exception as e:
-                pytest.fail(f"Failed to load project {project_name}: {e}")
-                
-            # For each layer, verify that its shape is a MultiPolygon
-            for i, layer in enumerate(kicad_problem.layers):
-                assert layer.shape.geom_type == "MultiPolygon", (
-                    f"Project {project_name}, layer {i} ({layer.name}): "
-                    f"shape is not a MultiPolygon"
-                )
+        # Load the KiCad project
+        kicad_problem = kicad.load_kicad_project(project.pro_path)
+            
+        # For each layer, verify that its shape is a MultiPolygon
+        for i, layer in enumerate(kicad_problem.layers):
+            assert layer.shape.geom_type == "MultiPolygon", (
+                f"Project {project.name}, layer {i} ({layer.name}): "
+                f"shape is not a MultiPolygon"
+            )
 
     def test_flipped_pads_work(self, kicad_test_projects):
         """Test that flipped pads are handled correctly."""
