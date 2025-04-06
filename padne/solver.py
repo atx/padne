@@ -4,7 +4,7 @@ import numpy as np
 import scipy.sparse
 import shapely.geometry
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import problem, mesh
 
@@ -110,6 +110,22 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
     return L
 
 
+@dataclass
+class IndexStore:
+    global_index_to_vertex_index: list[tuple[int, int]] = field(default_factory=list)
+    mesh_vertex_index_to_global_index: dict[tuple[int, int], int] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, meshes: list[mesh.Mesh]) -> "IndexStore":
+        store = cls()
+        for mesh_idx, msh in enumerate(meshes):
+            for vertex_idx, msh in enumerate(msh.vertices):
+                global_index = len(store.global_index_to_vertex_index)
+                store.global_index_to_vertex_index.append((mesh_idx, vertex_idx))
+                store.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
+        return store
+
+
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -140,13 +156,9 @@ def solve(prob: problem.Problem) -> Solution:
     # In the next step, we assign a global index to each vertex in every mesh
     # this is needed since we need to somehow map the vertex indices to the
     # matrix indices in the final system of equations
-    global_index_to_vertex_index: list[tuple[int, int]] = []
-    mesh_vertex_index_to_global_index: dict[tuple[int, int], int] = {}
-    for mesh_idx, msh in enumerate(meshes):
-        for vertex_idx, vertex in enumerate(msh.vertices):
-            global_index = len(global_index_to_vertex_index)
-            global_index_to_vertex_index.append((mesh_idx, vertex_idx))
-            mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
+    store = IndexStore.create(meshes)
+    global_index_to_vertex_index = store.global_index_to_vertex_index
+    mesh_vertex_index_to_global_index = store.mesh_vertex_index_to_global_index
 
     voltage_source_count = sum(
         1 for elem in prob.lumpeds

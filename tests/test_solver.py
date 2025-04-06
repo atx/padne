@@ -307,6 +307,72 @@ class TestLaplaceOperator:
                                    err_msg="Laplace operator matrix does not match expected values")
 
 
+class TestIndexStore:
+    def test_index_store_create(self):
+        """
+        Test that IndexStore.create correctly maps vertices from multiple meshes to global indices.
+        """
+        # Create two simple meshes
+        # First mesh: triangle
+        points_1 = [
+            mesh.Point(0.0, 0.0),
+            mesh.Point(1.0, 0.0),
+            mesh.Point(0.0, 1.0)
+        ]
+        triangles_1 = [(0, 1, 2)]
+        mesh_1 = mesh.Mesh.from_triangle_soup(points_1, triangles_1)
+        
+        # Second mesh: square (made of two triangles)
+        points_2 = [
+            mesh.Point(2.0, 0.0),
+            mesh.Point(3.0, 0.0),
+            mesh.Point(3.0, 1.0),
+            mesh.Point(2.0, 1.0)
+        ]
+        triangles_2 = [(0, 1, 2), (0, 2, 3)]
+        mesh_2 = mesh.Mesh.from_triangle_soup(points_2, triangles_2)
+        
+        # Create the IndexStore
+        index_store = solver.IndexStore.create([mesh_1, mesh_2])
+        
+        # Verify basic properties
+        # Total number of vertices across both meshes
+        expected_total_vertices = len(mesh_1.vertices) + len(mesh_2.vertices)
+        assert len(index_store.global_index_to_vertex_index) == expected_total_vertices
+        
+        # Verify mapping from mesh/vertex to global index
+        # First mesh vertices should have global indices 0, 1, 2
+        for vertex_idx in range(len(mesh_1.vertices)):
+            global_idx = index_store.mesh_vertex_index_to_global_index[(0, vertex_idx)]
+            assert 0 <= global_idx < len(mesh_1.vertices)
+            
+        # Second mesh vertices should have global indices 3, 4, 5, 6
+        for vertex_idx in range(len(mesh_2.vertices)):
+            global_idx = index_store.mesh_vertex_index_to_global_index[(1, vertex_idx)]
+            assert len(mesh_1.vertices) <= global_idx < expected_total_vertices
+        
+        # Verify mapping from global index back to mesh/vertex
+        for global_idx in range(expected_total_vertices):
+            mesh_idx, vertex_idx = index_store.global_index_to_vertex_index[global_idx]
+            
+            # Check the mapping is consistent
+            assert index_store.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] == global_idx
+            
+            # Check we're referencing the correct mesh
+            # Note: this is technically not part of the IndexStore API, but
+            # it's a good sanity check. Can be removed if needed.
+            if global_idx < len(mesh_1.vertices):
+                assert mesh_idx == 0
+            else:
+                assert mesh_idx == 1
+                
+            # Verify vertex index is valid for the referenced mesh
+            if mesh_idx == 0:
+                assert 0 <= vertex_idx < len(mesh_1.vertices)
+            else:
+                assert 0 <= vertex_idx < len(mesh_2.vertices)
+
+
 class TestSolverEndToEnd:
 
     @for_all_kicad_projects(exclude=["tht_component"])
