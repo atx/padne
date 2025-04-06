@@ -259,15 +259,27 @@ def solve(prob: problem.Problem) -> Solution:
     # TODO: Eliminate disconnected regions
     mesher = mesh.Mesher()
 
-    # As a first step, we flatten the Layer-Mesh structure to get a list of meshes
-    # (and store which layer they originally come from)
+    # As a first step, we flatten the Layer-Mesh tree to get a flat list of meshes.
+    # We also keep track of which layer each mesh belongs to.
+    # This will be needed later when we construct the final solution object.
     meshes, mesh_index_to_layer_index = generate_meshes_for_problem(prob, mesher)
 
-    # In the next step, we assign a global index to each vertex in every mesh
-    # this is needed since we need to somehow map the vertex indices to the
+    # In the next step, we assign a global index to each vertex in every mesh.
+    # This is needed since we need to somehow map the vertex indices to the
     # matrix indices in the final system of equations
     vindex = VertexIndexer.create(meshes)
 
+    # And for the last index, we create a mapping from terminals (= the lumped element endpoints)
+    # to the vertices they are connected to. This could be done later, but is kept here
+    # in order to improve clarity.
+    terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, vindex)
+
+    # Next, we need to create the matrix of the system of equations and its right hand side.
+    
+    # Since we are using modified nodal analysis, every voltage source yields
+    # an additional variable in the system of equations. Do note that this
+    # extra dimension is a _voltage_ on the right hand side and a _current_ in the
+    # unknowns space (flipped from the other variables).
     voltage_source_count = sum(
         1 for elem in prob.lumpeds
         if isinstance(elem, problem.VoltageSource)
@@ -286,13 +298,11 @@ def solve(prob: problem.Problem) -> Solution:
     r = np.zeros(N, dtype=np.float32)
 
     # Now we compute the Laplace operator for each mesh and insert it into the
-    # global L matrix
+    # global L matrix.
     process_mesh_laplace_operators(meshes, vindex, L)
 
-    # Create a mapping from terminals to the global index of the vertex they are connected to
-    terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, vindex)
-
-    # Now we need to process the lumped elements
+    # Now we need to process the lumped elements, inserting them to the L matrix
+    # and the right hand side
     process_lumped_elements(
         prob.lumpeds,
         terminal_index,
@@ -304,10 +314,13 @@ def solve(prob: problem.Problem) -> Solution:
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
     # TODO: This is a symmetric positive definite matrix, so we can theoretically
-    # use something like Conjugate Gradient
+    # use something like Conjugate Gradient. Unfortunately, this requires a strictly PD
+    # matrix. We can technically get that fairly easily, but it requires forcing a ground
+    # for every connected component.
     v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
 
-    # Great, now just convert it back to a Solution
+    # And now we just grab the final solution vector and reconstruct it back
+    # into a solution object for easier consumption by the caller.
     layer_solutions = produce_layer_solutions(
         prob.layers,
         vindex,
@@ -316,5 +329,4 @@ def solve(prob: problem.Problem) -> Solution:
         v
     )
 
-    # Return the complete solution
     return Solution(problem=prob, layer_solutions=layer_solutions)
