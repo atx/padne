@@ -156,6 +156,50 @@ def make_terminal_index(prob: problem.Problem,
     return terminal_index
 
 
+def process_lumped_elements(lumpeds: list[problem.BaseLumped],
+                            terminal_index: dict[problem.Terminal, int],
+                            voltage_source_i: int,
+                            L: scipy.sparse.dok_matrix,
+                            r: np.ndarray) -> None:
+    for elem in lumpeds:
+        # TODO: Maybe we actually want to actually scale the L matrix since different
+        # layers have different conductances anyway?
+        # It is unclear how this ends up affecting the final solution.
+        match elem:
+            case problem.Resistor(a=a, b=b, resistance=resistance):
+                # TODO: What if the conductances of the layers differ?
+                val = 1 / resistance / a.layer.conductance
+                i_a = terminal_index[a]
+                i_b = terminal_index[b]
+
+                L[i_a, i_a] -= val
+                L[i_b, i_b] -= val
+                L[i_a, i_b] += val
+                L[i_b, i_a] += val
+            case problem.VoltageSource(p=p, n=n, voltage=voltage):
+                i_v = voltage_source_i
+                voltage_source_i += 1
+
+                i_p = terminal_index[p]
+                i_n = terminal_index[n]
+
+                L[i_v, i_p] = 1
+                L[i_p, i_v] = 1
+
+                L[i_v, i_n] = -1
+                L[i_n, i_v] = -1
+
+                r[i_v] = voltage
+            case problem.CurrentSource(f=f, t=t, current=current):
+                i_f = terminal_index[f]
+                i_t = terminal_index[t]
+
+                r[i_f] = current / f.layer.conductance
+                r[i_t] = -current / t.layer.conductance
+
+            case problem.VoltageRegulator():
+                raise NotImplementedError("Voltage regulators are not yet supported")
+
 
 def solve(prob: problem.Problem) -> Solution:
     """
@@ -216,49 +260,13 @@ def solve(prob: problem.Problem) -> Solution:
     terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, store)
 
     # Now we need to process the lumped elements
-    voltage_source_i = 0
-    for elem in prob.lumpeds:
-
-        # TODO: Maybe we actually want to actually scale the L matrix since different
-        # layers have different conductances anyway?
-        # It is unclear how this ends up affecting the final solution.
-        # However, this can be postponed until multilayer support is properly
-        # implemented
-        match elem:
-            case problem.Resistor(a=a, b=b, resistance=resistance):
-                # TODO: What if the conductances of the layers differ?
-                val = 1 / resistance / a.layer.conductance
-                i_a = terminal_index[a]
-                i_b = terminal_index[b]
-
-                L[i_a, i_a] -= val
-                L[i_b, i_b] -= val
-                L[i_a, i_b] += val
-                L[i_b, i_a] += val
-            case problem.VoltageSource(p=p, n=n, voltage=voltage):
-                # TODO: The sign convention may not be correct here
-                i_v = len(global_index_to_vertex_index) + voltage_source_i
-                voltage_source_i += 1
-
-                i_p = terminal_index[p]
-                i_n = terminal_index[n]
-
-                L[i_v, i_p] = 1
-                L[i_p, i_v] = 1
-
-                L[i_v, i_n] = -1
-                L[i_n, i_v] = -1
-
-                r[i_v] = voltage
-            case problem.CurrentSource(f=f, t=t, current=current):
-                i_f = terminal_index[f]
-                i_t = terminal_index[t]
-
-                r[i_f] = current / f.layer.conductance
-                r[i_t] = -current / t.layer.conductance
-
-            case problem.VoltageRegulator():
-                raise NotImplementedError("Voltage regulators are not yet supported")
+    process_lumped_elements(
+        prob.lumpeds,
+        terminal_index,
+        len(global_index_to_vertex_index),
+        L,
+        r
+    )
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
