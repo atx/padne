@@ -111,6 +111,52 @@ class IndexStore:
         return store
 
 
+def generate_meshes_for_problem(prob: problem.Problem, mesher: mesh.Mesher) -> list[list[mesh.Mesh], list[int]]:
+    meshes: list[mesh.Mesh] = []
+    mesh_index_to_layer_index: list[int] = []
+
+    for layer_i, layer in enumerate(prob.layers):
+        layer_meshes = mesh_layer(mesher, prob, layer)
+        meshes.extend(layer_meshes)
+        mesh_index_to_layer_index.extend([layer_i] * len(layer_meshes))
+    return meshes, mesh_index_to_layer_index
+
+
+def make_terminal_index(prob: problem.Problem,
+                        meshes: list[mesh.Mesh],
+                        mesh_index_to_layer_index: list[int],
+                        store: IndexStore) -> dict[problem.Terminal, int]:
+    """
+    Create a mapping from terminals to their global indices.
+    
+    Args:
+        prob: The Problem object containing layers and lumped elements
+        store: The IndexStore object containing the global indices
+        
+    Returns:
+        A dictionary mapping terminals to their global indices
+    """
+    # TODO: This function mildly cursed. We need to somehow consolidate
+    # the arguments.
+    terminals = [
+        t for lumped in prob.lumpeds for t in lumped.terminals
+    ]
+    terminal_index: dict[problem.Terminal, int] = {}
+    for terminal in terminals:
+        for i, (mesh_idx, vertex_idx) in enumerate(store.global_index_to_vertex_index):
+            if mesh_index_to_layer_index[mesh_idx] != prob.layers.index(terminal.layer):
+                continue
+            dist = meshes[mesh_idx].vertices.to_object(vertex_idx).p.distance(terminal.point)
+            if dist > 1e-6:
+                continue
+            # Found the terminal
+            if terminal in terminal_index:
+                raise ValueError("Duplicate terminal vertex found, this should not happen.")
+            terminal_index[terminal] = i
+    return terminal_index
+
+
+
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -129,14 +175,7 @@ def solve(prob: problem.Problem) -> Solution:
 
     # As a first step, we flatten the Layer-Mesh structure to get a list of meshes
     # (and store which layer they originally come from)
-
-    meshes = []
-    mesh_index_to_layer_index: list[int] = []
-
-    for layer_i, layer in enumerate(prob.layers):
-        layer_meshes = mesh_layer(mesher, prob, layer)
-        meshes.extend(layer_meshes)
-        mesh_index_to_layer_index.extend([layer_i] * len(layer_meshes))
+    meshes, mesh_index_to_layer_index = generate_meshes_for_problem(prob, mesher)
 
     # In the next step, we assign a global index to each vertex in every mesh
     # this is needed since we need to somehow map the vertex indices to the
@@ -173,21 +212,8 @@ def solve(prob: problem.Problem) -> Solution:
             global_j = mesh_vertex_index_to_global_index[(mesh_idx, local_j)]
             L[global_i, global_j] = L_msh[local_i, local_j]
 
-    # TODO: Make this accept a Terminal instance
-    def get_vertex_global_index_by_point(layer: problem.Layer,
-                                         pt: shapely.geometry.Point) -> int:
-        # TODO: This is not exactly efficient.
-        # At some point, we are going to either need to use a spatial index
-        # or track the seed points through the meshing process
-        for i, (mesh_idx, vertex_idx) in enumerate(global_index_to_vertex_index):
-            # Does the mesh index match the layer index?
-            if mesh_index_to_layer_index[mesh_idx] != prob.layers.index(layer):
-                continue
-            # *quack quack*
-            dist = meshes[mesh_idx].vertices.to_object(vertex_idx).p.distance(pt)
-            if dist < 1e-6:
-                return i
-        raise ValueError("Vertex not found")
+    # Create a mapping from terminals to the global index of the vertex they are connected to
+    terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, store)
 
     # Now we need to process the lumped elements
     voltage_source_i = 0
@@ -202,8 +228,9 @@ def solve(prob: problem.Problem) -> Solution:
             case problem.Resistor(a=a, b=b, resistance=resistance):
                 # TODO: What if the conductances of the layers differ?
                 val = 1 / resistance / a.layer.conductance
-                i_a = get_vertex_global_index_by_point(a.layer, a.point)
-                i_b = get_vertex_global_index_by_point(b.layer, b.point)
+                i_a = terminal_index[a]
+                i_b = terminal_index[b]
+
                 L[i_a, i_a] -= val
                 L[i_b, i_b] -= val
                 L[i_a, i_b] += val
@@ -213,8 +240,8 @@ def solve(prob: problem.Problem) -> Solution:
                 i_v = len(global_index_to_vertex_index) + voltage_source_i
                 voltage_source_i += 1
 
-                i_p = get_vertex_global_index_by_point(p.layer, p.point)
-                i_n = get_vertex_global_index_by_point(n.layer, n.point)
+                i_p = terminal_index[p]
+                i_n = terminal_index[n]
 
                 L[i_v, i_p] = 1
                 L[i_p, i_v] = 1
@@ -224,8 +251,8 @@ def solve(prob: problem.Problem) -> Solution:
 
                 r[i_v] = voltage
             case problem.CurrentSource(f=f, t=t, current=current):
-                i_f = get_vertex_global_index_by_point(f.layer, f.point)
-                i_t = get_vertex_global_index_by_point(t.layer, t.point)
+                i_f = terminal_index[f]
+                i_t = terminal_index[t]
 
                 r[i_f] = current / f.layer.conductance
                 r[i_t] = -current / t.layer.conductance
