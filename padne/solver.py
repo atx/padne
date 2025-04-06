@@ -225,8 +225,6 @@ def solve(prob: problem.Problem) -> Solution:
     # this is needed since we need to somehow map the vertex indices to the
     # matrix indices in the final system of equations
     store = IndexStore.create(meshes)
-    global_index_to_vertex_index = store.global_index_to_vertex_index
-    mesh_vertex_index_to_global_index = store.mesh_vertex_index_to_global_index
 
     voltage_source_count = sum(
         1 for elem in prob.lumpeds
@@ -241,7 +239,7 @@ def solve(prob: problem.Problem) -> Solution:
     # feel like as long as the solver can handle it, we can just leave everything
     # floating and let the UI figure out. This can possibly lead to some
     # numerical instability, so it needs more stress testing.
-    N = len(global_index_to_vertex_index) + voltage_source_count
+    N = len(store.global_index_to_vertex_index) + voltage_source_count
     L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
     r = np.zeros(N, dtype=np.float32)
 
@@ -252,8 +250,8 @@ def solve(prob: problem.Problem) -> Solution:
 
         # Glue them together into the global matrix
         for local_i, local_j in zip(*L_msh.nonzero()):
-            global_i = mesh_vertex_index_to_global_index[(mesh_idx, local_i)]
-            global_j = mesh_vertex_index_to_global_index[(mesh_idx, local_j)]
+            global_i = store.mesh_vertex_index_to_global_index[(mesh_idx, local_i)]
+            global_j = store.mesh_vertex_index_to_global_index[(mesh_idx, local_j)]
             L[global_i, global_j] = L_msh[local_i, local_j]
 
     # Create a mapping from terminals to the global index of the vertex they are connected to
@@ -263,7 +261,7 @@ def solve(prob: problem.Problem) -> Solution:
     process_lumped_elements(
         prob.lumpeds,
         terminal_index,
-        len(global_index_to_vertex_index),
+        len(store.global_index_to_vertex_index),
         L,
         r
     )
@@ -286,7 +284,7 @@ def solve(prob: problem.Problem) -> Solution:
             # Create a ZeroForm for this mesh's vertices
             vertex_values = mesh.ZeroForm(msh)  # Initialize ZeroForm with the mesh
             for vertex_idx, vertex in enumerate(msh.vertices):
-                global_index = mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
+                global_index = store.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
                 vertex_values[vertex] = v[global_index]  # Set values using indexing
             layer_values.append(vertex_values)
 
