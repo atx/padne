@@ -79,29 +79,14 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
             # Grab the vertex on the other side of the edge
             vertex_k = edge.twin.origin
             k = mesh.vertices.to_index(vertex_k)
-
-            if not edge.face.is_boundary and not edge.twin.face.is_boundary:
-                ratio = 0.
-                for ed in [edge.next.next, edge.twin.next.next]:
-                    vi = vertex_i.p - ed.origin.p
-                    vk = vertex_k.p - ed.origin.p
-                    # TODO: THIS IS ACTUALLY DOUBLE COUNTING SOMETHING AAAA
-                    # 1. compute manually the value for u_5 on the paper you have at your table
-                    # Then everything should be obvious
-                    # Be very careful
-                    ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
-            else:
-                # TODO: This boundary handling comes from my original code
-                # written in 2019. It is very likely wrong.
-                # Do considerable amount of thinking here to figure out
-                # the correct way to force the normal derivative to zero
-                # Questionable:
-                # Grab whichever edge is not the boundary one
-                # TODO: I suspect this can be merged with the above...
-                eop = edge.next.next if not edge.face.is_boundary else edge.twin.next.next
-                vi = vertex_i.p - eop.origin.p
-                vk = vertex_k.p - eop.origin.p
-                ratio = abs(vi.dot(vk) / (vi ^ vk)) / 2
+            ratio = 0.
+            for ed in [edge.next.next, edge.twin.next.next]:
+                if ed.next.face.is_boundary:
+                    # Do not include boundary edges
+                    continue
+                vi = vertex_i.p - ed.origin.p
+                vk = vertex_k.p - ed.origin.p
+                ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
             L[i, i] -= ratio
             # Note that we are iterating over everything, so the (k, i) pair gets
             # set in a different iteration
