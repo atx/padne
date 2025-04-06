@@ -96,19 +96,19 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
 
 
 @dataclass
-class IndexStore:
+class VertexIndexer:
     global_index_to_vertex_index: list[tuple[int, int]] = field(default_factory=list)
     mesh_vertex_index_to_global_index: dict[tuple[int, int], int] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, meshes: list[mesh.Mesh]) -> "IndexStore":
-        store = cls()
+    def create(cls, meshes: list[mesh.Mesh]) -> "VertexIndexer":
+        vindex = cls()
         for mesh_idx, msh in enumerate(meshes):
             for vertex_idx, msh in enumerate(msh.vertices):
-                global_index = len(store.global_index_to_vertex_index)
-                store.global_index_to_vertex_index.append((mesh_idx, vertex_idx))
-                store.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
-        return store
+                global_index = len(vindex.global_index_to_vertex_index)
+                vindex.global_index_to_vertex_index.append((mesh_idx, vertex_idx))
+                vindex.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
+        return vindex
 
 
 def generate_meshes_for_problem(prob: problem.Problem, mesher: mesh.Mesher) -> list[list[mesh.Mesh], list[int]]:
@@ -125,13 +125,13 @@ def generate_meshes_for_problem(prob: problem.Problem, mesher: mesh.Mesher) -> l
 def make_terminal_index(prob: problem.Problem,
                         meshes: list[mesh.Mesh],
                         mesh_index_to_layer_index: list[int],
-                        store: IndexStore) -> dict[problem.Terminal, int]:
+                        vindex: VertexIndexer) -> dict[problem.Terminal, int]:
     """
     Create a mapping from terminals to their global indices.
     
     Args:
         prob: The Problem object containing layers and lumped elements
-        store: The IndexStore object containing the global indices
+        vindex: The VertexIndexer object containing the global indices
         
     Returns:
         A dictionary mapping terminals to their global indices
@@ -143,7 +143,7 @@ def make_terminal_index(prob: problem.Problem,
     ]
     terminal_index: dict[problem.Terminal, int] = {}
     for terminal in terminals:
-        for i, (mesh_idx, vertex_idx) in enumerate(store.global_index_to_vertex_index):
+        for i, (mesh_idx, vertex_idx) in enumerate(vindex.global_index_to_vertex_index):
             if mesh_index_to_layer_index[mesh_idx] != prob.layers.index(terminal.layer):
                 continue
             dist = meshes[mesh_idx].vertices.to_object(vertex_idx).p.distance(terminal.point)
@@ -224,7 +224,7 @@ def solve(prob: problem.Problem) -> Solution:
     # In the next step, we assign a global index to each vertex in every mesh
     # this is needed since we need to somehow map the vertex indices to the
     # matrix indices in the final system of equations
-    store = IndexStore.create(meshes)
+    vindex = VertexIndexer.create(meshes)
 
     voltage_source_count = sum(
         1 for elem in prob.lumpeds
@@ -239,7 +239,7 @@ def solve(prob: problem.Problem) -> Solution:
     # feel like as long as the solver can handle it, we can just leave everything
     # floating and let the UI figure out. This can possibly lead to some
     # numerical instability, so it needs more stress testing.
-    N = len(store.global_index_to_vertex_index) + voltage_source_count
+    N = len(vindex.global_index_to_vertex_index) + voltage_source_count
     L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
     r = np.zeros(N, dtype=np.float32)
 
@@ -250,18 +250,18 @@ def solve(prob: problem.Problem) -> Solution:
 
         # Glue them together into the global matrix
         for local_i, local_j in zip(*L_msh.nonzero()):
-            global_i = store.mesh_vertex_index_to_global_index[(mesh_idx, local_i)]
-            global_j = store.mesh_vertex_index_to_global_index[(mesh_idx, local_j)]
+            global_i = vindex.mesh_vertex_index_to_global_index[(mesh_idx, local_i)]
+            global_j = vindex.mesh_vertex_index_to_global_index[(mesh_idx, local_j)]
             L[global_i, global_j] = L_msh[local_i, local_j]
 
     # Create a mapping from terminals to the global index of the vertex they are connected to
-    terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, store)
+    terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, vindex)
 
     # Now we need to process the lumped elements
     process_lumped_elements(
         prob.lumpeds,
         terminal_index,
-        len(store.global_index_to_vertex_index),
+        len(vindex.global_index_to_vertex_index),
         L,
         r
     )
@@ -284,7 +284,7 @@ def solve(prob: problem.Problem) -> Solution:
             # Create a ZeroForm for this mesh's vertices
             vertex_values = mesh.ZeroForm(msh)  # Initialize ZeroForm with the mesh
             for vertex_idx, vertex in enumerate(msh.vertices):
-                global_index = store.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
+                global_index = vindex.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
                 vertex_values[vertex] = v[global_index]  # Set values using indexing
             layer_values.append(vertex_values)
 

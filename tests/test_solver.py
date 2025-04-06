@@ -307,10 +307,10 @@ class TestLaplaceOperator:
                                    err_msg="Laplace operator matrix does not match expected values")
 
 
-class TestIndexStore:
+class TestVertexIndexer:
     def test_index_store_create(self):
         """
-        Test that IndexStore.create correctly maps vertices from multiple meshes to global indices.
+        Test that VertexIndexer.create correctly maps vertices from multiple meshes to global indices.
         """
         # Create two simple meshes
         # First mesh: triangle
@@ -332,8 +332,8 @@ class TestIndexStore:
         triangles_2 = [(0, 1, 2), (0, 2, 3)]
         mesh_2 = mesh.Mesh.from_triangle_soup(points_2, triangles_2)
         
-        # Create the IndexStore
-        index_store = solver.IndexStore.create([mesh_1, mesh_2])
+        # Create the VertexIndexer
+        index_store = solver.VertexIndexer.create([mesh_1, mesh_2])
         
         # Verify basic properties
         # Total number of vertices across both meshes
@@ -359,7 +359,7 @@ class TestIndexStore:
             assert index_store.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] == global_idx
             
             # Check we're referencing the correct mesh
-            # Note: this is technically not part of the IndexStore API, but
+            # Note: this is technically not part of the VertexIndexer API, but
             # it's a good sanity check. Can be removed if needed.
             if global_idx < len(mesh_1.vertices):
                 assert mesh_idx == 0
