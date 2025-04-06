@@ -201,6 +201,48 @@ def process_lumped_elements(lumpeds: list[problem.BaseLumped],
                 raise NotImplementedError("Voltage regulators are not yet supported")
 
 
+def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
+                                   vindex: VertexIndexer,
+                                   L: scipy.sparse.dok_matrix) -> None:
+    for i_mesh, msh in enumerate(meshes):
+        L_msh = laplace_operator(msh)
+
+        # Glue them together into the global matrix
+        for local_i, local_j in zip(*L_msh.nonzero()):
+            global_i = vindex.mesh_vertex_index_to_global_index[(i_mesh, local_i)]
+            global_j = vindex.mesh_vertex_index_to_global_index[(i_mesh, local_j)]
+            L[global_i, global_j] = L_msh[local_i, local_j]
+
+
+def produce_layer_solutions(layers: list[problem.Layer],
+                            vindex: VertexIndexer,
+                            meshes: list[mesh.Mesh],
+                            mesh_index_to_layer_index: list[int],
+                            v: np.array) -> list[LayerSolution]:
+    layer_solutions = []
+    for i_layer, layer in enumerate(layers):
+        layer_meshes = []
+        layer_values = []
+        for i_mesh, msh in enumerate(meshes):
+            if mesh_index_to_layer_index[i_mesh] != i_layer:
+                continue
+
+            # Initialize an empty ZeroForm on this Mesh
+            vertex_values = mesh.ZeroForm(msh)
+            # and fill it with values from the global value array (solution of the system)
+            for i_vertex, vertex in enumerate(msh.vertices):
+                global_index = vindex.mesh_vertex_index_to_global_index[(i_mesh, i_vertex)]
+                vertex_values[vertex] = v[global_index]
+
+            # Append to the layer values
+            layer_values.append(vertex_values)
+            layer_meshes.append(msh)
+
+        layer_solutions.append(LayerSolution(meshes=layer_meshes, values=layer_values))
+
+    return layer_solutions
+
+
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -243,16 +285,9 @@ def solve(prob: problem.Problem) -> Solution:
     L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
     r = np.zeros(N, dtype=np.float32)
 
-    # Now we compute the Laplace operator for each mesh
-    for mesh_idx, msh in enumerate(meshes):
-
-        L_msh = laplace_operator(msh)
-
-        # Glue them together into the global matrix
-        for local_i, local_j in zip(*L_msh.nonzero()):
-            global_i = vindex.mesh_vertex_index_to_global_index[(mesh_idx, local_i)]
-            global_j = vindex.mesh_vertex_index_to_global_index[(mesh_idx, local_j)]
-            L[global_i, global_j] = L_msh[local_i, local_j]
+    # Now we compute the Laplace operator for each mesh and insert it into the
+    # global L matrix
+    process_mesh_laplace_operators(meshes, vindex, L)
 
     # Create a mapping from terminals to the global index of the vertex they are connected to
     terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, vindex)
@@ -273,22 +308,13 @@ def solve(prob: problem.Problem) -> Solution:
     v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
 
     # Great, now just convert it back to a Solution
-    layer_solutions = []
-    for layer_i, layer in enumerate(prob.layers):
-        layer_meshes = []
-        layer_values = []
-        for mesh_idx, msh in enumerate(meshes):
-            if mesh_index_to_layer_index[mesh_idx] != layer_i:
-                continue
-            layer_meshes.append(msh)
-            # Create a ZeroForm for this mesh's vertices
-            vertex_values = mesh.ZeroForm(msh)  # Initialize ZeroForm with the mesh
-            for vertex_idx, vertex in enumerate(msh.vertices):
-                global_index = vindex.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)]
-                vertex_values[vertex] = v[global_index]  # Set values using indexing
-            layer_values.append(vertex_values)
-
-        layer_solutions.append(LayerSolution(meshes=layer_meshes, values=layer_values))
+    layer_solutions = produce_layer_solutions(
+        prob.layers,
+        vindex,
+        meshes,
+        mesh_index_to_layer_index,
+        v
+    )
 
     # Return the complete solution
     return Solution(problem=prob, layer_solutions=layer_solutions)
