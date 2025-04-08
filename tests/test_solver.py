@@ -453,3 +453,27 @@ class TestSolverEndToEnd:
         voltage_diff = abs(voltage_from - voltage_to)
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
             f"Voltage difference for {current_source} does not match expected value (diff={voltage_diff})"
+
+    def test_disconnected_component_gets_dropped(self, kicad_test_projects):
+        project = kicad_test_projects["floating_copper"]
+        
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+        
+        # Call the function under test
+        solution = solver.solve(prob)
+        
+        assert solution is not None
+        
+        # Verify this has a single layer (this project should only have F.Cu)
+        assert len(solution.layer_solutions) == 1
+        
+        layer_solution = solution.layer_solutions[0]
+        
+        # Verify it has only one mesh in the layer solution
+        # (one connected component with electrical elements, the other should be dropped)
+        assert len(layer_solution.meshes) == 2
+        
+        # Verify the mesh has vertices and values
+        assert len(layer_solution.meshes[0].vertices) > 0
+        assert len(layer_solution.values[0].values) > 0

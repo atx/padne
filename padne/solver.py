@@ -61,6 +61,11 @@ def mesh_layer(mesher: mesh.Mesher, problem: problem.Problem, layer: problem.Lay
         seed_points_in_subshape = [
             p for p in seed_points if subshape.intersects(shapely.geometry.Point(p.x, p.y))
         ]
+        if not seed_points_in_subshape:
+            # No seed points in this subshape, skip it
+            # TODO: Eventually, we are going to mesh it anyway and pass it
+            # forward to the UI, so that it can be displayed as a "not connected"
+            continue
         m = mesher.poly_to_mesh(subshape, seed_points_in_subshape)
         ret.append(m)
     return ret
