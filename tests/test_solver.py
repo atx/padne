@@ -403,7 +403,7 @@ class TestSolverEndToEnd:
                     # here, since the solver may decide to return np.float32 or something
                     assert np.isfinite(value[vertex])
 
-    @for_all_kicad_projects(exclude=["tht_component"])
+    @for_all_kicad_projects(exclude=["tht_component", "long_trace_current"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
@@ -432,3 +432,24 @@ class TestSolverEndToEnd:
                 # Verify the voltage difference matches the source voltage
                 assert voltage_p - voltage_n == pytest.approx(elem.voltage, abs=0.001), \
                     f"Voltage difference for {elem} does not match expected value."
+
+    def test_long_trace_current_source(self, kicad_test_projects):
+        project = kicad_test_projects["long_trace_current"]
+        # Load the problem and solve it
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob)
+        
+        # Find the current source
+        assert len(prob.lumpeds) == 1
+        current_source = prob.lumpeds[0]
+        
+        assert current_source is not None, "No current source found in the test project"
+        
+        # Get voltages at the terminals
+        voltage_from = find_vertex_value(solution, current_source.f)
+        voltage_to = find_vertex_value(solution, current_source.t)
+        
+        # Check voltage difference is approximately 0.24 mV
+        voltage_diff = abs(voltage_from - voltage_to)
+        assert voltage_diff == pytest.approx(0.24, abs=0.01), \
+            f"Voltage difference for {current_source} does not match expected value (diff={voltage_diff})"
