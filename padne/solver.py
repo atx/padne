@@ -155,8 +155,8 @@ def make_terminal_index(prob: problem.Problem,
             if dist > 1e-6:
                 continue
             # Found the terminal
-            if terminal in terminal_index:
-                raise ValueError("Duplicate terminal vertex found, this should not happen.")
+            if terminal in terminal_index and terminal_index[terminal] != i:
+                raise ValueError("Duplicate terminal vertices found, this should not happen.")
             terminal_index[terminal] = i
     return terminal_index
 
