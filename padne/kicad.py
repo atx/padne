@@ -9,6 +9,7 @@ import math
 import pathlib
 import pcbnew
 import pygerber.gerber.api
+import pygerber.vm
 import shapely
 import shapely.affinity
 import tempfile
@@ -520,6 +521,22 @@ def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
     return gerber_layers
 
 
+def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile) -> shapely.geometry.MultiPolygon:
+    # We have to call all of this manually, since we need to manually configure the
+    # amount of segments in our arcs
+    rvmc = gerber_data._get_rvmc()
+
+    def angle_length_to_segment_count(angle_length: float) -> int:
+        return int(abs(angle_length) * 0.4 + 10)
+
+    result = pygerber.vm.render(
+        rvmc,
+        backend="shapely",
+        angle_length_to_segment_count=angle_length_to_segment_count
+    )
+    return result.shape
+
+
 def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[PlottedGerberLayer]:
     """
     Extract geometry from Gerber files and create PlottedGerberLayer objects.
@@ -540,7 +557,7 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
         # Load gerber file and extract geometry
         gerber_data = pygerber.gerber.api.GerberFile.from_file(gerber_path)
         try:
-            geometry = gerber_data.render_with_shapely()._result.shape
+            geometry = render_with_shapely(gerber_data)
         except AssertionError:
             # This is a bug in pygerber, which gets triggered if the
             # gerber file is empty. We should fix this in pygerber ideally
