@@ -248,6 +248,38 @@ class TestViaSpecs:
                     break
         assert found, "No resistor found connecting F.Cu and B.Cu at (132, 100)"
 
+    def test_4layer_via_gets_converted_to_resistor_stack(self, kicad_test_projects):
+        project = kicad_test_projects["via_tht_4layer"]
+
+        # This project contains a via on x=118.8 y=105.9. Check that resistors
+        # connecting the layers F.Cu - In1.Cu - In2.Cu - B.Cu have been created
+        result = kicad.load_kicad_project(project.pro_path)
+        # The via should be at (118.8, 105.9) and connect F.Cu, In1.Cu, In2.Cu, B.Cu in sequence
+        expected_layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        expected_points = [(118.8, 105.9)] * 4
+
+        # Find all resistors at this location and on these layers
+        found_layers = set()
+        for lumped in result.lumpeds:
+            if isinstance(lumped, problem.Resistor):
+                a = lumped.a
+                b = lumped.b
+                # Check if both endpoints are at the via location
+                if (
+                    abs(a.point.x - 118.8) < 1e-3 and abs(a.point.y - 105.9) < 1e-3 and
+                    abs(b.point.x - 118.8) < 1e-3 and abs(b.point.y - 105.9) < 1e-3
+                ):
+                    # Record the pair of layers this resistor connects
+                    found_layers.add(tuple(sorted([a.layer.name, b.layer.name])))
+
+        # The expected resistor stack is between each adjacent pair of layers
+        expected_pairs = [
+            tuple(sorted([expected_layers[i], expected_layers[i+1]]))
+            for i in range(len(expected_layers)-1)
+        ]
+        for pair in expected_pairs:
+            assert pair in found_layers, f"Missing resistor between layers {pair} at (118.8, 105.9)"
+
 
 def test_extract_stackup(kicad_test_projects):
     """Test that the stackup is correctly extracted from a KiCad PCB file."""

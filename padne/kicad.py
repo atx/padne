@@ -661,23 +661,50 @@ def process_via_spec(via_spec: ViaSpec,
                      stackup: Stackup) -> list[problem.Resistor]:
     layer_names = via_spec.layer_names
 
-    if set(layer_names) != {"F.Cu", "B.Cu"}:
-        raise NotImplementedError(f"Multi-layer vias ({layer_names}) are not yet supported")
+    # In theory, they should already be in physical order, but we reorder
+    # them based on the Stackup just in case this ever changes
 
-    via_length = sum(si.thickness for si in stackup.items)
+    def stackup_index_by_name(name: str) -> int:
+        return next(
+            (i for i, item in enumerate(stackup.items) if item.name == name)
+        )
 
-    terminal_a = problem.Terminal(layer=layer_dict["F.Cu"], point=via_spec.point)
-    terminal_b = problem.Terminal(layer=layer_dict["B.Cu"], point=via_spec.point)
-
-    resistance = via_spec.compute_resistance(via_length)
-
-    via_resistor = problem.Resistor(
-        a=terminal_a,
-        b=terminal_b,
-        resistance=resistance
+    via_layers_in_order = sorted(
+        via_spec.layer_names,
+        key=stackup_index_by_name
     )
 
-    return [via_resistor]
+    resistor_stack = []
+
+    for i in range(len(via_layers_in_order) - 1):
+        layer_a_name = via_layers_in_order[i]
+        layer_b_name = via_layers_in_order[i + 1]
+        layer_a = layer_dict[layer_a_name]
+        layer_b = layer_dict[layer_b_name]
+
+        j_a = stackup_index_by_name(layer_a_name)
+        j_b = stackup_index_by_name(layer_b_name)
+
+        assert j_a < j_b, f"Layer {layer_a_name} should be before {layer_b_name} in the stackup"
+
+        segment_length = sum(
+            stackup.items[j].thickness
+            for j in range(j_a + 1, j_b + 1)
+        )
+
+        resistance = via_spec.compute_resistance(segment_length)
+
+        terminal_a = problem.Terminal(layer=layer_a, point=via_spec.point)
+        terminal_b = problem.Terminal(layer=layer_b, point=via_spec.point)
+        via_resistor = problem.Resistor(
+            a=terminal_a,
+            b=terminal_b,
+            resistance=resistance
+        )
+
+        resistor_stack.append(via_resistor)
+
+    return resistor_stack
 
 
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
