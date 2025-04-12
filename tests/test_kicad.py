@@ -175,7 +175,7 @@ class TestPadFinder:
 
 class TestViaSpecs:
 
-    def test_extract_tht_component_pad_specs(kicad_test_projects):
+    def test_extract_tht_component_pad_specs(self, kicad_test_projects):
         project = kicad_test_projects["tht_component"]
 
         board = pcbnew.LoadBoard(str(project.pcb_path))
@@ -187,7 +187,7 @@ class TestViaSpecs:
         pad = next((pad for pad in via_specs if pad.point.x == 139 and pad.point.y == 103.46), None)
         assert pad is not None, "Pad not found at expected location"
 
-    def test_extract_via_specs(kicad_test_projects):
+    def test_extract_via_specs(self, kicad_test_projects):
         """Test that via specifications are correctly extracted from a PCB."""
         # Get the simple_via project
         project = kicad_test_projects["simple_via"]
@@ -217,7 +217,7 @@ class TestViaSpecs:
         assert set(via_spec.layer_names) == set(expected_layers), \
             f"Expected layers {expected_layers}, got {via_spec.layer_names}"
 
-    def test_simple_via_gets_converted_to_a_resistor(kicad_test_projects):
+    def test_simple_via_gets_converted_to_a_resistor(self, kicad_test_projects):
         project = kicad_test_projects["simple_via"]
 
         # Check for a resistor connecting F.Cu and B.Cu at (132, 100)
