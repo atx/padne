@@ -173,48 +173,49 @@ class TestPadFinder:
         assert abs(point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
 
 
-def test_extract_tht_component_pad_specs(kicad_test_projects):
-    project = kicad_test_projects["tht_component"]
+class TestViaSpecs:
 
-    board = pcbnew.LoadBoard(str(project.pcb_path))
+    def test_extract_tht_component_pad_specs(kicad_test_projects):
+        project = kicad_test_projects["tht_component"]
 
-    via_specs = kicad.extract_tht_pad_specs_from_pcb(board)
-    assert len(via_specs) == 10
+        board = pcbnew.LoadBoard(str(project.pcb_path))
 
-    # Check that there is a pad located on x=139 y=103.46
-    pad = next((pad for pad in via_specs if pad.point.x == 139 and pad.point.y == 103.46), None)
-    assert pad is not None, "Pad not found at expected location"
+        via_specs = kicad.extract_tht_pad_specs_from_pcb(board)
+        assert len(via_specs) == 10
 
+        # Check that there is a pad located on x=139 y=103.46
+        pad = next((pad for pad in via_specs if pad.point.x == 139 and pad.point.y == 103.46), None)
+        assert pad is not None, "Pad not found at expected location"
 
-def test_extract_via_specs(kicad_test_projects):
-    """Test that via specifications are correctly extracted from a PCB."""
-    # Get the simple_via project
-    project = kicad_test_projects["simple_via"]
-    assert project.pcb_path.exists(), "PCB file of simple_via project does not exist"
-    
-    # Load the KiCad board
-    board = pcbnew.LoadBoard(str(project.pcb_path))
-    
-    # Extract via specifications
-    via_specs = kicad.extract_via_specs_from_pcb(board)
-    
-    # We expect exactly one via in the simple_via project
-    assert len(via_specs) == 1, f"Expected 1 via, got {len(via_specs)}"
-    
-    # Get the via specification
-    via_spec = via_specs[0]
-    
-    # Verify drill diameter (0.3mm)
-    assert abs(via_spec.drill_diameter - 0.3) < 1e-6, f"Expected drill diameter 0.3mm, got {via_spec.drill_diameter}mm"
-    
-    # Verify position (x=132, y=100)
-    assert abs(via_spec.point.x - 132) < 1e-3, f"Expected x=132, got {via_spec.point.x}"
-    assert abs(via_spec.point.y - 100) < 1e-3, f"Expected y=100, got {via_spec.point.y}"
-    
-    # Verify that the via connects F.Cu and B.Cu layers
-    expected_layers = ["F.Cu", "B.Cu"]
-    assert set(via_spec.layer_names) == set(expected_layers), \
-        f"Expected layers {expected_layers}, got {via_spec.layer_names}"
+    def test_extract_via_specs(kicad_test_projects):
+        """Test that via specifications are correctly extracted from a PCB."""
+        # Get the simple_via project
+        project = kicad_test_projects["simple_via"]
+        assert project.pcb_path.exists(), "PCB file of simple_via project does not exist"
+
+        # Load the KiCad board
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+
+        # Extract via specifications
+        via_specs = kicad.extract_via_specs_from_pcb(board)
+
+        # We expect exactly one via in the simple_via project
+        assert len(via_specs) == 1, f"Expected 1 via, got {len(via_specs)}"
+
+        # Get the via specification
+        via_spec = via_specs[0]
+
+        # Verify drill diameter (0.3mm)
+        assert abs(via_spec.drill_diameter - 0.3) < 1e-6, f"Expected drill diameter 0.3mm, got {via_spec.drill_diameter}mm"
+
+        # Verify position (x=132, y=100)
+        assert abs(via_spec.point.x - 132) < 1e-3, f"Expected x=132, got {via_spec.point.x}"
+        assert abs(via_spec.point.y - 100) < 1e-3, f"Expected y=100, got {via_spec.point.y}"
+
+        # Verify that the via connects F.Cu and B.Cu layers
+        expected_layers = ["F.Cu", "B.Cu"]
+        assert set(via_spec.layer_names) == set(expected_layers), \
+            f"Expected layers {expected_layers}, got {via_spec.layer_names}"
 
 
 def test_extract_stackup(kicad_test_projects):
