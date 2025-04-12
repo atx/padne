@@ -659,8 +659,6 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
 def process_via_spec(via_spec: ViaSpec,
                      layer_dict: dict[str, problem.Layer],
                      stackup: Stackup) -> list[problem.Resistor]:
-    layer_names = via_spec.layer_names
-
     # In theory, they should already be in physical order, but we reorder
     # them based on the Stackup just in case this ever changes
 
