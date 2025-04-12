@@ -61,8 +61,8 @@ class TestConnectivityGraph:
 
 
 class TestSolverMeshLayer:
-    def test_mesh_layer_simple_geometry(self, kicad_test_projects):
-        """Test that mesh_layer correctly meshes layers from the simple_geometry project."""
+    def test_generate_meshes_for_problem_simple_geometry(self, kicad_test_projects):
+        """Test that generate_meshes_for_problem correctly meshes layers from the simple_geometry project."""
         # Get the simple_geometry project
         project = kicad_test_projects["simple_geometry"]
         
@@ -72,34 +72,35 @@ class TestSolverMeshLayer:
         # Create a mesher with default settings
         mesher = mesh.Mesher()
         
-        # For each layer in the problem, test mesh_layer
-        for layer in prob.layers:
-            # Call the function under test
-            meshes = solver.mesh_layer(mesher, prob, layer)
+        # Call the function under test
+        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(prob, mesher)
+        
+        # Check that we got the expected result
+        assert isinstance(meshes, list), "generate_meshes_for_problem should return a list of meshes"
+        
+        # The simple_geometry project should have a specific number of separated copper regions
+        # Specifically, it has two meshes (one for each region)
+        assert len(meshes) == 2, f"Expected 2 meshes total, got {len(meshes)}"
+        
+        # Verify the mesh_index_to_layer_index mapping
+        assert len(mesh_index_to_layer_index) == len(meshes), "Each mesh should have a corresponding layer index"
+        
+        # Verify each mesh has the right properties
+        for m in meshes:
+            assert isinstance(m, mesh.Mesh), "Each item should be a Mesh instance"
+            assert len(m.vertices) > 0, "Mesh should have vertices"
+            assert len(m.faces) > 0, "Mesh should have faces"
             
-            # Check that we got the expected result
-            assert isinstance(meshes, list), "mesh_layer should return a list of meshes"
+            # Check mesh topology is valid
+            euler = m.euler_characteristic()
+            assert euler == 1, f"Euler characteristic should be 1 for a valid mesh, got {euler}"
             
-            # The simple_geometry project should have a specific number of separated copper regions
-            # Specifically, it has two meshes (one for each region)
-            assert len(meshes) == 2, f"Expected 2 meshes for layer {layer.name}, got {len(meshes)}"
-            
-            # Verify each mesh has the right properties
-            for m in meshes:
-                assert isinstance(m, mesh.Mesh), "Each item should be a Mesh instance"
-                assert len(m.vertices) > 0, "Mesh should have vertices"
-                assert len(m.faces) > 0, "Mesh should have faces"
-                
-                # Check mesh topology is valid
-                euler = m.euler_characteristic()
-                assert euler == 1, f"Euler characteristic should be 1 for a valid mesh, got {euler}"
-                
-                # Check that all faces have proper area
-                for face in m.faces:
-                    assert face.area > 0, "Each face should have positive area"
+            # Check that all faces have proper area
+            for face in m.faces:
+                assert face.area > 0, "Each face should have positive area"
     
-    def test_mesh_layer_with_seed_points(self, kicad_test_projects):
-        """Test that mesh_layer correctly handles seed points from lumped elements."""
+    def test_generate_meshes_with_seed_points(self, kicad_test_projects):
+        """Test that generate_meshes_for_problem correctly handles seed points from lumped elements."""
         # Get the simple_geometry project
         project = kicad_test_projects["simple_geometry"]
         
@@ -111,7 +112,6 @@ class TestSolverMeshLayer:
         
         # Test that collect_seed_points extracts the right points
         for layer in prob.layers:
-            # Call the function we're testing
             seed_points = solver.collect_seed_points(prob, layer)
             
             # Simple_geometry has 2 lumped elements with 4 terminals total
@@ -120,22 +120,30 @@ class TestSolverMeshLayer:
             # Each point should be a mesh.Point
             for point in seed_points:
                 assert isinstance(point, mesh.Point), "Seed point should be a mesh.Point instance"
-            
-            # Verify the meshes have vertices at or very near the seed points
-            meshes = solver.mesh_layer(mesher, prob, layer)
-            
-            # For each seed point, verify there's a vertex very close to it in one of the meshes
-            for seed_point in seed_points:
+        
+        # Call generate_meshes_for_problem
+        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(prob, mesher)
+        
+        # For each terminal in the problem, verify there's a vertex very close to its location
+        for lumped in prob.lumpeds:
+            for terminal in lumped.terminals:
+                layer_index = prob.layers.index(terminal.layer)
+                relevant_meshes = [meshes[i] for i, l_idx in enumerate(mesh_index_to_layer_index) if l_idx == layer_index]
+                
+                # Convert terminal point to mesh.Point for comparison
+                term_point = mesh.Point(terminal.point.x, terminal.point.y)
+                
+                # Check if any mesh has a vertex close to this terminal point
                 found = False
-                for m in meshes:
+                for m in relevant_meshes:
                     for vertex in m.vertices:
-                        if vertex.p.distance(seed_point) < 1e-6:  # Very small tolerance
+                        if vertex.p.distance(term_point) < 1e-6:  # Very small tolerance
                             found = True
                             break
                     if found:
                         break
                 
-                assert found, f"Seed point {seed_point} should be represented in the mesh"
+                assert found, f"Terminal point {term_point} should be represented in the mesh"
 
 
 class TestSyntheticProblems:

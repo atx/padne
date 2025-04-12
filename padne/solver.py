@@ -111,36 +111,6 @@ def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[
     return seed_points
 
 
-def mesh_layer(mesher: mesh.Mesher, problem: problem.Problem, layer: problem.Layer) -> list[mesh.Mesh]:
-    """
-    Generate meshes for a single layer.
-    
-    Args:
-        mesher: The mesh generator to use
-        problem: The entire problem containing all lumped elements
-        layer: The specific layer to mesh
-        
-    Returns:
-        List of Mesh objects, one for each connected region in the layer
-    """
-    seed_points = collect_seed_points(problem, layer)
-    ret = []
-
-    for subshape in layer.shape.geoms:
-        # Filter seed points to only those contained in this subshape
-        seed_points_in_subshape = [
-            p for p in seed_points if subshape.intersects(shapely.geometry.Point(p.x, p.y))
-        ]
-        if not seed_points_in_subshape:
-            # No seed points in this subshape, skip it
-            # TODO: Eventually, we are going to mesh it anyway and pass it
-            # forward to the UI, so that it can be displayed as a "not connected"
-            continue
-        m = mesher.poly_to_mesh(subshape, seed_points_in_subshape)
-        ret.append(m)
-    return ret
-
-
 def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
     """
     Compute the Laplace operator for a given mesh. This is in "mesh-local"
@@ -209,14 +179,48 @@ class VertexIndexer:
         return vindex
 
 
+def find_connected_layer_geom_indices(prob: problem.Problem) -> set[tuple[int, int]]:
+    connectivity_graph = ConnectivityGraph.create_from_problem(prob)
+    connected_nodes = connectivity_graph.compute_connected_nodes()
+
+    layer_mesh_pairs = set()
+    for node in connected_nodes:
+        layer_i = node.layer_i
+        geom_i = node.geom_i
+        layer_mesh_pairs.add((layer_i, geom_i))
+
+    return layer_mesh_pairs
+
+
 def generate_meshes_for_problem(prob: problem.Problem, mesher: mesh.Mesher) -> list[list[mesh.Mesh], list[int]]:
+    layer_mesh_pairs = find_connected_layer_geom_indices(prob)
+
     meshes: list[mesh.Mesh] = []
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
-        layer_meshes = mesh_layer(mesher, prob, layer)
-        meshes.extend(layer_meshes)
-        mesh_index_to_layer_index.extend([layer_i] * len(layer_meshes))
+        seed_points_in_layer = collect_seed_points(prob, layer)
+        for geom_i, geom in enumerate(layer.shape.geoms):
+            if (layer_i, geom_i) not in layer_mesh_pairs:
+                # This layer is not connected to any lumped elements, skip it
+                # for now. Eventually, we may want to just simply triangulate
+                # it and pass it to the UI for rendering
+                continue
+            # This layer is connected to at least one lumped element, so we need to mesh it
+            seed_points_in_geom = [
+                p for p in seed_points_in_layer
+                if layer.shape.geoms[geom_i].intersects(shapely.geometry.Point(p.x, p.y))
+            ]
+
+            assert seed_points_in_geom, "No seed points in this geometry, this should not happen"
+
+            m = mesher.poly_to_mesh(
+                layer.shape.geoms[geom_i],
+                seed_points_in_geom
+            )
+            meshes.append(m)
+            mesh_index_to_layer_index.append(layer_i)
+
     return meshes, mesh_index_to_layer_index
 
 
