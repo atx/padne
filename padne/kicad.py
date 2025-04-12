@@ -447,7 +447,7 @@ class PlottedGerberLayer:
     geometry: shapely.geometry.MultiPolygon
 
 
-def render_gerbers_from_kicad(pcb_file_path: pathlib.Path) -> list[PlottedGerberLayer]:
+def render_gerbers_from_kicad(board: pcbnew.BOARD) -> list[PlottedGerberLayer]:
     """
     Generate Gerber files from a KiCad PCB file and convert them to PlottedGerberLayer objects.
     
@@ -458,8 +458,6 @@ def render_gerbers_from_kicad(pcb_file_path: pathlib.Path) -> list[PlottedGerber
         List of PlottedGerberLayer objects containing layer geometries
     """
     with tempfile.TemporaryDirectory() as tmpdir:
-        board = pcbnew.LoadBoard(str(pcb_file_path))
-        
         # Plot gerbers and get paths to generated files
         gerber_layers = plot_board_to_gerbers(board, Path(tmpdir))
         
@@ -736,7 +734,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     board = pcbnew.LoadBoard(str(pcb_file_path))
     
     # Extract layer geometry from PCB file
-    plotted_layers = render_gerbers_from_kicad(pcb_file_path)
+    plotted_layers = render_gerbers_from_kicad(board)
     stackup = extract_stackup_from_kicad_pcb(board)
     # Verify that every plotted layer is contained within the stackup
     # Do note that the stackup can theoretically contain more copper layers
