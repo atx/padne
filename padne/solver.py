@@ -78,7 +78,11 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
     indices, so the variable indices are given by the mesh.vertices indices.
     """
     N = len(mesh.vertices)
-    L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
+
+    row_is = []
+    col_is = []
+    values = []
+    diagonal_entries = np.zeros(N, dtype=np.float32)
 
     for i, vertex_i in enumerate(mesh.vertices):
         for edge in vertex_i.orbit():
@@ -93,12 +97,31 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
                 vi = vertex_i.p - ed.origin.p
                 vk = vertex_k.p - ed.origin.p
                 ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
-            L[i, i] -= ratio
+
+            if ratio == 0:
+                # I do not think this happens all that often, except for maybe
+                # some degenerate cases
+                continue
+            
             # Note that we are iterating over everything, so the (k, i) pair gets
             # set in a different iteration
-            L[i, k] += ratio
+            # The below is equivalent to:
+            # L[i, i] -= ratio
+            # L[i, k] += ratio
+            row_is.append(i)
+            col_is.append(k)
+            values.append(ratio)
+            diagonal_entries[i] -= ratio
 
-    return L
+    # Insert the diagonal entries
+    for i, val in enumerate(diagonal_entries):
+        row_is.append(i)
+        col_is.append(i)
+        values.append(val)
+
+    L = scipy.sparse.coo_matrix((values, (row_is, col_is)), shape=(N, N), dtype=np.float32)
+
+    return L.tocsr()
 
 
 @dataclass
