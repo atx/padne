@@ -6,6 +6,7 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 import enum
 import math
+import logging
 import pathlib
 import pcbnew
 import pygerber.gerber.api
@@ -19,6 +20,9 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Iterator
 
 from . import problem
+
+
+log = logging.getLogger(__name__)
 
 # This file is responsible for loading KiCad files and converting them to our
 # internal representation. The idea is that we:
@@ -734,6 +738,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     board = pcbnew.LoadBoard(str(pcb_file_path))
     
     # Extract layer geometry from PCB file
+    log.info("Plotting layers to gerbers")
     plotted_layers = render_gerbers_from_kicad(board)
     stackup = extract_stackup_from_kicad_pcb(board)
     # Verify that every plotted layer is contained within the stackup
@@ -763,6 +768,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         layer_dict[plotted_layer.name] = layer
     
     # Convert LumpedSpec objects to Lumped objects
+    log.info("Creating lumped elements")
     lumpeds = []
     for spec in directives.lumpeds:
         # Find the physical locations of the pads
@@ -815,6 +821,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         lumpeds.append(lumped_element)
 
     # TODO: We need to do something similar but for through hole pads
+    log.info("Processing vias and through hole pads")
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
     for via_spec in via_specs:
         lumpeds.extend(process_via_spec(via_spec, layer_dict, stackup))

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import contextlib
+import logging
 import numpy as np
 import sys
 import OpenGL.GL as gl
@@ -887,7 +888,17 @@ class MainWindow(QMainWindow):
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         
         # Load and mesh the KiCad project
+        self._configureLogging()
         self.loadProject(kicad_pro_path)
+
+    def _configureLogging(self):
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=[
+                logging.StreamHandler()
+            ]
+        )
         
     def loadProject(self, kicad_pro_path):
         """Load a KiCad project and display the F.Cu layer."""
@@ -896,9 +907,8 @@ class MainWindow(QMainWindow):
         prob = kicad.load_kicad_project(Path(kicad_pro_path))
         
         # Solve the problem to get the values for visualization
-        print("Solving problem...")
         solution = solver.solve(prob)
-        
+
         self.mesh_viewer.setSolution(solution)
         
         # Connect the layer change signal to update the window title
