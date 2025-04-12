@@ -2,6 +2,7 @@
 
 import numpy as np
 import scipy.sparse
+import scipy.spatial
 import shapely.geometry
 
 from dataclasses import dataclass, field
@@ -143,21 +144,54 @@ def make_terminal_index(prob: problem.Problem,
     """
     # TODO: This function mildly cursed. We need to somehow consolidate
     # the arguments.
+
+    # First, construct 2D kdtree for the mesh vertices
+    layer_to_kdtree = {}
+    layer_global_index_and_vertex = {}
+    for layer_idx in range(len(prob.layers)):
+
+        layer_vertices = []
+        for i_mesh, msh in enumerate(meshes):
+
+            if mesh_index_to_layer_index[i_mesh] != layer_idx:
+                continue
+
+            for i_vertex, vertex in enumerate(msh.vertices):
+                global_index = vindex.mesh_vertex_index_to_global_index[(i_mesh, i_vertex)]
+                layer_vertices.append((global_index, vertex.p))
+
+        if not layer_vertices:
+            # No vertices in this layer, skip it
+            # In theory, there _could_ be a terminal that attempts to bind to
+            # an empty layer. This is going to crash weirdly after, but
+            # we are not going to handle it for now.
+            continue
+
+        layer_global_index_and_vertex[layer_idx] = layer_vertices
+        layer_to_kdtree[layer_idx] = scipy.spatial.KDTree(
+            [(p.x, p.y) for _, p in layer_vertices],
+            leafsize=32
+        )
+
     terminals = [
         t for lumped in prob.lumpeds for t in lumped.terminals
     ]
     terminal_index: dict[problem.Terminal, int] = {}
+
     for terminal in terminals:
-        for i, (mesh_idx, vertex_idx) in enumerate(vindex.global_index_to_vertex_index):
-            if mesh_index_to_layer_index[mesh_idx] != prob.layers.index(terminal.layer):
-                continue
-            dist = meshes[mesh_idx].vertices.to_object(vertex_idx).p.distance(terminal.point)
-            if dist > 1e-6:
-                continue
-            # Found the terminal
-            if terminal in terminal_index and terminal_index[terminal] != i:
-                raise ValueError("Duplicate terminal vertices found, this should not happen.")
-            terminal_index[terminal] = i
+        # Find the layer index for this terminal
+        layer_idx = prob.layers.index(terminal.layer)
+        kdtree = layer_to_kdtree[layer_idx]
+
+        # Find the closest vertex to this terminal
+        _, vertex_idx_in_kdtree = kdtree.query((terminal.point.x, terminal.point.y), k=1)
+        vertex_global_idx = layer_global_index_and_vertex[layer_idx][vertex_idx_in_kdtree][0]
+
+        # Check if this terminal is already in the index
+        if terminal in terminal_index and terminal_index[terminal] != vertex_global_idx:
+            raise ValueError("Duplicate terminal vertices found, this should not happen.")
+        terminal_index[terminal] = vertex_global_idx
+
     return terminal_index
 
 
