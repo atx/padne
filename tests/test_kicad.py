@@ -217,6 +217,37 @@ class TestViaSpecs:
         assert set(via_spec.layer_names) == set(expected_layers), \
             f"Expected layers {expected_layers}, got {via_spec.layer_names}"
 
+    def test_simple_via_gets_converted_to_a_resistor(kicad_test_projects):
+        project = kicad_test_projects["simple_via"]
+
+        # Check for a resistor connecting F.Cu and B.Cu at (132, 100)
+        result = kicad.load_kicad_project(project.pro_path)
+        found = False
+        for lumped in result.lumpeds:
+            if isinstance(lumped, problem.Resistor):
+                a = lumped.a
+                b = lumped.b
+                cond1 = (
+                    a.layer.name == "F.Cu" and
+                    b.layer.name == "B.Cu" and
+                    abs(a.point.x - 132) < 1e-3 and
+                    abs(a.point.y - 100) < 1e-3 and
+                    abs(b.point.x - 132) < 1e-3 and
+                    abs(b.point.y - 100) < 1e-3
+                )
+                cond2 = (
+                    b.layer.name == "F.Cu" and
+                    a.layer.name == "B.Cu" and
+                    abs(b.point.x - 132) < 1e-3 and
+                    abs(b.point.y - 100) < 1e-3 and
+                    abs(a.point.x - 132) < 1e-3 and
+                    abs(a.point.y - 100) < 1e-3
+                )
+                if cond1 or cond2:
+                    found = True
+                    break
+        assert found, "No resistor found connecting F.Cu and B.Cu at (132, 100)"
+
 
 def test_extract_stackup(kicad_test_projects):
     """Test that the stackup is correctly extracted from a KiCad PCB file."""
