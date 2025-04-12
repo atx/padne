@@ -258,12 +258,26 @@ class Mesh:
         # edges. We do this by iterating over all half-edges and checking if
         # they have a twin. Then we handle the boundary connectivity update
 
+        boundary_hedges = set()
+        vertex_to_boundary_hedge = {}
         for hedge in mesh.halfedges:
             if hedge.face is not None:
                 continue
-            # Okay, we have a boundary hedge. Now we need to effectively
-            # "walk around" the boundary. We assume that there is always
-            # at most one "outgoing" boundary edge per vertex
+            boundary_hedges.add(hedge)
+
+            if hedge.origin in vertex_to_boundary_hedge:
+                raise ValueError("Non-manifold mesh")
+
+            vertex_to_boundary_hedge[hedge.origin] = hedge
+
+        boundary_hedges = set(hedge for hedge in mesh.halfedges if hedge.face is None)
+        while boundary_hedges:
+            hedge = boundary_hedges.pop()
+
+            # Okay, we have an as of yet unprocessed boundary hedge. Now we
+            # need to effectively "walk aournd" the boundary. We assume that
+            # there is always at most one "outgoing" boundary edge per vertex
+
             face = Face(is_boundary=True)
             mesh.boundaries.add(face)
             face.edge = hedge
@@ -272,21 +286,14 @@ class Mesh:
             hedge_prev = hedge
             while True:
                 vertex_next = hedge_prev.twin.origin
-                # Now, we need to find the next boundary edge
-                hedge_next_list = [
-                    h for h in mesh.halfedges
-                    if h.origin == vertex_next and h.face is None
-                ]
-                if len(hedge_next_list) == 0:
+                hedge_next = vertex_to_boundary_hedge.get(vertex_next)
+                if hedge_next not in boundary_hedges:
                     # We have reached the end of the boundary
                     break
-                if len(hedge_next_list) > 1:
-                    raise ValueError("Non-manifold mesh")
 
-                hedge_next = hedge_next_list[0]
+                boundary_hedges.remove(hedge_next)
 
                 assert hedge_next.next is None  # Sanity check, should not happen since we checked earlier
-
                 HalfEdge.connect(hedge_prev, hedge_next)
                 hedge_next.face = face
                 hedge_prev = hedge_next
@@ -499,7 +506,7 @@ class Mesher:
             # There is a bug in the library that makes it crash when
             # an empty holes array is passed
             tri_input["holes"] = np.array(hole_points)
-        
+
         tri_output = tr.triangulate(tri_input, self._make_triangle_args())
 
         mesh = Mesh.from_triangle_soup(
