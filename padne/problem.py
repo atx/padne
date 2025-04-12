@@ -52,6 +52,13 @@ class BaseLumped(Protocol):
     def terminals(self) -> list[Terminal]:
         ...
 
+    @property
+    def is_source(self) -> bool:
+        """
+        Returns True if the lumped element is a source.
+        """
+        return False
+
 
 @dataclass(frozen=True)
 class Resistor(BaseLumped):
@@ -74,6 +81,10 @@ class VoltageSource(BaseLumped):
     def terminals(self) -> list[Terminal]:
         return [self.p, self.n]
 
+    @property
+    def is_source(self) -> bool:
+        return True
+
 
 @dataclass(frozen=True)
 class CurrentSource(BaseLumped):
@@ -84,6 +95,10 @@ class CurrentSource(BaseLumped):
     @property
     def terminals(self) -> list[Terminal]:
         return [self.f, self.t]
+
+    @property
+    def is_source(self) -> bool:
+        return True
 
 
 @dataclass(frozen=True)
@@ -101,6 +116,10 @@ class VoltageRegulator(BaseLumped):
     @property
     def terminals(self) -> list[Terminal]:
         return [self.v_p, self.v_n, self.i_f, self.i_t]
+
+    @property
+    def is_source(self):
+        return True
 
 
 @dataclass(frozen=True)

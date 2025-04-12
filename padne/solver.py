@@ -1,5 +1,7 @@
 
 
+import collections
+import itertools
 import numpy as np
 import scipy.sparse
 import scipy.spatial
@@ -20,6 +22,73 @@ class LayerSolution:
 class Solution:
     problem: problem.Problem
     layer_solutions: list[LayerSolution]
+
+
+@dataclass
+class ConnectivityGraph:
+    nodes: list["Node"] = field(default_factory=list)
+
+    @dataclass(eq=False)
+    class Node:
+        layer_i: int  # Index of the layer in the Problem
+        geom_i: int   # Index of this particular polygon in the layer.shape.geoms list
+        is_root: bool
+        neighbors: set["Node"] = field(default_factory=set)
+
+    @classmethod
+    def create_from_problem(cls, problem: problem.Problem) -> "ConnectivityGraph":
+        nodes = []
+        lumped_to_nodes: dict[problem.BaseLumped, list["Node"]] = \
+            collections.defaultdict(list)
+        # First, we construct the individual nodes and figure out what
+        # lumped elements are connected to them
+        # This is probably computationally reasonably okay,
+        # since a point in a polygon check is fast enough and we should not have
+        # that many polygons (say, tens of thousands at most hopefully)
+        for layer_i, layer in enumerate(problem.layers):
+            for geom_i, geom in enumerate(layer.shape.geoms):
+                # Create the node
+                is_root = False
+                connected_elements = []
+                for element in problem.lumpeds:
+                    intersects = any(
+                        geom.intersects(t.point)
+                        for t in element.terminals
+                    )
+                    if not intersects:
+                        continue
+                    is_root = is_root or element.is_source
+                    connected_elements.append(element)
+
+                node = cls.Node(layer_i=layer_i, geom_i=geom_i, is_root=is_root)
+                for element in connected_elements:
+                    lumped_to_nodes[element].append(node)
+                nodes.append(node)
+
+        # Now we need to connect the nodes together
+        for element, node_list in lumped_to_nodes.items():
+            for node_a, node_b in itertools.combinations(node_list, 2):
+                node_a.neighbors.add(node_b)
+                node_b.neighbors.add(node_a)
+
+        return cls(nodes=nodes)
+
+    def compute_connected_nodes(self) -> list[Node]:
+        """
+        Return a list of all nodes that are either root nodes themselves
+        or are connected to a root node via any connection.
+        """
+        open_set = set([n for n in self.nodes if n.is_root])
+        closed_set = set()
+
+        while open_set:
+            node = open_set.pop()
+            closed_set.add(node)
+            for neighbor in node.neighbors:
+                if neighbor not in closed_set:
+                    open_set.add(neighbor)
+
+        return list(closed_set)
 
 
 def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[mesh.Point]:

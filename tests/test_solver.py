@@ -33,6 +33,33 @@ def find_vertex_value(sol: solver.Solution, term: problem.Terminal) -> float:
     return found_value
 
 
+class TestConnectivityGraph:
+
+    def test_simple_geometry(self, kicad_test_projects):
+        # Grab the simple_geometry project, use it to construct a ConnectivityGraph
+        project = kicad_test_projects["simple_geometry"]
+        prob = kicad.load_kicad_project(project.pro_path)
+
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        assert len(cg.nodes) == 2
+        connected = cg.compute_connected_nodes()
+        assert len(connected) == 2
+
+    def test_complicated_case(self, kicad_test_projects):
+        project = kicad_test_projects["disconnected_components"]
+        prob = kicad.load_kicad_project(project.pro_path)
+
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        assert len(cg.nodes) == 11
+        connected = cg.compute_connected_nodes()
+        assert len(connected) == 5
+        # Check that there are 3 connected components on the F.Cu layer
+        # and 2 on the B.Cu layer
+        # Beware: This assumes the order of the layers is F.Cu, B.Cu
+        assert len([n for n in connected if n.layer_i == 0]) == 3
+        assert len([n for n in connected if n.layer_i == 1]) == 2
+
+
 class TestSolverMeshLayer:
     def test_mesh_layer_simple_geometry(self, kicad_test_projects):
         """Test that mesh_layer correctly meshes layers from the simple_geometry project."""
