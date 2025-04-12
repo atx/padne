@@ -656,6 +656,30 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
     raise ValueError(f"Component {designator} not found")
 
 
+def process_via_spec(via_spec: ViaSpec,
+                     layer_dict: dict[str, problem.Layer],
+                     stackup: Stackup) -> list[problem.Resistor]:
+    layer_names = via_spec.layer_names
+
+    if set(layer_names) != {"F.Cu", "B.Cu"}:
+        raise NotImplementedError(f"Multi-layer vias ({layer_names}) are not yet supported")
+
+    via_length = sum(si.thickness for si in stackup.items)
+
+    terminal_a = problem.Terminal(layer=layer_dict["F.Cu"], point=via_spec.point)
+    terminal_b = problem.Terminal(layer=layer_dict["B.Cu"], point=via_spec.point)
+
+    resistance = via_spec.compute_resistance(via_length)
+
+    via_resistor = problem.Resistor(
+        a=terminal_a,
+        b=terminal_b,
+        resistance=resistance
+    )
+
+    return [via_resistor]
+
+
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
@@ -770,30 +794,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # TODO: We need to do something similar but for through hole pads
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
     for via_spec in via_specs:
-        # Get the layer names for the via
-        # TODO: Also verify that the layer names in the via spec are in 
-        # "matching order" with the stackup info
-        layer_names = via_spec.layer_names
-        if set(layer_names) != {"F.Cu", "B.Cu"}:
-            raise NotImplementedError(f"Multi-layer vias ({layer_names}) are not yet supported")
-
-        via_length = sum(si.thickness for si in stackup.items)
-
-        # Create Terminal objects for the via connection points
-        terminal_a = problem.Terminal(layer=layer_dict["F.Cu"], point=via_spec.point)
-        terminal_b = problem.Terminal(layer=layer_dict["B.Cu"], point=via_spec.point)
-        
-        # Calculate resistance
-        resistance = via_spec.compute_resistance(via_length)
-
-        # Create Resistor object for the via
-        via_resistor = problem.Resistor(
-            a=terminal_a,
-            b=terminal_b,
-            resistance=resistance
-        )
-
-        lumpeds.append(via_resistor)
+        lumpeds.extend(process_via_spec(via_spec, layer_dict, stackup))
 
     # Get all layers as a list
     layers = list(layer_dict.values())
