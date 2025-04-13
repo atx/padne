@@ -163,7 +163,7 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
 
     L = scipy.sparse.coo_matrix((values, (row_is, col_is)), shape=(N, N), dtype=np.float32)
 
-    return L.tocsr()
+    return L
 
 
 @dataclass
@@ -346,10 +346,11 @@ def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
         L_msh = laplace_operator(msh)
 
         # Glue them together into the global matrix
-        for local_i, local_j in zip(*L_msh.nonzero()):
-            global_i = vindex.mesh_vertex_index_to_global_index[(i_mesh, local_i)]
-            global_j = vindex.mesh_vertex_index_to_global_index[(i_mesh, local_j)]
-            L[global_i, global_j] = L_msh[local_i, local_j]
+        for i, j, v in zip(L_msh.row, L_msh.col, L_msh.data):
+            global_i = vindex.mesh_vertex_index_to_global_index[(i_mesh, i)]
+            global_j = vindex.mesh_vertex_index_to_global_index[(i_mesh, j)]
+            # TODO: Is there any possibility that the COO matrix contains duplicates?
+            L[global_i, global_j] += v
 
 
 def produce_layer_solutions(layers: list[problem.Layer],
