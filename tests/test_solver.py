@@ -1,6 +1,7 @@
 import pytest
 import itertools
 import shapely.geometry
+import math
 import numpy as np
 
 from padne import solver, problem, mesh, kicad
@@ -240,6 +241,153 @@ class TestSyntheticProblems:
             assert actual_voltage == pytest.approx(expected_voltage, abs=0.05), \
                 f"Voltage at vertex {vertex.p} ({actual_voltage:.3f}) is not proportional to x ({expected_voltage:.3f})"
 
+    def test_coaxial_structure(self):
+        """
+        Test the solver against a coaxial (annular) structure with an analytical solution.
+        Inner boundary fixed at 1V relative to outer boundary at 0V.
+        """
+        # Parameters for the coaxial structure
+        inner_radius = 1.0
+        outer_radius = 9.0
+        segments_per_quadrant = 16  # Gives 32 segments for the full circle
+        
+        # Create the annular shape (ring) using shapely
+        inner_circle = shapely.geometry.Point(0, 0).buffer(inner_radius, resolution=segments_per_quadrant)
+        outer_circle = shapely.geometry.Point(0, 0).buffer(outer_radius, resolution=segments_per_quadrant)
+        annular_ring = outer_circle.difference(inner_circle)
+        
+        # Ensure we have a MultiPolygon as expected by the Layer constructor
+        if annular_ring.geom_type == "Polygon":
+            annular_ring = shapely.geometry.MultiPolygon([annular_ring])
+        
+        # Create layer for the annulus
+        layer = problem.Layer(
+            shape=annular_ring,
+            name="AnnulusLayer",
+            conductance=1.0
+        )
+        
+        # Extract boundary points directly from the polygon
+        polygon = annular_ring.geoms[0]  # Get the first (and only) polygon
+        outer_boundary_pts = list(polygon.exterior.coords)[:-1]  # Remove duplicate last point
+        inner_boundary_pts = list(polygon.interiors[0].coords)[:-1]  # First interior ring
+        
+        # Convert points to (angle, point) pairs for sorting
+        def to_angle_point_pair(point):
+            x, y = point
+            angle = math.atan2(y, x)
+            # Ensure angles range from 0 to 2π instead of -π to π
+            if angle < 0:
+                angle += 2 * math.pi
+            return (angle, point)
+        
+        # Sort inner and outer boundary points by angle
+        inner_pts_with_angles = sorted([to_angle_point_pair(pt) for pt in inner_boundary_pts])
+        outer_pts_with_angles = sorted([to_angle_point_pair(pt) for pt in outer_boundary_pts])
+        
+        # Create terminals and voltage sources
+        voltage_sources = []
+        outer_terminals = []
+        inner_terminals = []
+        
+        # Pair inner and outer points by their sorted order
+        for (_, inner_pt), (_, outer_pt) in zip(inner_pts_with_angles, outer_pts_with_angles):
+            inner_term = problem.Terminal(layer=layer,
+                                          point=shapely.geometry.Point(inner_pt))
+            outer_term = problem.Terminal(layer=layer,
+                                          point=shapely.geometry.Point(outer_pt))
+            
+            outer_terminals.append(outer_term)
+            inner_terminals.append(inner_term)
+
+        # Verify that the outer terminals are outer_distance away from the origin
+        for term in outer_terminals:
+            x, y = term.point.x, term.point.y
+            distance = math.sqrt(x**2 + y**2)
+            assert distance == pytest.approx(outer_radius, abs=0.001), \
+                f"Outer terminal {term} is not at the expected outer radius (distance={distance})"
+        # Verify that the inner terminals are inner_distance away from the origin
+        for term in inner_terminals:
+            x, y = term.point.x, term.point.y
+            distance = math.sqrt(x**2 + y**2)
+            assert distance == pytest.approx(inner_radius, abs=0.001), \
+                f"Inner terminal {term} is not at the expected inner radius (distance={distance})"
+
+        # Next, we go in circle around the boundary, forcing the voltage to be equal
+        # at the outer terminals.
+        for t_a, t_b in zip(outer_terminals, outer_terminals[1:] + [outer_terminals[0]]):
+            voltage_sources.append(
+                problem.VoltageSource(p=t_a, n=t_b, voltage=0.0)
+            )
+
+        # And do the same thing for the inner terminals
+        for t_a, t_b in zip(inner_terminals, inner_terminals[1:] + [inner_terminals[0]]):
+            voltage_sources.append(
+                problem.VoltageSource(p=t_a, n=t_b, voltage=0.0)
+            )
+
+        # And finally, connect the first inner terminal to the first outer terminal
+        voltage_sources.append(
+            problem.VoltageSource(p=inner_terminals[0], n=outer_terminals[0], voltage=1.0)
+        )
+
+        # Create the Problem and solve
+        prob_coaxial = problem.Problem(layers=[layer], lumpeds=voltage_sources)
+        solution = solver.solve(prob_coaxial)
+        
+        # Verify the solution
+        assert solution is not None
+        assert len(solution.layer_solutions) == 1
+        
+        # Analytical solution function for potential in a coaxial structure
+        def analytical_solution(x, y):
+            r = math.sqrt(x**2 + y**2)
+            # Calculate ideal potential with outer boundary at 0V and inner at 1V
+            ideal_potential = math.log(outer_radius / r) / math.log(outer_radius / inner_radius)
+            # Adjust by the reference potential offset
+            return ideal_potential
+
+        # This check checks that we have implemented the analytical solution correctly
+        assert analytical_solution(inner_radius, 0) == 1.0
+        assert analytical_solution(outer_radius, 0) == 0.0
+        
+        # Compare numerical solution with analytical solution
+        layer_solution = solution.layer_solutions[0]
+        
+        # Check voltages at outer terminals - should all be approximately the same
+        outer_potentials = [find_vertex_value(solution, term) for term in outer_terminals]
+        reference_potential = outer_potentials[0]
+        for pot in outer_potentials:
+            assert pot == pytest.approx(reference_potential, abs=0.001), \
+                f"Outer boundary potential inconsistency: {pot} vs reference {reference_potential}"
+        # Check voltages at inner boundary - should be approximately 1V higher than reference
+        inner_potentials = [find_vertex_value(solution, term) for term in inner_terminals]
+        for pot in inner_potentials:
+            assert pot == pytest.approx(reference_potential + 1.0, abs=0.001), \
+                f"Inner boundary potential inconsistency: {pot} vs reference {reference_potential + 1.0}"
+        
+        # TODO: I suspect that there is systematic bias here somewhere. In reality,
+        # we should be getting better than 0.03V accuracy, but I don't know why we are not.
+        # It seems that shifting the outer_radius and inner_radius in the
+        # analytical_solution function definition does help and allow us to match the actual result exactly
+        
+        for mesh_idx, (msh, values) in enumerate(zip(layer_solution.meshes, layer_solution.values)):
+            for vertex in msh.vertices:
+                numerical_value = values[vertex] - reference_potential
+                x, y = vertex.p.x, vertex.p.y
+                r = math.sqrt(x**2 + y**2)
+                
+                # Skip vertices very close to boundaries where numerical errors might be larger
+                boundary_margin = 1.0
+                if r > outer_radius - boundary_margin or r < inner_radius + boundary_margin:
+                    continue
+                    
+                analytical_value = analytical_solution(x, y)
+                # Check each point against analytical solution with reasonable tolerance
+                assert numerical_value == pytest.approx(analytical_value, abs=0.03), \
+                    f"Error too large at point ({x:.2f}, {y:.2f}), r={r:.2f}: " \
+                    f"numerical={numerical_value:.4f}, analytical={analytical_value:.4f}"
+        
 
 class TestLaplaceOperator:
 
