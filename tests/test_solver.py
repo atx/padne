@@ -637,6 +637,87 @@ class TestSolverEndToEnd:
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
             f"Voltage difference for {current_source} does not match expected value (diff={voltage_diff})"
 
+    def test_complicated_trace_current_source(self, kicad_test_projects):
+        project = kicad_test_projects["complicated_trace_current"]
+
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob)
+
+        # This trace is composed from multiple segments with varying widths
+        # Width at each 10mm point (21 points from 0mm to 200mm inclusive)
+        widths = [
+            0.2, 0.2,
+            6.0, 6.0, 6.0,
+            0.2, 0.2, 0.2, 0.2,
+            2.0, 2.0, 2.0,
+            4.0, 4.0,
+            0.2, 0.2,
+            1.0, 2.0, 1.0, 0.2, 0.2
+        ]
+        assert len(widths) == 21, "Width array should have 21 elements"
+        
+        # Find the current source
+        assert len(prob.lumpeds) == 1, "Expected exactly one lumped element"
+        current_source = prob.lumpeds[0]
+        
+        # Get voltages at the terminals
+        voltage_from = find_vertex_value(solution, current_source.f)
+        voltage_to = find_vertex_value(solution, current_source.t)
+        
+        # Calculate voltage difference between terminals
+        voltage_diff = voltage_to - voltage_from
+
+        def tapered_segment_resistance(w_start, w_end, length):
+            """Calculate resistance of a tapered trace segment."""
+            resistance = 1.0 / prob.layers[0].conductance  # Base resistance (ohms)
+
+            if w_start == w_end:
+                # Straight segment
+                return resistance * length / w_start
+            else:
+                # Tapered segment
+                w_avg = (w_end - w_start) / math.log(w_end / w_start)
+                return resistance * length / w_avg
+
+        def expected_voltage_at_position(position_mm):
+            """Calculate expected voltage at a given position along the trace."""
+            at_position = 0.0
+            total_resistance = 0.0
+            segment_length = 10.0
+
+            while (remaining_length := position_mm - at_position) > 0.0:
+                # Get current segment index
+                i_segment = int(at_position / segment_length)
+                w_start = widths[i_segment]
+                w_end_full = widths[i_segment + 1]
+
+                # Handle partial segments
+                if remaining_length >= segment_length:
+                    this_segment_length = segment_length
+                    w_end = w_end_full
+                else:
+                    this_segment_length = remaining_length
+                    # Linearly interpolate width for partial segment
+                    w_end = w_start + (w_end_full - w_start) * (remaining_length / segment_length)
+
+                # Add this segment's resistance
+                segment_resistance = tapered_segment_resistance(w_start, w_end, this_segment_length)
+                total_resistance += segment_resistance
+                at_position += this_segment_length
+
+            # Calculate voltage drop based on resistance and current
+            return current_source.current * total_resistance
+
+        # Calculate expected voltage drop across the entire trace
+        total_expected_voltage = expected_voltage_at_position(200)
+        
+        # Compare simulated vs analytical results for overall drop
+        assert voltage_diff == pytest.approx(total_expected_voltage, rel=0.1), \
+            f"Voltage drop mismatch: simulated={voltage_diff:.3f}V, analytical={total_expected_voltage:.3f}V"
+
+        # TODO: Also add a test for individual trace segments. This seems to not work
+        # that well though...
+        
     def test_disconnected_component_gets_dropped(self, kicad_test_projects):
         project = kicad_test_projects["floating_copper"]
         
