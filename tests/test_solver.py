@@ -717,6 +717,90 @@ class TestSolverEndToEnd:
 
         # TODO: Also add a test for individual trace segments. This seems to not work
         # that well though...
+
+    def test_superposition_principle(self, kicad_test_projects):
+        """Test that superposition principle holds for a circuit with voltage and current sources."""
+        # Get the project with combined voltage and current sources
+        project = kicad_test_projects["voltage_source_into_current_sink"]
+        
+        # Load the original problem with both sources
+        full_problem = kicad.load_kicad_project(project.pro_path)
+        
+        # Identify the voltage source and current source
+        voltage_sources = [elem for elem in full_problem.lumpeds if isinstance(elem, problem.VoltageSource)]
+        current_sources = [elem for elem in full_problem.lumpeds if isinstance(elem, problem.CurrentSource)]
+        other_elements = [elem for elem in full_problem.lumpeds 
+                          if not isinstance(elem, (problem.VoltageSource, problem.CurrentSource))]
+        
+        assert len(voltage_sources) == 1, "Expected exactly one voltage source"
+        assert len(current_sources) == 1, "Expected exactly one current source"
+        
+        voltage_source = voltage_sources[0]
+        current_source = current_sources[0]
+        
+        # Solve the full problem with both sources active
+        full_solution = solver.solve(full_problem)
+        
+        # Create a problem with only the voltage source active (current source set to 0A)
+        voltage_only_source = problem.VoltageSource(
+            p=voltage_source.p,
+            n=voltage_source.n,
+            voltage=voltage_source.voltage
+        )
+        current_only_inactive = problem.CurrentSource(
+            f=current_source.f,
+            t=current_source.t,
+            current=0.0  # Set to zero but keep in circuit
+        )
+        
+        voltage_only_problem = problem.Problem(
+            layers=full_problem.layers,
+            lumpeds=[voltage_only_source, current_only_inactive] + other_elements
+        )
+        voltage_only_solution = solver.solve(voltage_only_problem)
+        
+        # Create a problem with only the current source active (voltage source set to 0V)
+        voltage_only_inactive = problem.VoltageSource(
+            p=voltage_source.p,
+            n=voltage_source.n,
+            voltage=0.0  # Set to zero but keep in circuit
+        )
+        current_only_source = problem.CurrentSource(
+            f=current_source.f,
+            t=current_source.t,
+            current=current_source.current
+        )
+        
+        current_only_problem = problem.Problem(
+            layers=full_problem.layers,
+            lumpeds=[voltage_only_inactive, current_only_source] + other_elements
+        )
+        current_only_solution = solver.solve(current_only_problem)
+        
+        # Choose test points - the terminals of both sources are good candidates
+        test_terminals = [
+            voltage_source.p, voltage_source.n,
+            current_source.f, current_source.t
+        ]
+        
+        # Compare solutions at each test point
+        for terminal in test_terminals:
+            v_full = find_vertex_value(full_solution, terminal)
+            v_voltage = find_vertex_value(voltage_only_solution, terminal)
+            v_current = find_vertex_value(current_only_solution, terminal)
+            
+            # Verify superposition (with tolerance appropriate for floating-point)
+            v_superposition = v_voltage + v_current
+            assert v_full == pytest.approx(v_superposition, abs=1e-3), \
+                f"Superposition failed at terminal {terminal}: " \
+                f"full={v_full:.6f}, voltage={v_voltage:.6f}, " \
+                f"current={v_current:.6f}, sum={v_superposition:.6f}"
+        
+        # Verify specific expected voltage values
+        v_source_p = find_vertex_value(full_solution, voltage_source.p)
+        v_source_n = find_vertex_value(full_solution, voltage_source.n)
+        assert v_source_p - v_source_n == pytest.approx(voltage_source.voltage, abs=1e-4), \
+            "Voltage source constraint not satisfied"
         
     def test_disconnected_component_gets_dropped(self, kicad_test_projects):
         project = kicad_test_projects["floating_copper"]
