@@ -305,14 +305,15 @@ def process_lumped_elements(lumpeds: list[problem.BaseLumped],
         match elem:
             case problem.Resistor(a=a, b=b, resistance=resistance):
                 # TODO: What if the conductances of the layers differ?
-                val = 1 / resistance / a.layer.conductance
+                val_a = 1 / resistance / a.layer.conductance
+                val_b = 1 / resistance / b.layer.conductance
                 i_a = terminal_index[a]
                 i_b = terminal_index[b]
 
-                L[i_a, i_a] -= val
-                L[i_b, i_b] -= val
-                L[i_a, i_b] += val
-                L[i_b, i_a] += val
+                L[i_a, i_a] -= val_a
+                L[i_b, i_b] -= val_b
+                L[i_a, i_b] += val_b
+                L[i_b, i_a] += val_a
             case problem.VoltageSource(p=p, n=n, voltage=voltage):
                 i_v = voltage_source_i
                 voltage_source_i += 1
