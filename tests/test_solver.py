@@ -73,8 +73,13 @@ class TestSolverMeshLayer:
         # Create a mesher with default settings
         mesher = mesh.Mesher()
         
-        # Call the function under test
-        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(prob, mesher)
+        # Create connectivity graph and find connected layer-mesh pairs
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
+        
+        # Call the function under test with the required argument
+        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
+            prob, mesher, connected_layer_mesh_pairs)
         
         # Check that we got the expected result
         assert isinstance(meshes, list), "generate_meshes_for_problem should return a list of meshes"
@@ -111,6 +116,10 @@ class TestSolverMeshLayer:
         # Create a mesher with default settings
         mesher = mesh.Mesher()
         
+        # Create connectivity graph and find connected layer-mesh pairs
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
+        
         # Test that collect_seed_points extracts the right points
         for layer in prob.layers:
             seed_points = solver.collect_seed_points(prob, layer)
@@ -122,8 +131,9 @@ class TestSolverMeshLayer:
             for point in seed_points:
                 assert isinstance(point, mesh.Point), "Seed point should be a mesh.Point instance"
         
-        # Call generate_meshes_for_problem
-        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(prob, mesher)
+        # Call generate_meshes_for_problem with the required argument
+        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
+            prob, mesher, connected_layer_mesh_pairs)
         
         # For each terminal in the problem, verify there's a vertex very close to its location
         for lumped in prob.lumpeds:
@@ -825,3 +835,64 @@ class TestSolverEndToEnd:
         # Verify the mesh has vertices and values
         assert len(layer_solution.meshes[0].vertices) > 0
         assert len(layer_solution.values[0].values) > 0
+
+    def test_unconnected_via_mesh_isolation(self, kicad_test_projects):
+        """
+        Test that meshes remain properly isolated and maintain correct voltage despite unconnected vias.
+        This test will FAIL with the current implementation and PASS after the fix is applied.
+        """
+        # Get the unconnected_via project
+        project = kicad_test_projects["unconnected_via"]
+        
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+        
+        # Solve the problem
+        solution = solver.solve(prob)
+        
+        # Find the voltage source (should be the only source)
+        voltage_source = next(
+            (elem for elem in prob.lumpeds if isinstance(elem, problem.VoltageSource)),
+            None
+        )
+        assert voltage_source is not None, "No voltage source found in the unconnected_via project"
+        
+        # Get reference voltages at the source terminals
+        pos_voltage = find_vertex_value(solution, voltage_source.p)
+        neg_voltage = find_vertex_value(solution, voltage_source.n)
+        expected_diff = voltage_source.voltage  # Should be 1.0V
+        
+        # Get the layer and mesh containing the positive terminal
+        pos_layer_idx = prob.layers.index(voltage_source.p.layer)
+        pos_layer_sol = solution.layer_solutions[pos_layer_idx]
+        
+        # Find the mesh containing the positive terminal
+        pos_mesh_idx = None
+        pos_term_point = mesh.Point(voltage_source.p.point.x, voltage_source.p.point.y)
+        
+        for i, msh in enumerate(pos_layer_sol.meshes):
+            for vertex in msh.vertices:
+                if vertex.p.distance(pos_term_point) < 1e-4:
+                    pos_mesh_idx = i
+                    break
+            if pos_mesh_idx is not None:
+                break
+        
+        assert pos_mesh_idx is not None, "Could not find mesh containing positive terminal"
+        
+        # Check that ALL vertices in the positive mesh have consistent voltage
+        pos_mesh = pos_layer_sol.meshes[pos_mesh_idx]
+        pos_values = pos_layer_sol.values[pos_mesh_idx]
+        
+        # With the bug: some vertices might have incorrect voltage due to via shorting
+        # After fix: all vertices should have same voltage as positive terminal
+        for vertex in pos_mesh.vertices:
+            vertex_voltage = pos_values[vertex]
+            # Verify voltage relative to negative terminal
+            voltage_diff = vertex_voltage - neg_voltage
+            
+            # This assertion will fail if any vertex in the positive mesh
+            # has been improperly connected through a "dead" via
+            assert voltage_diff == pytest.approx(expected_diff, abs=0.01), \
+                f"Vertex at ({vertex.p.x:.2f}, {vertex.p.y:.2f}) has incorrect voltage: " \
+                f"{voltage_diff:.3f}V vs expected {expected_diff:.1f}V"

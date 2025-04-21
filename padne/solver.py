@@ -182,8 +182,7 @@ class VertexIndexer:
         return vindex
 
 
-def find_connected_layer_geom_indices(prob: problem.Problem) -> set[tuple[int, int]]:
-    connectivity_graph = ConnectivityGraph.create_from_problem(prob)
+def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph) -> set[tuple[int, int]]:
     connected_nodes = connectivity_graph.compute_connected_nodes()
 
     layer_mesh_pairs = set()
@@ -195,16 +194,16 @@ def find_connected_layer_geom_indices(prob: problem.Problem) -> set[tuple[int, i
     return layer_mesh_pairs
 
 
-def generate_meshes_for_problem(prob: problem.Problem, mesher: mesh.Mesher) -> list[list[mesh.Mesh], list[int]]:
-    layer_mesh_pairs = find_connected_layer_geom_indices(prob)
-
+def generate_meshes_for_problem(prob: problem.Problem,
+                                mesher: mesh.Mesher,
+                                connected_layer_mesh_pairs: set[tuple[int, int]]) -> list[list[mesh.Mesh], list[int]]:
     meshes: list[mesh.Mesh] = []
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
         seed_points_in_layer = collect_seed_points(prob, layer)
         for geom_i, geom in enumerate(layer.shape.geoms):
-            if (layer_i, geom_i) not in layer_mesh_pairs:
+            if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                 # This layer is not connected to any lumped elements, skip it
                 # for now. Eventually, we may want to just simply triangulate
                 # it and pass it to the UI for rendering
@@ -382,6 +381,29 @@ def produce_layer_solutions(layers: list[problem.Layer],
     return layer_solutions
 
 
+def filter_lumped_elements_in_dead_regions(prob: problem.Problem,
+                                           connected_layer_mesh_pairs: set[tuple[int, int]]) -> list[problem.BaseLumped]:
+
+    filtered_lumpeds = []
+    for lumped in prob.lumpeds:
+        has_a_dead_terminal = False
+
+        for terminal in lumped.terminals:
+            layer_idx = prob.layers.index(terminal.layer)
+            for geom_i, geom in enumerate(terminal.layer.shape.geoms):
+                if not geom.intersects(terminal.point):
+                    continue
+
+                if (layer_idx, geom_i) not in connected_layer_mesh_pairs:
+                    has_a_dead_terminal = True
+                    break
+
+        if not has_a_dead_terminal:
+            filtered_lumpeds.append(lumped)
+
+    return filtered_lumpeds
+
+
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -402,7 +424,10 @@ def solve(prob: problem.Problem) -> Solution:
     # We also keep track of which layer each mesh belongs to.
     # This will be needed later when we construct the final solution object.
     log.info("Meshing...")
-    meshes, mesh_index_to_layer_index = generate_meshes_for_problem(prob, mesher)
+    connectivity_graph = ConnectivityGraph.create_from_problem(prob)
+    connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
+    meshes, mesh_index_to_layer_index = \
+        generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs)
 
     # In the next step, we assign a global index to each vertex in every mesh.
     # This is needed since we need to somehow map the vertex indices to the
@@ -415,6 +440,13 @@ def solve(prob: problem.Problem) -> Solution:
     # in order to improve clarity.
     terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, vindex)
 
+    # Now we need to filter out the lumped elements that are not connected to any
+    # of the meshes that we are driving with a source.
+    filtered_lumpeds = filter_lumped_elements_in_dead_regions(
+        prob, connected_layer_mesh_pairs
+    )
+    log.info(f"Filtered lumped elements: {len(filtered_lumpeds)}/{len(prob.lumpeds)}")
+
     # Next, we need to create the matrix of the system of equations and its right hand side.
     
     # Since we are using modified nodal analysis, every voltage source yields
@@ -422,7 +454,7 @@ def solve(prob: problem.Problem) -> Solution:
     # extra dimension is a _voltage_ on the right hand side and a _current_ in the
     # unknowns space (flipped from the other variables).
     voltage_source_count = sum(
-        1 for elem in prob.lumpeds
+        1 for elem in filtered_lumpeds
         if isinstance(elem, problem.VoltageSource)
     )
 
@@ -447,7 +479,7 @@ def solve(prob: problem.Problem) -> Solution:
     # and the right hand side
     log.info("Processing lumped elements")
     process_lumped_elements(
-        prob.lumpeds,
+        filtered_lumpeds,
         terminal_index,
         len(vindex.global_index_to_vertex_index),
         L,
