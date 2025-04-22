@@ -118,7 +118,7 @@
 		)
 		(uuid "1ae73b55-5c66-4798-a534-6c71d550cda3")
 	)
-	(text "!padne VOLTAGE 1.0V TP2.1 TP1.1"
+	(text "!padne VOLTAGE v=1.0V p=TP2.1 n=TP1.1"
 		(exclude_from_sim no)
 		(at 102.616 83.058 0)
 		(effects

@@ -511,7 +511,7 @@
 		)
 		(uuid "ee36e3d7-6ee9-4710-bfd2-b98b4e96a437")
 	)
-	(text "!padne RESISTANCE 0.1 R2.1 R2.2"
+	(text "!padne RESISTANCE r=0.1 a=R2.1 b=R2.2"
 		(exclude_from_sim no)
 		(at 67.564 119.888 0)
 		(effects
@@ -521,7 +521,7 @@
 		)
 		(uuid "3f385e04-cb0a-4bfd-95eb-94357151e54b")
 	)
-	(text "!padne RESISTANCE 0.1 R3.1 R3.2"
+	(text "!padne RESISTANCE r=0.1 a=R3.1 b=R3.2"
 		(exclude_from_sim no)
 		(at 67.818 122.174 0)
 		(effects
@@ -531,7 +531,7 @@
 		)
 		(uuid "5bf40a03-0755-4c27-a4b0-42213c04e8bc")
 	)
-	(text "!padne RESISTANCE 0.1 R1.1 R1.2"
+	(text "!padne RESISTANCE r=0.1 a=R1.1 b=R1.2"
 		(exclude_from_sim no)
 		(at 67.564 117.602 0)
 		(effects
@@ -541,7 +541,7 @@
 		)
 		(uuid "b475c0f4-e8fe-4122-9ce2-3c91acf51389")
 	)
-	(text "!padne VOLTAGE 1.0V J1.1 J1.2"
+	(text "!padne VOLTAGE v=1.0V p=J1.1 n=J1.2"
 		(exclude_from_sim no)
 		(at 65.786 114.554 0)
 		(effects

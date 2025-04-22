@@ -118,7 +118,7 @@
 		)
 		(uuid "8a5ccbbb-9c9f-421c-b52a-458d30813606")
 	)
-	(text "!padne CURRENT 10.0A TP1.1 TP2.1"
+	(text "!padne CURRENT i=10.0A f=TP1.1 t=TP2.1"
 		(exclude_from_sim no)
 		(at 79.756 107.188 0)
 		(effects

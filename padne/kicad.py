@@ -157,6 +157,62 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
 
 
 @dataclass(frozen=True)
+class Directive:
+    """
+    Represents a single directive in the schematic.
+    """
+    name: str
+    params: dict[str, str]
+
+    @classmethod
+    def parse(cls, directive: str) -> 'Directive':
+        """
+        Parse a directive string with key-value pairs into a Directive object.
+        
+        Format: !padne DIRECTIVE_NAME key1=value1 key2=value2 ...
+        
+        Args:
+            directive: The directive string to parse
+            
+        Returns:
+            A Directive object with the parsed name and parameters
+            
+        Raises:
+            ValueError: If the directive format is invalid
+        """
+        tokens = directive.split()
+        
+        # Check prefix
+        if not tokens or tokens[0] != "!padne":
+            raise ValueError("Directive must start with '!padne'")
+        
+        # Check directive name
+        if len(tokens) < 2:
+            raise ValueError("Directive must have a name")
+        
+        name = tokens[1]
+        params = {}
+        
+        # Parse key-value pairs
+        for param in tokens[2:]:
+            if '=' not in param:
+                raise ValueError(f"Invalid parameter format: {param}")
+            
+            key, value = param.split('=', 1)
+            
+            if not key:
+                raise ValueError("Empty parameter key")
+            
+            # Handle quoted values
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            
+            params[key] = value
+        
+        return cls(name=name, params=params)
+
+
+@dataclass(frozen=True)
 class LumpedSpec:
     """
     This is what comes out of the eeschema parser (which does not yet exist)
@@ -301,40 +357,46 @@ def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
 
 
 @dataclass(frozen=True)
-class ParsedDirective:
-    key: str
-    params: list[str]
-
-    @classmethod
-    def from_string(cls, directive: str) -> 'ParsedDirective':
-        tokens = directive.split()
-        if len(tokens) < 2:
-            raise ValueError(f"Directive must have at least 1 token: {directive}")
-        if tokens[0] != "!padne":
-            raise ValueError(f"Directive must start with '!padne': {directive}")
-        return cls(key=tokens[1], params=tokens[2:])
-
-
-@dataclass(frozen=True)
 class Directives:
     # Surface resistivity
     # TODO: Add default value for 1oz copper
     lumpeds: list[LumpedSpec]
 
 
-def parse_lumped_spec_directive(directive: ParsedDirective) -> LumpedSpec:
-
-    if len(directive.params) != 3:
-        raise ValueError(f"Invalid directive format: {directive}")
-
+def parse_lumped_spec_directive(directive: Directive) -> LumpedSpec:
     try:
-        type_enum = LumpedSpec.Type(directive.key)
+        type_enum = LumpedSpec.Type(directive.name)
     except ValueError:
-        raise ValueError(f"Unknown directive type: {directive.key}")
+        raise ValueError(f"Unknown directive type: {directive.name}")
 
-    value = parse_value(directive.params[0])
-    ep_a = parse_endpoint(directive.params[1])
-    ep_b = parse_endpoint(directive.params[2])
+    # TODO: I do not quite like this point here
+    # realistically, we should have something that has less friction when
+    # translating from an abstract directive into a lumped element
+    # into a problem element
+    # This is leaking abstraction since the parameter names here
+    # are technically not the same as the ones in the problem elements
+    # however, we are eventually going to want to support having, say,
+    # parameter variations etc
+
+    match type_enum:
+        case LumpedSpec.Type.VOLTAGE:
+            value_name = "v"
+            a_name = "p"
+            b_name = "n"
+        case LumpedSpec.Type.CURRENT:
+            value_name = "i"
+            a_name = "f"
+            b_name = "t"
+        case LumpedSpec.Type.RESISTANCE:
+            value_name = "r"
+            a_name = "a"
+            b_name = "b"
+        case _:
+            raise ValueError(f"Unknown directive type: {directive.name}")
+
+    value = parse_value(directive.params[value_name])
+    ep_a = parse_endpoint(directive.params[a_name])
+    ep_b = parse_endpoint(directive.params[b_name])
 
     return LumpedSpec(
         endpoint_a=ep_a,
@@ -344,11 +406,11 @@ def parse_lumped_spec_directive(directive: ParsedDirective) -> LumpedSpec:
     )
 
 
-def process_directives(directives: list[ParsedDirective]) -> Directives:
+def process_directives(directives: list[Directive]) -> Directives:
     lumpeds = []
 
     for directive in directives:
-        match directive.key:
+        match directive.name:
             case "VOLTAGE" | "CURRENT" | "RESISTANCE":
                 lumped = parse_lumped_spec_directive(directive)
                 lumpeds.append(lumped)
@@ -401,7 +463,7 @@ def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
     return pcb_file_path, sch_file_path
 
 
-def extract_directives_from_eeschema(sch_file_path: pathlib.Path) -> list[str]:
+def extract_directives_from_eeschema(sch_file_path: pathlib.Path) -> list[Directive]:
     # First load the input schematic file
     with open(sch_file_path, "r") as f:
         import sexpdata
@@ -436,7 +498,7 @@ def extract_directives_from_eeschema(sch_file_path: pathlib.Path) -> list[str]:
     ]
 
     directives = [
-        ParsedDirective.from_string(text)
+        Directive.parse(text)
         for text in all_texts
         if text.startswith("!padne")
     ]

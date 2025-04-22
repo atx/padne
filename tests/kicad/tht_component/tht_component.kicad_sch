@@ -499,7 +499,7 @@
 		)
 		(uuid "ff3fe568-850d-410d-bcad-119d2f94dfee")
 	)
-	(text "!padne CURRENT 30A J3.1 J3.2"
+	(text "!padne CURRENT i=30A f=J3.1 t=J3.2"
 		(exclude_from_sim no)
 		(at 90.17 142.748 0)
 		(effects
@@ -509,7 +509,7 @@
 		)
 		(uuid "0561aef0-11e9-49a2-a4ff-a42cd3ffb357")
 	)
-	(text "!padne RESISTANCE 0.1 R1.1 R1.2"
+	(text "!padne RESISTANCE r=0.1 a=R1.1 b=R1.2"
 		(exclude_from_sim no)
 		(at 88.9 146.05 0)
 		(effects
@@ -519,7 +519,7 @@
 		)
 		(uuid "53dc2b8f-c0ef-4fd6-9cf2-d4627b2773fa")
 	)
-	(text "!padne RESISTANCE 0.1 R2.1 R2.2"
+	(text "!padne RESISTANCE r=0.1 a=R2.1 b=R2.2"
 		(exclude_from_sim no)
 		(at 88.392 148.59 0)
 		(effects
@@ -529,7 +529,7 @@
 		)
 		(uuid "bc7a35a7-9025-48a6-98e0-fdf4c0081cfe")
 	)
-	(text "!padne VOLTAGE 12A J1.1 J1.2"
+	(text "!padne VOLTAGE v=12V p=J1.1 n=J1.2"
 		(exclude_from_sim no)
 		(at 90.17 137.922 0)
 		(effects
@@ -539,7 +539,7 @@
 		)
 		(uuid "e20f2aff-83b2-4349-8161-68ff54186063")
 	)
-	(text "!padne CURRENT 30A J2.1 J2.2"
+	(text "!padne CURRENT i=30A f=J2.1 t=J2.2"
 		(exclude_from_sim no)
 		(at 90.17 140.208 0)
 		(effects
