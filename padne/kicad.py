@@ -457,9 +457,20 @@ def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
     Returns:
         A tuple of (pcb_file_path, sch_file_path)
     """
+
+    if not pro_file_path.exists():
+        raise FileNotFoundError(f"Project file not found: {pro_file_path}")
+
     base_name = pro_file_path.stem
+
     pcb_file_path = pro_file_path.parent / f"{base_name}.kicad_pcb"
+    if not pcb_file_path.exists():
+        raise FileNotFoundError(f"PCB file not found: {pcb_file_path}")
+
     sch_file_path = pro_file_path.parent / f"{base_name}.kicad_sch"
+    if not sch_file_path.exists():
+        raise FileNotFoundError(f"Schematic file not found: {sch_file_path}")
+
     return pcb_file_path, sch_file_path
 
 
@@ -769,71 +780,55 @@ def process_via_spec(via_spec: ViaSpec,
     return resistor_stack
 
 
-def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
+def verify_stackup_contains_all_layers(stackup: Stackup,
+                                       plotted_layers: list[PlottedGerberLayer]) -> bool:
     """
-    Load a KiCad project and create a Problem object for PDN simulation.
+    Verify that all plotted layers are contained within the stackup.
     
     Args:
-        pro_file_path: Path to the KiCad project file (*.kicad_pro)
+        stackup: Stackup object containing layers
+        plotted_layers: List of PlottedGerberLayer objects
         
-    Returns:
-        A Problem object containing layers and lumped elements
-    
     Raises:
-        FileNotFoundError: If required files are missing
-        ValueError: If the project contains invalid data
+        ValueError: If any plotted layer is not found in the stackup
     """
-    # Verify project file exists
-    if not pro_file_path.exists():
-        raise FileNotFoundError(f"Project file not found: {pro_file_path}")
-    
-    # Find associated PCB and schematic files
-    pcb_file_path, sch_file_path = find_associated_files(pro_file_path)
-    
-    # Verify required files exist
-    if not pcb_file_path.exists():
-        raise FileNotFoundError(f"PCB file not found: {pcb_file_path}")
-    if not sch_file_path.exists():
-        raise FileNotFoundError(f"Schematic file not found: {sch_file_path}")
-    
-    # Load KiCad board
-    board = pcbnew.LoadBoard(str(pcb_file_path))
-    
-    # Extract layer geometry from PCB file
-    log.info("Plotting layers to gerbers")
-    plotted_layers = render_gerbers_from_kicad(board)
-    stackup = extract_stackup_from_kicad_pcb(board)
-    # Verify that every plotted layer is contained within the stackup
-    # Do note that the stackup can theoretically contain more copper layers
-    # than the ones plotted. This is because empty layers do not get plotted.
     for pl in plotted_layers:
         if not any(pl.name == stackup_item.name for stackup_item in stackup.items):
-            raise ValueError(f"Layer {pl.name} not found in stackup")
+            return False
+    return True
+
+
+def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
+                         stackup: Stackup) -> dict[str, problem.Layer]:
+    """
+    Construct a dictionary mapping layer names to Layer objects.
     
-    # Extract directives from schematic
-    directives = process_directives(extract_directives_from_eeschema(sch_file_path))
-    
-    # Create a dictionary mapping layer names to Layer objects
+    Args:
+        plotted_layers: List of PlottedGerberLayer objects
+        
+    Returns:
+        Dictionary mapping layer names to Layer objects
+    """
+    # TODO: Rename this function...
     layer_dict = {}
     for plotted_layer in plotted_layers:
-        # Use layer-specific conductance if available, or default
         stackup_layer = next(
             (item for item in stackup.items if item.name == plotted_layer.name)
         )
-        conductance = stackup_layer.conductance
-        
         layer = problem.Layer(
             shape=plotted_layer.geometry,
             name=plotted_layer.name,
-            conductance=conductance
+            conductance=stackup_layer.conductance
         )
         layer_dict[plotted_layer.name] = layer
-    
-    # Convert LumpedSpec objects to Lumped objects
-    log.info("Creating lumped elements")
+    return layer_dict
+
+
+def create_lumped_elements_from_directives(board: pcbnew.BOARD,
+                                           directives: list[Directive],
+                                           layer_dict: dict[str, problem.Layer]) -> list[problem.BaseLumped]:
     lumpeds = []
     for spec in directives.lumpeds:
-        # Find the physical locations of the pads
         a_layer_name, a_point = find_pad_location(
             board, spec.endpoint_a.designator, spec.endpoint_a.pad
         )
@@ -881,6 +876,41 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
                 raise ValueError(f"Unhandled lumped element type: {spec.type}")
 
         lumpeds.append(lumped_element)
+    return lumpeds
+
+
+def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
+    """
+    Load a KiCad project and create a Problem object for PDN simulation.
+    
+    Args:
+        pro_file_path: Path to the KiCad project file (*.kicad_pro)
+        
+    Returns:
+        A Problem object containing layers and lumped elements
+    
+    Raises:
+        FileNotFoundError: If required files are missing
+        ValueError: If the project contains invalid data
+    """
+    # Find associated PCB and schematic files
+    pcb_file_path, sch_file_path = find_associated_files(pro_file_path)
+    
+    # Load metadata and geometry from the PCB file
+    log.info("Plotting layers to gerbers")
+    board = pcbnew.LoadBoard(str(pcb_file_path))
+    stackup = extract_stackup_from_kicad_pcb(board)
+    plotted_layers = render_gerbers_from_kicad(board)
+    directives = process_directives(extract_directives_from_eeschema(sch_file_path))
+    
+    if not verify_stackup_contains_all_layers(stackup, plotted_layers):
+        raise ValueError("Stackup does not contain all plotted layers")
+    
+    layer_dict = construct_layer_dict(plotted_layers, stackup)
+    
+    # Convert LumpedSpec objects to Lumped objects
+    log.info("Creating lumped elements")
+    lumpeds = create_lumped_elements_from_directives(board, directives, layer_dict)
 
     # TODO: We need to do something similar but for through hole pads
     log.info("Processing vias and through hole pads")
@@ -889,6 +919,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         lumpeds.extend(process_via_spec(via_spec, layer_dict, stackup))
 
     # Get all layers as a list
+    # TODO: Sort them using the stackup
     layers = list(layer_dict.values())
     
     # Return the Problem object
