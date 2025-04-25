@@ -46,6 +46,18 @@ class TestConnectivityGraph:
         connected = cg.compute_connected_nodes()
         assert len(connected) == 2
 
+    def test_different_layer_and_net_same_xy(self, kicad_test_projects):
+        # We had a bug that caused a geometry to not get garbage collected
+        # when it was on a different layer but there was a terminal on a
+        # different layer that had XY coordinates within that shape.
+        project = kicad_test_projects["different_layer_and_net_same_xy"]
+        prob = kicad.load_kicad_project(project.pro_path)
+
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        assert len(cg.nodes) == 3
+        connected = cg.compute_connected_nodes()
+        assert len(connected) == 2
+
     def test_complicated_case(self, kicad_test_projects):
         project = kicad_test_projects["disconnected_components"]
         prob = kicad.load_kicad_project(project.pro_path)

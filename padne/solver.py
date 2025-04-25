@@ -55,7 +55,7 @@ class ConnectivityGraph:
                 connected_elements = []
                 for element in problem.lumpeds:
                     intersects = any(
-                        geom.intersects(t.point)
+                        t.layer == layer and geom.intersects(t.point)
                         for t in element.terminals
                     )
                     if not intersects:
