@@ -680,23 +680,41 @@ class MeshViewer(QOpenGLWidget):
         return self._getNearestValue(world_x, world_y)
         
     def setMinValueFromCursor(self):
-        """Set the minimum value of the color scale from the cursor position."""
+        """Set the minimum value of the color scale from the cursor position.
+        If the selected value is greater than the current maximum, both min and max
+        are set to the selected value.
+        """
         value = self._getValueFromCursor()
         
         # Update minimum value if a valid value was found
         if value is not None:
-            self.min_value = value
+            if value > self.max_value:
+                # If new min is above current max, clamp range to this value
+                self.min_value = value
+                self.max_value = value
+            else:
+                # Otherwise, just set the new minimum
+                self.min_value = value
             # Emit signal to notify about the new value range
             self.valueRangeChanged.emit(self.min_value, self.max_value)
             self.update()
 
     def setMaxValueFromCursor(self):
-        """Set the maximum value of the color scale from the cursor position."""
+        """Set the maximum value of the color scale from the cursor position.
+        If the selected value is less than the current minimum, both min and max
+        are set to the selected value.
+        """
         value = self._getValueFromCursor()
         
         # Update maximum value if a valid value was found
         if value is not None:
-            self.max_value = value
+            if value < self.min_value:
+                # If new max is below current min, clamp range to this value
+                self.max_value = value
+                self.min_value = value
+            else:
+                # Otherwise, just set the new maximum
+                self.max_value = value
             # Emit signal to notify about the new value range
             self.valueRangeChanged.emit(self.min_value, self.max_value)
             self.update()
