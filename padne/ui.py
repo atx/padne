@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import numpy as np
+import matplotlib
 import sys
 import OpenGL.GL as gl
 
@@ -145,45 +146,7 @@ void main() {
 """
 
 
-@dataclass
-class Gradient:
-    colors: np.ndarray
-    steps: list
-
-    @classmethod
-    def construct(cls, input: list[tuple[tuple[float, float, float], float]]):
-        colors = np.array([np.array(c) for c, _ in input], dtype=np.float32)
-        steps = [s for _, s in input]
-        return cls(colors, steps)
-
-    def __post_init__(self):
-        assert len(self.colors) == len(self.steps)
-        assert all(0.0 <= s <= 1.0 for s in self.steps)
-        for i in range(len(self.steps) - 1):
-            assert self.steps[i] < self.steps[i + 1]
-
-    def value(self, x: float):
-        if x <= self.steps[0]:
-            return self.colors[0]
-        if x >= self.steps[-1]:
-            return self.colors[-1]
-
-        for i in range(len(self.steps) - 1):
-            if self.steps[i] <= x < self.steps[i + 1]:
-                t = (x - self.steps[i]) / (self.steps[i + 1] - self.steps[i])
-                return self.colors[i] * (1 - t) + self.colors[i + 1] * t
-
-        assert False, "Should not reach here"
-
-
-Gradient.rainbow = Gradient.construct([
-    [[0.0, 0.0, 1.0], 0.00],
-    [[0.0, 0.5, 1.0], 0.15],
-    [[0.0, 1.0, 0.0], 0.35],
-    [[0.8, 0.8, 0.0], 0.60],
-    [[1.0, 0.5, 0.0], 0.80],
-    [[1.0, 0.0, 0.0], 1.00],
-])
+COLOR_MAP = matplotlib.colormaps["viridis"]
 
 
 @dataclass
@@ -526,10 +489,10 @@ class MeshViewer(QOpenGLWidget):
 
         # Set the color map uniform to Gradient.rainbow
         with self.mesh_shader.use():
-            color_map = Gradient.rainbow
             color_map_uniform = self.mesh_shader.shader_program.uniformLocation("color_map")
             # Render 256 colors from the color map
-            colors = np.array([color_map.value(i / 255) for i in range(256)], dtype=np.float32)
+            colors = np.array([COLOR_MAP(i / 255)[0:3] for i in range(256)],
+                              dtype=np.float32)
             gl.glUniform3fv(color_map_uniform, 256, colors)
         
         # If meshes are already set, setup the mesh data
@@ -762,7 +725,6 @@ class ColorScaleWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.gradient = Gradient.rainbow
         self.v_min = 0.0
         self.v_max = 1.0
         self.unit = "V"  # Default unit
@@ -839,7 +801,7 @@ class ColorScaleWidget(QWidget):
         for i in range(gradient_rect.height()):
             # Map position to color
             t = 1.0 - (i / gradient_rect.height())
-            color = self.gradient.value(t)
+            color = COLOR_MAP(t)
             
             # Convert to QColor
             qcolor = QColor(
