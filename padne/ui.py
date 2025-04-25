@@ -718,7 +718,7 @@ class MeshViewer(QOpenGLWidget):
 
 
 class ColorScaleWidget(QWidget):
-    """Widget that displays a color scale with min/max values and units."""
+    """Widget that displays a color scale with delta and absolute range."""
     
     # Signal to notify when unit is changed manually
     unitChanged = Signal(str)
@@ -729,8 +729,12 @@ class ColorScaleWidget(QWidget):
         self.v_max = 1.0
         self.unit = "V"  # Default unit
         
-        self.setMinimumWidth(80)  # Set a reasonable minimum width
+        self.setMinimumWidth(110)  # Increased minimum width for range label
         self.setMinimumHeight(200)  # Set a reasonable minimum height
+        
+        # New labels
+        self.delta_label = None
+        self.range_label = None
         
         self.setupUI()
 
@@ -738,19 +742,24 @@ class ColorScaleWidget(QWidget):
     def setupUI(self):
         """Set up the UI components."""
         layout = QVBoxLayout(self)
+        layout.setSpacing(2)  # Add a little vertical spacing
         
-        # Max value label at the top of the stretch area
-        self.max_label = QLabel(f"{self.v_max:.3f} {self.unit}")
-        self.max_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.max_label)
+        # Delta label at the top of the stretch area
+        self.delta_label = QLabel(f"Δ = 0 {self.unit}")  # Placeholder text
+        self.delta_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self.delta_label)
         
         # This stretch is where we'll paint our gradient
         layout.addStretch(10)
         
-        # Min value label at the bottom of the stretch area
-        self.min_label = QLabel(f"{self.v_min:.3f} {self.unit}")
-        self.min_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.min_label)
+        # Range label at the bottom showing absolute min/max values
+        self.range_label = QLabel(f"Range: 0 {self.unit} - 0 {self.unit}")  # Placeholder text
+        self.range_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # Make range label slightly smaller font
+        font = self.range_label.font()
+        font.setPointSize(font.pointSize() - 1)
+        self.range_label.setFont(font)
+        layout.addWidget(self.range_label)
     
     @Slot(float, float)
     def setRange(self, v_min, v_max):
@@ -767,9 +776,14 @@ class ColorScaleWidget(QWidget):
         self.updateLabels()
     
     def updateLabels(self):
-        """Update the min/max labels with current values and unit."""
-        self.min_label.setText(pretty_format_si_number(self.v_min, self.unit))
-        self.max_label.setText(pretty_format_si_number(self.v_max, self.unit))
+        """Update the delta and range labels."""
+        delta = self.v_max - self.v_min
+        delta_str = pretty_format_si_number(delta, self.unit)
+        min_str = pretty_format_si_number(self.v_min, self.unit)
+        max_str = pretty_format_si_number(self.v_max, self.unit)
+        
+        self.delta_label.setText(f"Δ = {delta_str}")
+        self.range_label.setText(f"({min_str} → {max_str})")  # Show absolute range context
     
     def paintEvent(self, event):
         """Paint the color gradient scale."""
@@ -779,44 +793,49 @@ class ColorScaleWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         
         # Find the rectangle where we should draw the gradient
-        # This should be between the max_label and min_label
+        # This should be between the delta_label and range_label
         content_rect = self.rect()
-        top_margin = self.max_label.y() + self.max_label.height()
-        bottom_margin = self.height() - self.min_label.y()
+        top_margin = self.delta_label.y() + self.delta_label.height() + 2  # +2 for spacing
+        bottom_margin = self.height() - self.range_label.y() + 2  # +2 for spacing
         
         # Calculate the gradient bar rectangle centered horizontally
         bar_width = 20
+        gradient_height = content_rect.height() - top_margin - bottom_margin
+        # Ensure gradient height is not negative if labels overlap somehow
+        gradient_height = max(0, gradient_height)
+        
         gradient_rect = QRect(
             content_rect.left() + (content_rect.width() - bar_width) // 2,  # Center horizontally
             top_margin,
             bar_width,
-            content_rect.height() - top_margin - bottom_margin
+            gradient_height
         )
         
-        # Draw gradient bar border
-        painter.setPen(QPen(Qt.black, 1))
-        painter.drawRect(gradient_rect)
-        
-        # Draw the gradient
-        for i in range(gradient_rect.height()):
-            # Map position to color
-            t = 1.0 - (i / gradient_rect.height())
-            color = COLOR_MAP(t)
+        # Draw gradient bar border only if height is positive
+        if gradient_rect.height() > 0:
+            painter.setPen(QPen(Qt.black, 1))
+            painter.drawRect(gradient_rect)
             
-            # Convert to QColor
-            qcolor = QColor(
-                int(color[0] * 255),
-                int(color[1] * 255),
-                int(color[2] * 255)
-            )
-            
-            painter.setPen(qcolor)
-            painter.drawLine(
-                gradient_rect.left() + 1,
-                gradient_rect.top() + i,
-                gradient_rect.right() - 1,
-                gradient_rect.top() + i
-            )
+            # Draw the gradient
+            for i in range(gradient_rect.height()):
+                # Map position to color
+                t = 1.0 - (i / gradient_rect.height())
+                color = COLOR_MAP(t)
+                
+                # Convert to QColor
+                qcolor = QColor(
+                    int(color[0] * 255),
+                    int(color[1] * 255),
+                    int(color[2] * 255)
+                )
+                
+                painter.setPen(qcolor)
+                painter.drawLine(
+                    gradient_rect.left() + 1,
+                    gradient_rect.top() + i,
+                    gradient_rect.right() - 1,
+                    gradient_rect.top() + i
+                )
 
 
 class MainWindow(QMainWindow):
@@ -837,7 +856,7 @@ class MainWindow(QMainWindow):
         
         # Create color scale widget
         self.color_scale = ColorScaleWidget(self)
-        self.color_scale.setFixedWidth(100)  # Fixed width of 100 pixels
+        self.color_scale.setFixedWidth(120)
         
         # Add widgets to layout
         main_layout.addWidget(self.mesh_viewer)  # Mesh viewer takes remaining space
