@@ -660,6 +660,21 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
     return plotted_layers
 
 
+def find_pad_and_footprint(board: pcbnew.BOARD, designator: str, pad: str) -> tuple[pcbnew.FOOTPRINT, pcbnew.PAD]:
+    for footprint in board.GetFootprints():
+        if footprint.GetReference() != designator:
+            continue
+
+        # Find the pad with the given number/name
+        for pad_obj in footprint.Pads():
+            if pad_obj.GetName() != pad:
+                continue
+
+            return footprint, pad_obj
+
+    raise ValueError(f"Pad {pad} not found on component {designator}")
+
+
 def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.geometry.Point]:
     """
     Find the physical location of a pad on the PCB.
@@ -675,60 +690,49 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
     Raises:
         ValueError: If the component or pad is not found
     """
-    # Find the footprint with the given designator
-    for footprint in board.GetFootprints():
-        if footprint.GetReference() != designator:
-            continue
 
-        # Find the pad with the given number/name
-        for pad_obj in footprint.Pads():
-            if pad_obj.GetName() != pad:
-                continue
+    footprint, pad_obj = find_pad_and_footprint(board, designator, pad)
 
-            # Get the pad's position (in KiCad internal units, nanometers)
-            position = pad_obj.GetPosition()
-            
-            # Convert from KiCad internal units (nanometers) to mm
-            x_mm = nm_to_mm(position.x)
-            y_mm = nm_to_mm(position.y)
-            point = shapely.geometry.Point(x_mm, y_mm)
-            
-            # For SMD pads, get the layer directly
-            if pad_obj.GetAttribute() == pcbnew.PAD_ATTRIB_SMD:
-                layer_id = pad_obj.GetLayer()
-
-                if footprint.IsFlipped():
-                    match layer_id:
-                        case pcbnew.F_Cu:
-                            layer_id = pcbnew.B_Cu
-                        case pcbnew.B_Cu:
-                            layer_id = pcbnew.F_Cu
-                        case _:
-                            raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
-                    footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
-                    y_mm = 2 * footprint_pos_y - y_mm
-                    point = shapely.geometry.Point(x_mm, y_mm)
-
-                layer_name = board.GetLayerName(layer_id)
-                return layer_name, point
-
-            # Handle through-hole pads
-            if pad_obj.GetAttribute() == pcbnew.PAD_ATTRIB_PTH:
-                layer_set = pad_obj.GetLayerSet()
-                # Find first copper layer in the layer set
-                for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
-                    if not layer_set.Contains(layer_id):
-                        continue
-                    layer_name = board.GetLayerName(layer_id)
-                    if "Cu" not in layer_name:
-                        continue
-                    return layer_name, point
-                
-                raise ValueError(f"No copper layer found for through-hole pad {pad} on component {designator}")
-
-        raise ValueError(f"Pad {pad} not found on component {designator}")
+    # Get the pad's position (in KiCad internal units, nanometers)
+    position = pad_obj.GetPosition()
     
-    raise ValueError(f"Component {designator} not found")
+    # Convert from KiCad internal units (nanometers) to mm
+    x_mm = nm_to_mm(position.x)
+    y_mm = nm_to_mm(position.y)
+    point = shapely.geometry.Point(x_mm, y_mm)
+    
+    match pad_obj.GetAttribute():
+        case pcbnew.PAD_ATTRIB_SMD:
+            # For SMD pads, get the layer directly
+            layer_id = pad_obj.GetLayer()
+
+            if footprint.IsFlipped():
+                match layer_id:
+                    case pcbnew.F_Cu:
+                        layer_id = pcbnew.B_Cu
+                    case pcbnew.B_Cu:
+                        layer_id = pcbnew.F_Cu
+                    case _:
+                        raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
+                footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
+                y_mm = 2 * footprint_pos_y - y_mm
+                point = shapely.geometry.Point(x_mm, y_mm)
+
+            layer_name = board.GetLayerName(layer_id)
+            return layer_name, point
+
+        case pcbnew.PAD_ATTRIB_PTH:
+            # For through-hole pads, we use the first layer in the layer
+            # set as their location. In practice, this is not quite ideal,
+            # but good enough for now...
+            layer_set = pad_obj.GetLayerSet()
+            # Find first copper layer in the layer set
+            for layer_id in copper_layers(board):
+                if not layer_set.Contains(layer_id):
+                    continue
+                return board.GetLayerName(layer_id), point
+            
+            raise ValueError(f"No copper layer found for through-hole pad {pad} on component {designator}")
 
 
 def process_via_spec(via_spec: ViaSpec,
