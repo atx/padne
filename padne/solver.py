@@ -16,6 +16,9 @@ from . import problem, mesh
 log = logging.getLogger(__name__)
 
 
+DTYPE = np.float64
+
+
 @dataclass
 class LayerSolution:
     meshes: list[mesh.Mesh]
@@ -147,7 +150,7 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
     row_is = []
     col_is = []
     values = []
-    diagonal_entries = np.zeros(N, dtype=np.float32)
+    diagonal_entries = np.zeros(N, dtype=DTYPE)
 
     for i, vertex_i in enumerate(mesh.vertices):
         for edge in vertex_i.orbit():
@@ -184,7 +187,7 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
         col_is.append(i)
         values.append(val)
 
-    L = scipy.sparse.coo_matrix((values, (row_is, col_is)), shape=(N, N), dtype=np.float32)
+    L = scipy.sparse.coo_matrix((values, (row_is, col_is)), shape=(N, N), dtype=DTYPE)
 
     return L
 
@@ -491,8 +494,8 @@ def solve(prob: problem.Problem) -> Solution:
     # floating and let the UI figure out. This can possibly lead to some
     # numerical instability, so it needs more stress testing.
     N = len(vindex.global_index_to_vertex_index) + voltage_source_count
-    L = scipy.sparse.dok_matrix((N, N), dtype=np.float32)
-    r = np.zeros(N, dtype=np.float32)
+    L = scipy.sparse.dok_matrix((N, N), dtype=DTYPE)
+    r = np.zeros(N, dtype=DTYPE)
 
     # Now we compute the Laplace operator for each mesh and insert it into the
     # global L matrix.
