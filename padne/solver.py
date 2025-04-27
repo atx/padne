@@ -6,6 +6,7 @@ import logging
 import numpy as np
 import scipy.sparse
 import scipy.spatial
+import shapely
 import shapely.geometry
 
 from dataclasses import dataclass, field
@@ -35,44 +36,66 @@ class ConnectivityGraph:
     class Node:
         layer_i: int  # Index of the layer in the Problem
         geom_i: int   # Index of this particular polygon in the layer.shape.geoms list
-        is_root: bool
-        neighbors: set["Node"] = field(default_factory=set)
+        is_root: bool = False
+        neighbors: set["ConnectivityGraph.Node"] = field(default_factory=set)
 
     @classmethod
     def create_from_problem(cls, problem: problem.Problem) -> "ConnectivityGraph":
-        nodes = []
-        lumped_to_nodes: dict[problem.BaseLumped, list["Node"]] = \
-            collections.defaultdict(list)
-        # First, we construct the individual nodes and figure out what
-        # lumped elements are connected to them
-        # This is probably computationally reasonably okay,
-        # since a point in a polygon check is fast enough and we should not have
-        # that many polygons (say, tens of thousands at most hopefully)
+        # TODO: This should be refactored and split into multiple functions
+        # First, construct an STRTree for every layer
+        strtrees = []
+        for layer in problem.layers:
+            # We need to break up the layer Multipolygons into the individual components
+            # for the STRTree construction.
+            geoms = [geom for geom in layer.shape.geoms]
+            strtree = shapely.strtree.STRtree(geoms)
+            strtrees.append(strtree)
+
+        # Next, we construct Node objects for ever layer geometry in the layers
+        # that is, a list nodes_by_layers[layer_i][geom_i] gives us the
+        # Node that coresponds to the layer_i-th layers geom_i-th geometry
+        # object.
+        nodes_by_layers = []
         for layer_i, layer in enumerate(problem.layers):
-            for geom_i, geom in enumerate(layer.shape.geoms):
-                # Create the node
-                is_root = False
-                connected_elements = []
-                for element in problem.lumpeds:
-                    intersects = any(
-                        t.layer == layer and geom.intersects(t.point)
-                        for t in element.terminals
-                    )
-                    if not intersects:
+            nodes_by_layers.append(
+                [cls.Node(layer_i=layer_i, geom_i=geom_i)
+                 for geom_i, geom in enumerate(layer.shape.geoms)]
+            )
+
+        # And finally, we walk through each lumped element, figure out
+        # which Nodes are connected to each of the Terminal and consider
+        # them connected to each other if they are a lumped element.
+        # Do note that for now, only two-terminal elements are supported,
+        # but this also works for arbitrary terminal lumped elements too.
+        for element in problem.lumpeds:
+            nodes_in_this_element = []
+            for terminal in element.terminals:
+                # Find the layer index for this terminal
+                layer_i = problem.layers.index(terminal.layer)
+                kdtree = strtrees[layer_i]
+
+                # Find the closest vertex to this terminal
+                candidates = kdtree.query(terminal.point)
+
+                for geom_i in candidates:
+                    # Check if this terminal is already in the index
+                    if not terminal.layer.shape.geoms[geom_i].intersects(terminal.point):
                         continue
-                    is_root = is_root or element.is_source
-                    connected_elements.append(element)
+                    intersecting_node = nodes_by_layers[layer_i][geom_i]
+                    nodes_in_this_element.append(intersecting_node)
 
-                node = cls.Node(layer_i=layer_i, geom_i=geom_i, is_root=is_root)
-                for element in connected_elements:
-                    lumped_to_nodes[element].append(node)
-                nodes.append(node)
+                    if element.is_source:
+                        intersecting_node.is_root = True
 
-        # Now we need to connect the nodes together
-        for element, node_list in lumped_to_nodes.items():
-            for node_a, node_b in itertools.combinations(node_list, 2):
-                node_a.neighbors.add(node_b)
-                node_b.neighbors.add(node_a)
+                # Wire the elements together
+                for node_a, node_b in itertools.combinations(nodes_in_this_element, 2):
+                    node_a.neighbors.add(node_b)
+                    node_b.neighbors.add(node_a)
+
+        # And finally flatten the list of nodes into a single list
+        nodes = [
+            node for xs in nodes_by_layers for node in xs
+        ]
 
         return cls(nodes=nodes)
 
