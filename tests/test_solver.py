@@ -908,3 +908,64 @@ class TestSolverEndToEnd:
             assert voltage_diff == pytest.approx(expected_diff, abs=0.01), \
                 f"Vertex at ({vertex.p.x:.2f}, {vertex.p.y:.2f}) has incorrect voltage: " \
                 f"{voltage_diff:.3f}V vs expected {expected_diff:.1f}V"
+
+    def test_two_big_planes_voltage_source(self, kicad_test_projects):
+        project = kicad_test_projects["two_big_planes"]
+        # This project has two large planes with a voltage source between them
+        # The idea of this test is to verify that that the voltage difference 
+        # between the two planes (meshes) is approximately equal to the voltage
+        # of the voltage source. Implement this test AI!
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob)
+
+        assert solution is not None, "Solver failed to produce a solution"
+
+        # Find the voltage source
+        voltage_source = prob.lumpeds[0]
+        assert len(prob.lumpeds) == 1, "Expected exactly one lumped element (voltage source)"
+        assert isinstance(voltage_source, problem.VoltageSource), "Expected a voltage source"
+
+        expected_voltage_diff = voltage_source.voltage
+
+        # Assuming this project has one layer with two disconnected meshes
+        assert len(solution.layer_solutions) == 1, "Expected exactly one layer solution"
+        layer_solution = solution.layer_solutions[0]
+        assert len(layer_solution.meshes) == 2, "Expected exactly two meshes (planes) in the layer"
+
+        # Get the meshes and their corresponding voltage values
+        mesh1, mesh2 = layer_solution.meshes
+        values1, values2 = layer_solution.values
+
+        # Verify voltage is constant within each mesh and get representative voltages
+        def check_mesh_voltage(msh, values):
+            assert len(msh.vertices) > 0, "Mesh should have vertices"
+            first_vertex = next(iter(msh.vertices)) # Get an arbitrary vertex
+            ref_voltage = values[first_vertex]
+            for vertex in msh.vertices:
+                assert values[vertex] == pytest.approx(ref_voltage, abs=1e-10), \
+                    f"Voltage inconsistency within mesh: {values[vertex]} vs {ref_voltage}"
+            return ref_voltage
+
+        voltage_plane1 = check_mesh_voltage(mesh1, values1)
+        voltage_plane2 = check_mesh_voltage(mesh2, values2)
+
+        # Verify the voltage difference between the planes matches the source
+        actual_voltage_diff = abs(voltage_plane1 - voltage_plane2)
+        assert actual_voltage_diff == pytest.approx(expected_voltage_diff, abs=1e-10), \
+            f"Voltage difference between planes ({actual_voltage_diff}) does not match source ({expected_voltage_diff})"
+
+        # Additionally, check that the source terminals land on the correct planes
+        # and have the expected voltage difference
+        voltage_p = find_vertex_value(solution, voltage_source.p)
+        voltage_n = find_vertex_value(solution, voltage_source.n)
+
+        assert voltage_p - voltage_n == pytest.approx(expected_voltage_diff, abs=1e-10), \
+            "Voltage difference across source terminals does not match expected value"
+
+        # Check which plane corresponds to which terminal voltage
+        if abs(voltage_p - voltage_plane1) < 1e-10:
+            assert abs(voltage_n - voltage_plane2) < 1e-10, "Terminal N should be on Plane 2"
+        elif abs(voltage_p - voltage_plane2) < 1e-10:
+            assert abs(voltage_n - voltage_plane1) < 1e-10, "Terminal N should be on Plane 1"
+        else:
+            pytest.fail("Voltage source positive terminal does not match either plane's voltage")
