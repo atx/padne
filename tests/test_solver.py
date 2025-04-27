@@ -274,8 +274,8 @@ class TestSyntheticProblems:
         segments_per_quadrant = 16  # Gives 32 segments for the full circle
         
         # Create the annular shape (ring) using shapely
-        inner_circle = shapely.geometry.Point(0, 0).buffer(inner_radius, resolution=segments_per_quadrant)
-        outer_circle = shapely.geometry.Point(0, 0).buffer(outer_radius, resolution=segments_per_quadrant)
+        inner_circle = shapely.geometry.Point(0, 0).buffer(inner_radius, quad_segs=segments_per_quadrant)
+        outer_circle = shapely.geometry.Point(0, 0).buffer(outer_radius, quad_segs=segments_per_quadrant)
         annular_ring = outer_circle.difference(inner_circle)
         
         # Ensure we have a MultiPolygon as expected by the Layer constructor
