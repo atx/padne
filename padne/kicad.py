@@ -66,6 +66,11 @@ class StackupItem:
 class Stackup:
     items: list[StackupItem]
 
+    def index_by_name(self, name: str) -> int:
+        return next(
+            (i for i, item in enumerate(self.items) if item.name == name)
+        )
+
 
 DEFAULT_STACKUP = Stackup(
     items=[
@@ -741,14 +746,9 @@ def process_via_spec(via_spec: ViaSpec,
     # In theory, they should already be in physical order, but we reorder
     # them based on the Stackup just in case this ever changes
 
-    def stackup_index_by_name(name: str) -> int:
-        return next(
-            (i for i, item in enumerate(stackup.items) if item.name == name)
-        )
-
     via_layers_in_order = sorted(
         via_spec.layer_names,
-        key=stackup_index_by_name
+        key=stackup.index_by_name
     )
 
     resistor_stack = []
@@ -759,8 +759,8 @@ def process_via_spec(via_spec: ViaSpec,
         layer_a = layer_dict[layer_a_name]
         layer_b = layer_dict[layer_b_name]
 
-        j_a = stackup_index_by_name(layer_a_name)
-        j_b = stackup_index_by_name(layer_b_name)
+        j_a = stackup.index_by_name(layer_a_name)
+        j_b = stackup.index_by_name(layer_b_name)
 
         assert j_a < j_b, f"Layer {layer_a_name} should be before {layer_b_name} in the stackup"
 
@@ -924,7 +924,10 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
 
     # Get all layers as a list
     # TODO: Sort them using the stackup
-    layers = list(layer_dict.values())
+    layer_names_in_order = list(layer_dict.keys())
+    layer_names_in_order.sort(key=lambda name: stackup.index_by_name(name))
+
+    layers = [layer_dict[name] for name in layer_names_in_order]
     
     # Return the Problem object
     return problem.Problem(layers=layers, lumpeds=lumpeds)

@@ -509,3 +509,17 @@ class TestLoadKicadProject:
         # Verify the layer names
         assert f_cu_layer.name == "F.Cu", f"Expected F.Cu layer, got {f_cu_layer.name}"
         assert b_cu_layer.name == "B.Cu", f"Expected B.Cu layer, got {b_cu_layer.name}"
+
+    def test_layer_order(self, kicad_test_projects):
+        project = kicad_test_projects["via_tht_4layer"]
+        
+        # Load the project
+        result = kicad.load_kicad_project(project.pro_path)
+        
+        # Check the layer order
+        expected_order = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        actual_order = [layer.name for layer in result.layers]
+        
+        assert actual_order == expected_order, (
+            f"Layer order mismatch: expected {expected_order}, got {actual_order}"
+        )
