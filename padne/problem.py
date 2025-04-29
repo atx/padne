@@ -102,27 +102,6 @@ class CurrentSource(BaseLumped):
 
 
 @dataclass(frozen=True)
-class VoltageRegulator(BaseLumped):
-    """
-    This is effectively a CCCS, but the current is determined by a current
-    through a voltage source.
-    """
-    v_p: Terminal
-    v_n: Terminal
-
-    i_f: Terminal
-    i_t: Terminal
-
-    @property
-    def terminals(self) -> list[Terminal]:
-        return [self.v_p, self.v_n, self.i_f, self.i_t]
-
-    @property
-    def is_source(self):
-        return True
-
-
-@dataclass(frozen=True)
 class Problem:
     layers: list[Layer]
     lumpeds: list[BaseLumped]
