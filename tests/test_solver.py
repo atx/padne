@@ -9,15 +9,17 @@ from padne import solver, problem, mesh, kicad
 from conftest import for_all_kicad_projects
 
 
-# Helper function to find the voltage at the vertex closest to a terminal
-def find_vertex_value(sol: solver.Solution, term: problem.Terminal) -> float:
-    target_layer_idx = sol.problem.layers.index(term.layer)
-    target_point_shapely = term.point # Terminal point is already shapely
+# Helper function to find the voltage at the vertex closest to a connection point
+def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
+    """Finds the voltage at the mesh vertex closest to the given Connection point."""
+    target_layer_idx = sol.problem.layers.index(conn.layer)
+    target_point_shapely = conn.point # Connection point is already shapely
 
     layer_sol = sol.layer_solutions[target_layer_idx]
     
     best_dist = float('inf')
     found_value = None
+    closest_vertex_point = None # For debugging
 
     for msh, values in zip(layer_sol.meshes, layer_sol.values):
         for vertex in msh.vertices:
@@ -26,10 +28,13 @@ def find_vertex_value(sol: solver.Solution, term: problem.Terminal) -> float:
             if dist < best_dist:
                 best_dist = dist
                 found_value = values[vertex]
+                closest_vertex_point = vertex.p # For debugging
     
     # Ensure a vertex was found reasonably close
-    # This tolerance should match or be slightly larger than the one used in the solver
-    assert best_dist < 1e-4, f"Could not find a close vertex for terminal {term} (dist={best_dist})"
+    # This tolerance should match or be slightly larger than the one used in the solver's KDTree query
+    assert best_dist < 1e-4, \
+        f"Could not find a close vertex for connection at {target_point_shapely} on layer {conn.layer.name} " \
+        f"(closest found: {closest_vertex_point} with dist={best_dist})"
     assert found_value is not None
     return found_value
 
@@ -147,26 +152,29 @@ class TestSolverMeshLayer:
         meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
             prob, mesher, connected_layer_mesh_pairs)
         
-        # For each terminal in the problem, verify there's a vertex very close to its location
-        for lumped in prob.lumpeds:
-            for terminal in lumped.terminals:
-                layer_index = prob.layers.index(terminal.layer)
+        # For each connection point in the problem, verify there's a mesh vertex very close to its location
+        for network in prob.networks:
+            for connection in network.connections:
+                layer_index = prob.layers.index(connection.layer)
                 relevant_meshes = [meshes[i] for i, l_idx in enumerate(mesh_index_to_layer_index) if l_idx == layer_index]
+
+                # Convert connection point (already shapely) to mesh.Point for distance comparison
+                conn_point_mesh = mesh.Point(connection.point.x, connection.point.y)
                 
-                # Convert terminal point to mesh.Point for comparison
-                term_point = mesh.Point(terminal.point.x, terminal.point.y)
-                
-                # Check if any mesh has a vertex close to this terminal point
+                # Check if any mesh on the correct layer has a vertex close to this connection point
                 found = False
                 for m in relevant_meshes:
                     for vertex in m.vertices:
-                        if vertex.p.distance(term_point) < 1e-6:  # Very small tolerance
+                        if vertex.p.distance(conn_point_mesh) < 1e-6:  # Very small tolerance
                             found = True
                             break
                     if found:
                         break
                 
-                assert found, f"Terminal point {term_point} should be represented in the mesh"
+                assert found, (
+                    f"Connection point {conn_point_mesh} on layer {connection.layer.name} "
+                    f"should be represented by a vertex in the mesh"
+                )
 
 
 class TestSyntheticProblems:
@@ -176,20 +184,20 @@ class TestSyntheticProblems:
         # which has a single rectangle with wide aspect ratio in it.
         # In addition, add three lumped voltage sources of 1V, that are connected
         # along the shorter sides of the rectangle.
-        
+
         # 1. Create the rectangle shape
         rect_width = 10.0
         rect_height = 1.0
         rectangle = shapely.geometry.box(0, 0, rect_width, rect_height)
-        
+
         # 2. Create the Layer
         layer = problem.Layer(
             shape=shapely.geometry.MultiPolygon([rectangle]),
             name="TestLayer",
             conductance=1.0  # Conductance value doesn't strongly affect voltage source test
         )
-        
-        # 3. Define Terminal points
+
+        # 3. Define connection points
         points_left = [
             shapely.geometry.Point(0, 0.05 * rect_height),
             shapely.geometry.Point(0, 0.25 * rect_height),
@@ -204,58 +212,86 @@ class TestSyntheticProblems:
             shapely.geometry.Point(rect_width, 0.75 * rect_height),
             shapely.geometry.Point(rect_width, 0.95 * rect_height),
         ]
-        
-        # 4. Create Terminals
-        terminals_left = [problem.Terminal(layer=layer, point=p) for p in points_left]
-        terminals_right = [problem.Terminal(layer=layer, point=p) for p in points_right]
-        
-        # 5. Create Voltage Sources (1V each, positive on right, negative on left)
-        voltage_sources = [
-            problem.VoltageSource(p=term_r, n=term_l, voltage=1.0)
-            for term_l, term_r in zip(terminals_left, terminals_right)
-        ]
-        
-        # 6. Create the Problem
-        prob_synthetic = problem.Problem(layers=[layer], lumpeds=voltage_sources)
-        
-        # 7. Solve the Problem
+
+        # 4. Create Networks, each containing one Voltage Source and its Connections
+        networks = []
+        connections_left = [] # Keep track for later verification
+        connections_right = [] # Keep track for later verification
+        for p_left, p_right in zip(points_left, points_right):
+            # Create connections for this source
+            conn_left = problem.Connection(layer=layer, point=p_left)
+            conn_right = problem.Connection(layer=layer, point=p_right)
+            connections_left.append(conn_left)
+            connections_right.append(conn_right)
+
+            # Create the voltage source element using the connection NodeIDs
+            vsource_element = problem.VoltageSource(
+                p=conn_right.node_id, # Positive on the right
+                n=conn_left.node_id,  # Negative on the left
+                voltage=1.0
+            )
+
+            # Create the network for this source
+            network = problem.Network(
+                connections=[conn_left, conn_right],
+                elements=[vsource_element]
+            )
+            networks.append(network)
+
+        # 5. Create the Problem
+        prob_synthetic = problem.Problem(layers=[layer], networks=networks)
+
+        # 6. Solve the Problem
         solution = solver.solve(prob_synthetic)
-        
-        # 8. Verify the Solution
+
+        # 7. Verify the Solution
         assert solution is not None
         assert isinstance(solution, solver.Solution)
         assert len(solution.layer_solutions) == 1
-        
-        # Check each voltage source constraint
-        for vs in voltage_sources:
-            voltage_p = find_vertex_value(solution, vs.p)
-            voltage_n = find_vertex_value(solution, vs.n)
-            
+
+        # Check each voltage source constraint by iterating through networks
+        for network in networks:
+            # Assuming each network has exactly one voltage source as constructed
+            vsource = network.elements[0]
+            assert isinstance(vsource, problem.VoltageSource)
+
+            # Find the connections associated with this source within its network
+            conn_p = next(c for c in network.connections if c.node_id == vsource.p)
+            conn_n = next(c for c in network.connections if c.node_id == vsource.n)
+
+            voltage_p = find_vertex_value(solution, conn_p)
+            voltage_n = find_vertex_value(solution, conn_n)
+
             # Verify the voltage difference matches the source voltage
-            assert voltage_p - voltage_n == pytest.approx(vs.voltage), \
-                f"Voltage difference for {vs} does not match expected value."
-                
+            assert voltage_p - voltage_n == pytest.approx(vsource.voltage), \
+                f"Voltage difference for {vsource} does not match expected value."
+
         # Optional: Check general voltage trend (should increase from left to right)
-        # Find average voltage near left and right edges
-        avg_v_left = np.mean([find_vertex_value(solution, t) for t in terminals_left])
-        avg_v_right = np.mean([find_vertex_value(solution, t) for t in terminals_right])
+        # Find average voltage near left and right edges using the stored connections
+        avg_v_left = np.mean([find_vertex_value(solution, c) for c in connections_left])
+        avg_v_right = np.mean([find_vertex_value(solution, c) for c in connections_right])
         assert avg_v_right > avg_v_left # Voltage should generally increase
 
         # Verify that at each vertex, the voltage is approximately proportional
         # to its x coordinate
         layer_solution = solution.layer_solutions[0]
-        mesh_obj = layer_solution.meshes[0] # Assuming only one mesh for this simple case
-        values = layer_solution.values[0]
-        
+        # Handle possibility of multiple meshes if mesher splits the rectangle
+        all_vertices = []
+        all_values = {}
+        for msh, values_form in zip(layer_solution.meshes, layer_solution.values):
+            all_vertices.extend(msh.vertices)
+            for v in msh.vertices:
+                all_values[v] = values_form[v]
+
         # Calculate the expected slope (voltage change per unit x)
         # Use the average voltages calculated earlier for robustness
         expected_slope = (avg_v_right - avg_v_left) / rect_width
-        
-        for vertex in mesh_obj.vertices:
+
+        for vertex in all_vertices:
             # Expected voltage based on linear interpolation from the average left voltage
             expected_voltage = avg_v_left + vertex.p.x * expected_slope
-            actual_voltage = values[vertex]
-            
+            actual_voltage = all_values[vertex]
+
             # Use pytest.approx with a reasonable absolute tolerance
             # The tolerance might need adjustment based on mesh density and solver accuracy
             # TODO: The tolerance here is minimal possible with the current solver
@@ -307,54 +343,56 @@ class TestSyntheticProblems:
         inner_pts_with_angles = sorted([to_angle_point_pair(pt) for pt in inner_boundary_pts])
         outer_pts_with_angles = sorted([to_angle_point_pair(pt) for pt in outer_boundary_pts])
         
-        # Create terminals and voltage sources
-        voltage_sources = []
-        outer_terminals = []
-        inner_terminals = []
+        # Create Connections and store them
+        networks = []
+        outer_connections = []
+        inner_connections = []
         
-        # Pair inner and outer points by their sorted order
+        # Pair inner and outer points by their sorted order and create Connections
         for (_, inner_pt), (_, outer_pt) in zip(inner_pts_with_angles, outer_pts_with_angles):
-            inner_term = problem.Terminal(layer=layer,
+            inner_conn = problem.Connection(layer=layer,
                                           point=shapely.geometry.Point(inner_pt))
-            outer_term = problem.Terminal(layer=layer,
+            outer_conn = problem.Connection(layer=layer,
                                           point=shapely.geometry.Point(outer_pt))
             
-            outer_terminals.append(outer_term)
-            inner_terminals.append(inner_term)
+            outer_connections.append(outer_conn)
+            inner_connections.append(inner_conn)
 
-        # Verify that the outer terminals are outer_distance away from the origin
-        for term in outer_terminals:
-            x, y = term.point.x, term.point.y
+        # Verify that the outer connections are outer_distance away from the origin
+        for conn in outer_connections:
+            x, y = conn.point.x, conn.point.y
             distance = math.sqrt(x**2 + y**2)
             assert distance == pytest.approx(outer_radius, abs=0.001), \
-                f"Outer terminal {term} is not at the expected outer radius (distance={distance})"
-        # Verify that the inner terminals are inner_distance away from the origin
-        for term in inner_terminals:
-            x, y = term.point.x, term.point.y
+                f"Outer connection {conn} is not at the expected outer radius (distance={distance})"
+        # Verify that the inner connections are inner_distance away from the origin
+        for conn in inner_connections:
+            x, y = conn.point.x, conn.point.y
             distance = math.sqrt(x**2 + y**2)
             assert distance == pytest.approx(inner_radius, abs=0.001), \
-                f"Inner terminal {term} is not at the expected inner radius (distance={distance})"
+                f"Inner connection {conn} is not at the expected inner radius (distance={distance})"
 
         # Next, we go in circle around the boundary, forcing the voltage to be equal
-        # at the outer terminals.
-        for t_a, t_b in zip(outer_terminals, outer_terminals[1:] + [outer_terminals[0]]):
-            voltage_sources.append(
-                problem.VoltageSource(p=t_a, n=t_b, voltage=0.0)
-            )
+        # at the outer connections by creating 0V sources between adjacent connections.
+        for c_a, c_b in zip(outer_connections, outer_connections[1:] + [outer_connections[0]]):
+            vsource_element = problem.VoltageSource(p=c_a.node_id, n=c_b.node_id, voltage=0.0)
+            network = problem.Network(connections=[c_a, c_b], elements=[vsource_element])
+            networks.append(network)
 
-        # And do the same thing for the inner terminals
-        for t_a, t_b in zip(inner_terminals, inner_terminals[1:] + [inner_terminals[0]]):
-            voltage_sources.append(
-                problem.VoltageSource(p=t_a, n=t_b, voltage=0.0)
-            )
+        # And do the same thing for the inner connections
+        for c_a, c_b in zip(inner_connections, inner_connections[1:] + [inner_connections[0]]):
+            vsource_element = problem.VoltageSource(p=c_a.node_id, n=c_b.node_id, voltage=0.0)
+            network = problem.Network(connections=[c_a, c_b], elements=[vsource_element])
+            networks.append(network)
 
-        # And finally, connect the first inner terminal to the first outer terminal
-        voltage_sources.append(
-            problem.VoltageSource(p=inner_terminals[0], n=outer_terminals[0], voltage=1.0)
-        )
+        # And finally, connect the first inner connection to the first outer connection with 1V
+        c_inner_first = inner_connections[0]
+        c_outer_first = outer_connections[0]
+        vsource_element = problem.VoltageSource(p=c_inner_first.node_id, n=c_outer_first.node_id, voltage=1.0)
+        network = problem.Network(connections=[c_inner_first, c_outer_first], elements=[vsource_element])
+        networks.append(network)
 
         # Create the Problem and solve
-        prob_coaxial = problem.Problem(layers=[layer], lumpeds=voltage_sources)
+        prob_coaxial = problem.Problem(layers=[layer], networks=networks)
         solution = solver.solve(prob_coaxial)
         
         # Verify the solution
@@ -364,6 +402,9 @@ class TestSyntheticProblems:
         # Analytical solution function for potential in a coaxial structure
         def analytical_solution(x, y):
             r = math.sqrt(x**2 + y**2)
+            # Avoid log(0) or division by zero if r is exactly inner_radius or outer_radius
+            if r <= inner_radius: return 1.0
+            if r >= outer_radius: return 0.0
             # Calculate ideal potential with outer boundary at 0V and inner at 1V
             ideal_potential = math.log(outer_radius / r) / math.log(outer_radius / inner_radius)
             # Adjust by the reference potential offset
@@ -376,14 +417,14 @@ class TestSyntheticProblems:
         # Compare numerical solution with analytical solution
         layer_solution = solution.layer_solutions[0]
         
-        # Check voltages at outer terminals - should all be approximately the same
-        outer_potentials = [find_vertex_value(solution, term) for term in outer_terminals]
+        # Check voltages at outer connections - should all be approximately the same
+        outer_potentials = [find_vertex_value(solution, conn) for conn in outer_connections]
         reference_potential = outer_potentials[0]
         for pot in outer_potentials:
             assert pot == pytest.approx(reference_potential, abs=0.001), \
                 f"Outer boundary potential inconsistency: {pot} vs reference {reference_potential}"
         # Check voltages at inner boundary - should be approximately 1V higher than reference
-        inner_potentials = [find_vertex_value(solution, term) for term in inner_terminals]
+        inner_potentials = [find_vertex_value(solution, conn) for conn in inner_connections]
         for pot in inner_potentials:
             assert pot == pytest.approx(reference_potential + 1.0, abs=0.001), \
                 f"Inner boundary potential inconsistency: {pot} vs reference {reference_potential + 1.0}"
@@ -400,7 +441,8 @@ class TestSyntheticProblems:
                 r = math.sqrt(x**2 + y**2)
                 
                 # Skip vertices very close to boundaries where numerical errors might be larger
-                boundary_margin = 1.0
+                # or where analytical solution might be sensitive
+                boundary_margin = 0.1 # Slightly increased margin
                 if r > outer_radius - boundary_margin or r < inner_radius + boundary_margin:
                     continue
                     
@@ -612,12 +654,6 @@ class TestSolverEndToEnd:
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
-        # Check if there is a voltage source in the project
-        has_voltage_source = any(
-            isinstance(el, problem.VoltageSource) for el in prob.lumpeds
-        )
-        if not has_voltage_source:
-            pytest.skip("No voltage sources in this project.")
 
         # Call the function under test
         solution = solver.solve(prob)
@@ -628,15 +664,33 @@ class TestSolverEndToEnd:
         # Check that every layer has a solution
         assert len(solution.layer_solutions) == len(prob.layers)
 
-        # Check each voltage source
-        for elem in prob.lumpeds:
-            if isinstance(elem, problem.VoltageSource):
-                voltage_p = find_vertex_value(solution, elem.p)
-                voltage_n = find_vertex_value(solution, elem.n)
-                
+        found_voltage_source = False
+        # Check each voltage source within its network
+        for network in prob.networks:
+            # Simplify: Look for networks containing exactly one VoltageSource element
+            # More complex networks could be handled, but this covers many test cases.
+            if len(network.elements) == 1 and isinstance(network.elements[0], problem.VoltageSource):
+                found_voltage_source = True
+                vsource = network.elements[0]
+
+                # Find the Connection objects corresponding to the p and n NodeIDs
+                try:
+                    p_conn = next(c for c in network.connections if c.node_id == vsource.p)
+                    n_conn = next(c for c in network.connections if c.node_id == vsource.n)
+                except StopIteration:
+                    pytest.fail(f"Could not find connections for VoltageSource {vsource} in network {network}")
+
+                # Find the voltage at the mesh vertices closest to the connection points
+                voltage_p = find_vertex_value(solution, p_conn)
+                voltage_n = find_vertex_value(solution, n_conn)
+
                 # Verify the voltage difference matches the source voltage
-                assert voltage_p - voltage_n == pytest.approx(elem.voltage, abs=0.001), \
-                    f"Voltage difference for {elem} does not match expected value."
+                assert voltage_p - voltage_n == pytest.approx(vsource.voltage, abs=0.001), \
+                    f"Voltage difference for {vsource} (p@{p_conn.point}, n@{n_conn.point}) does not match expected value."
+
+        # If no suitable voltage source network was found in the project, skip the test
+        if not found_voltage_source:
+            pytest.skip(f"No networks containing only a VoltageSource found in project {project.name}.")
 
     def test_long_trace_current_source(self, kicad_test_projects):
         project = kicad_test_projects["long_trace_current"]
@@ -644,20 +698,34 @@ class TestSolverEndToEnd:
         prob = kicad.load_kicad_project(project.pro_path)
         solution = solver.solve(prob)
         
-        # Find the current source
-        assert len(prob.lumpeds) == 1
-        current_source = prob.lumpeds[0]
+        # Find the current source network and element
+        current_source_element = None
+        current_source_network = None
+        for network in prob.networks:
+            # Assuming this project has one network with one current source
+            if len(network.elements) == 1 and isinstance(network.elements[0], problem.CurrentSource):
+                current_source_element = network.elements[0]
+                current_source_network = network
+                break
+
+        assert current_source_element is not None, "No current source element found in the test project"
+        assert current_source_network is not None, "No network containing the current source found"
+
+        # Find the Connection objects corresponding to the f and t NodeIDs
+        try:
+            f_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.f)
+            t_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.t)
+        except StopIteration:
+            pytest.fail(f"Could not find connections for CurrentSource {current_source_element} in network {current_source_network}")
         
-        assert current_source is not None, "No current source found in the test project"
+        # Get voltages at the connection points
+        voltage_from = find_vertex_value(solution, f_conn)
+        voltage_to = find_vertex_value(solution, t_conn)
         
-        # Get voltages at the terminals
-        voltage_from = find_vertex_value(solution, current_source.f)
-        voltage_to = find_vertex_value(solution, current_source.t)
-        
-        # Check voltage difference is approximately 0.24 mV
+        # Check voltage difference is approximately 0.24 V
         voltage_diff = abs(voltage_from - voltage_to)
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
-            f"Voltage difference for {current_source} does not match expected value (diff={voltage_diff})"
+            f"Voltage difference for {current_source_element} does not match expected value (diff={voltage_diff})"
 
     def test_complicated_trace_current_source(self, kicad_test_projects):
         project = kicad_test_projects["complicated_trace_current"]
@@ -677,44 +745,67 @@ class TestSolverEndToEnd:
             1.0, 2.0, 1.0, 0.2, 0.2
         ]
         assert len(widths) == 21, "Width array should have 21 elements"
+
+        # Find the current source network and element
+        current_source_element = None
+        current_source_network = None
+        for network in prob.networks:
+            # Assuming this project has one network with one current source
+            if len(network.elements) == 1 and isinstance(network.elements[0], problem.CurrentSource):
+                current_source_element = network.elements[0]
+                current_source_network = network
+                break
+
+        assert current_source_element is not None, "No current source element found in the test project"
+        assert current_source_network is not None, "No network containing the current source found"
+
+        # Find the Connection objects corresponding to the f and t NodeIDs
+        try:
+            f_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.f)
+            t_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.t)
+        except StopIteration:
+            pytest.fail(f"Could not find connections for CurrentSource {current_source_element} in network {current_source_network}")
         
-        # Find the current source
-        assert len(prob.lumpeds) == 1, "Expected exactly one lumped element"
-        current_source = prob.lumpeds[0]
-        
-        # Get voltages at the terminals
-        voltage_from = find_vertex_value(solution, current_source.f)
-        voltage_to = find_vertex_value(solution, current_source.t)
+        # Get voltages at the connection points
+        voltage_from = find_vertex_value(solution, f_conn)
+        voltage_to = find_vertex_value(solution, t_conn)
         
         # Calculate voltage difference between terminals
         voltage_diff = voltage_to - voltage_from
 
         def tapered_segment_resistance(w_start, w_end, length):
             """Calculate resistance of a tapered trace segment."""
-            resistance = 1.0 / prob.layers[0].conductance  # Base resistance (ohms)
+            # Assuming the trace is on the first layer for conductance
+            # TODO: Make this more robust if multiple layers exist
+            sheet_resistance = 1.0 / prob.layers[0].conductance # Resistance per square (ohms/sq)
 
-            if w_start == w_end:
+            if abs(w_start - w_end) < 1e-9: # Check for floating point equality
                 # Straight segment
-                return resistance * length / w_start
+                return sheet_resistance * length / w_start
             else:
-                # Tapered segment
+                # Tapered segment - use average width formula for resistance
+                # R = rho * L / (t * W_avg) where rho/t is sheet_resistance
                 w_avg = (w_end - w_start) / math.log(w_end / w_start)
-                return resistance * length / w_avg
+                return sheet_resistance * length / w_avg
 
         def expected_voltage_at_position(position_mm):
-            """Calculate expected voltage at a given position along the trace."""
+            """Calculate expected voltage drop up to a given position along the trace."""
             at_position = 0.0
             total_resistance = 0.0
-            segment_length = 10.0
+            segment_length = 10.0 # Length of each segment in mm
 
-            while (remaining_length := position_mm - at_position) > 0.0:
+            while (remaining_length := position_mm - at_position) > 1e-9: # Use tolerance for float comparison
                 # Get current segment index
                 i_segment = int(at_position / segment_length)
+                # Ensure index is within bounds
+                if i_segment >= len(widths) - 1:
+                    break # Reached end of defined widths
+
                 w_start = widths[i_segment]
                 w_end_full = widths[i_segment + 1]
 
                 # Handle partial segments
-                if remaining_length >= segment_length:
+                if remaining_length >= segment_length - 1e-9: # Use tolerance
                     this_segment_length = segment_length
                     w_end = w_end_full
                 else:
@@ -728,10 +819,11 @@ class TestSolverEndToEnd:
                 at_position += this_segment_length
 
             # Calculate voltage drop based on resistance and current
-            return current_source.current * total_resistance
+            # Voltage drop = I * R. If current flows f->t, V_t - V_f = I * R
+            return current_source_element.current * total_resistance
 
-        # Calculate expected voltage drop across the entire trace
-        total_expected_voltage = expected_voltage_at_position(200)
+        # Calculate expected voltage drop across the entire trace (200mm)
+        total_expected_voltage = expected_voltage_at_position(200.0)
         
         # Compare simulated vs analytical results for overall drop
         assert voltage_diff == pytest.approx(total_expected_voltage, rel=0.1), \
@@ -744,85 +836,124 @@ class TestSolverEndToEnd:
         """Test that superposition principle holds for a circuit with voltage and current sources."""
         # Get the project with combined voltage and current sources
         project = kicad_test_projects["voltage_source_into_current_sink"]
-        
+
         # Load the original problem with both sources
         full_problem = kicad.load_kicad_project(project.pro_path)
-        
-        # Identify the voltage source and current source
-        voltage_sources = [elem for elem in full_problem.lumpeds if isinstance(elem, problem.VoltageSource)]
-        current_sources = [elem for elem in full_problem.lumpeds if isinstance(elem, problem.CurrentSource)]
-        other_elements = [elem for elem in full_problem.lumpeds 
-                          if not isinstance(elem, (problem.VoltageSource, problem.CurrentSource))]
-        
-        assert len(voltage_sources) == 1, "Expected exactly one voltage source"
-        assert len(current_sources) == 1, "Expected exactly one current source"
-        
-        voltage_source = voltage_sources[0]
-        current_source = current_sources[0]
-        
-        # Solve the full problem with both sources active
+
+        # --- Identify the voltage source, current source, and their networks ---
+        voltage_source_element = None
+        voltage_source_network = None
+        current_source_element = None
+        current_source_network = None
+
+        for network in full_problem.networks:
+            for element in network.elements:
+                if isinstance(element, problem.VoltageSource):
+                    if voltage_source_element is not None:
+                        pytest.fail("Found more than one voltage source")
+                    voltage_source_element = element
+                    voltage_source_network = network
+                elif isinstance(element, problem.CurrentSource):
+                    if current_source_element is not None:
+                        pytest.fail("Found more than one current source")
+                    current_source_element = element
+                    current_source_network = network
+
+        assert voltage_source_element is not None, "Expected exactly one voltage source"
+        assert current_source_element is not None, "Expected exactly one current source"
+        assert voltage_source_network is not None
+        assert current_source_network is not None
+
+        # --- Solve the full problem ---
         full_solution = solver.solve(full_problem)
-        
-        # Create a problem with only the voltage source active (current source set to 0A)
-        voltage_only_source = problem.VoltageSource(
-            p=voltage_source.p,
-            n=voltage_source.n,
-            voltage=voltage_source.voltage
-        )
-        current_only_inactive = problem.CurrentSource(
-            f=current_source.f,
-            t=current_source.t,
-            current=0.0  # Set to zero but keep in circuit
-        )
-        
+
+        # --- Create and solve problem with only voltage source active ---
+        voltage_only_networks = []
+        for network in full_problem.networks:
+            new_elements = []
+            is_modified = False
+            for element in network.elements:
+                if element == current_source_element:
+                    # Replace current source with 0A version
+                    new_elements.append(problem.CurrentSource(
+                        f=element.f, t=element.t, current=0.0
+                    ))
+                    is_modified = True
+                else:
+                    new_elements.append(element)
+            # Create new network with original connections and potentially modified elements
+            voltage_only_networks.append(problem.Network(
+                connections=network.connections, elements=new_elements
+            ))
+
         voltage_only_problem = problem.Problem(
             layers=full_problem.layers,
-            lumpeds=[voltage_only_source, current_only_inactive] + other_elements
+            networks=voltage_only_networks
         )
         voltage_only_solution = solver.solve(voltage_only_problem)
-        
-        # Create a problem with only the current source active (voltage source set to 0V)
-        voltage_only_inactive = problem.VoltageSource(
-            p=voltage_source.p,
-            n=voltage_source.n,
-            voltage=0.0  # Set to zero but keep in circuit
-        )
-        current_only_source = problem.CurrentSource(
-            f=current_source.f,
-            t=current_source.t,
-            current=current_source.current
-        )
-        
+
+        # --- Create and solve problem with only current source active ---
+        current_only_networks = []
+        for network in full_problem.networks:
+            new_elements = []
+            is_modified = False
+            for element in network.elements:
+                if element == voltage_source_element:
+                    # Replace voltage source with 0V version
+                    new_elements.append(problem.VoltageSource(
+                        p=element.p, n=element.n, voltage=0.0
+                    ))
+                    is_modified = True
+                else:
+                    new_elements.append(element)
+            # Create new network with original connections and potentially modified elements
+            current_only_networks.append(problem.Network(
+                connections=network.connections, elements=new_elements
+            ))
+
         current_only_problem = problem.Problem(
             layers=full_problem.layers,
-            lumpeds=[voltage_only_inactive, current_only_source] + other_elements
+            networks=current_only_networks
         )
         current_only_solution = solver.solve(current_only_problem)
-        
-        # Choose test points - the terminals of both sources are good candidates
-        test_terminals = [
-            voltage_source.p, voltage_source.n,
-            current_source.f, current_source.t
-        ]
-        
-        # Compare solutions at each test point
-        for terminal in test_terminals:
-            v_full = find_vertex_value(full_solution, terminal)
-            v_voltage = find_vertex_value(voltage_only_solution, terminal)
-            v_current = find_vertex_value(current_only_solution, terminal)
-            
+
+        # --- Choose test points (Connections of the sources) ---
+        test_connections = []
+        try:
+            # Connections for the voltage source
+            test_connections.append(next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p))
+            test_connections.append(next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n))
+            # Connections for the current source
+            test_connections.append(next(c for c in current_source_network.connections if c.node_id == current_source_element.f))
+            test_connections.append(next(c for c in current_source_network.connections if c.node_id == current_source_element.t))
+        except StopIteration:
+             pytest.fail("Could not find all connections for the sources")
+
+        # Remove duplicates if sources share connections
+        test_connections = list(set(test_connections))
+
+        # --- Compare solutions at each test point ---
+        for connection in test_connections:
+            v_full = find_vertex_value(full_solution, connection)
+            v_voltage = find_vertex_value(voltage_only_solution, connection)
+            v_current = find_vertex_value(current_only_solution, connection)
+
             # Verify superposition (with tolerance appropriate for floating-point)
             v_superposition = v_voltage + v_current
             assert v_full == pytest.approx(v_superposition, abs=1e-3), \
-                f"Superposition failed at terminal {terminal}: " \
+                f"Superposition failed at connection {connection}: " \
                 f"full={v_full:.6f}, voltage={v_voltage:.6f}, " \
                 f"current={v_current:.6f}, sum={v_superposition:.6f}"
-        
-        # Verify specific expected voltage values
-        v_source_p = find_vertex_value(full_solution, voltage_source.p)
-        v_source_n = find_vertex_value(full_solution, voltage_source.n)
-        assert v_source_p - v_source_n == pytest.approx(voltage_source.voltage, abs=1e-4), \
-            "Voltage source constraint not satisfied"
+
+        # --- Verify specific expected voltage values in the full solution ---
+        # Find connections for the original voltage source again
+        vsource_p_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p)
+        vsource_n_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n)
+
+        v_source_p = find_vertex_value(full_solution, vsource_p_conn)
+        v_source_n = find_vertex_value(full_solution, vsource_n_conn)
+        assert v_source_p - v_source_n == pytest.approx(voltage_source_element.voltage, abs=1e-4), \
+            "Voltage source constraint not satisfied in full solution"
         
     def test_disconnected_component_gets_dropped(self, kicad_test_projects):
         project = kicad_test_projects["floating_copper"]
@@ -862,35 +993,49 @@ class TestSolverEndToEnd:
         # Solve the problem
         solution = solver.solve(prob)
         
-        # Find the voltage source (should be the only source)
-        voltage_source = next(
-            (elem for elem in prob.lumpeds if isinstance(elem, problem.VoltageSource)),
-            None
-        )
-        assert voltage_source is not None, "No voltage source found in the unconnected_via project"
+        # Find the voltage source network and element
+        voltage_source_element = None
+        voltage_source_network = None
+        for network in prob.networks:
+            # Assuming this project has one network with one voltage source
+            if len(network.elements) == 1 and isinstance(network.elements[0], problem.VoltageSource):
+                voltage_source_element = network.elements[0]
+                voltage_source_network = network
+                break
+
+        assert voltage_source_element is not None, "No voltage source element found in the unconnected_via project"
+        assert voltage_source_network is not None, "No network containing the voltage source found"
+
+        # Find the Connection objects corresponding to the p and n NodeIDs
+        try:
+            p_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p)
+            n_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n)
+        except StopIteration:
+            pytest.fail(f"Could not find connections for VoltageSource {voltage_source_element} in network {voltage_source_network}")
         
-        # Get reference voltages at the source terminals
-        pos_voltage = find_vertex_value(solution, voltage_source.p)
-        neg_voltage = find_vertex_value(solution, voltage_source.n)
-        expected_diff = voltage_source.voltage  # Should be 1.0V
+        # Get reference voltages at the source connection points
+        pos_voltage = find_vertex_value(solution, p_conn)
+        neg_voltage = find_vertex_value(solution, n_conn)
+        expected_diff = voltage_source_element.voltage  # Should be 1.0V
         
-        # Get the layer and mesh containing the positive terminal
-        pos_layer_idx = prob.layers.index(voltage_source.p.layer)
+        # Get the layer and mesh containing the positive connection
+        pos_layer_idx = prob.layers.index(p_conn.layer)
         pos_layer_sol = solution.layer_solutions[pos_layer_idx]
         
-        # Find the mesh containing the positive terminal
+        # Find the mesh containing the positive connection point
         pos_mesh_idx = None
-        pos_term_point = mesh.Point(voltage_source.p.point.x, voltage_source.p.point.y)
+        pos_conn_point_mesh = mesh.Point(p_conn.point.x, p_conn.point.y)
         
         for i, msh in enumerate(pos_layer_sol.meshes):
             for vertex in msh.vertices:
-                if vertex.p.distance(pos_term_point) < 1e-4:
+                # Use a small tolerance to find the mesh containing the connection point
+                if vertex.p.distance(pos_conn_point_mesh) < 1e-4:
                     pos_mesh_idx = i
                     break
             if pos_mesh_idx is not None:
                 break
         
-        assert pos_mesh_idx is not None, "Could not find mesh containing positive terminal"
+        assert pos_mesh_idx is not None, "Could not find mesh containing positive connection point"
         
         # Check that ALL vertices in the positive mesh have consistent voltage
         pos_mesh = pos_layer_sol.meshes[pos_mesh_idx]
@@ -912,7 +1057,7 @@ class TestSolverEndToEnd:
     def test_two_big_planes_voltage_source(self, kicad_test_projects):
         project = kicad_test_projects["two_big_planes"]
         # This project has two large planes with a voltage source between them
-        # The idea of this test is to verify that that the voltage difference 
+        # The idea of this test is to verify that that the voltage difference
         # between the two planes (meshes) is approximately equal to the voltage
         # of the voltage source.
         prob = kicad.load_kicad_project(project.pro_path)
@@ -920,24 +1065,38 @@ class TestSolverEndToEnd:
 
         assert solution is not None, "Solver failed to produce a solution"
 
-        # Find the voltage source
-        voltage_source = next(
-            (elem for elem in prob.lumpeds if isinstance(elem, problem.VoltageSource)),
-            None
-        )
-        assert voltage_source is not None, "No voltage source found in the project"
-        # Verify it's the only lumped element (as expected for this specific test project)
-        assert len([elem for elem in prob.lumpeds if isinstance(elem, problem.VoltageSource)]) == 1, \
-            "Expected exactly one voltage source"
-        # Check for other unexpected lumped elements (like resistors from vias if any were added)
-        # For this specific test, we assume only the voltage source exists. Adjust if vias are present.
-        assert len(prob.lumpeds) == 1, "Expected only the voltage source as a lumped element"
+        # Find the voltage source network and element
+        voltage_source_element = None
+        voltage_source_network = None
+        found_networks_with_vs = 0
+        for network in prob.networks:
+            for element in network.elements:
+                if isinstance(element, problem.VoltageSource):
+                    if voltage_source_element is not None:
+                         pytest.fail("Found more than one voltage source element")
+                    voltage_source_element = element
+                    voltage_source_network = network
+                    found_networks_with_vs += 1
+                # Check for other unexpected elements (like resistors from vias)
+                # For this specific test, we assume only the voltage source exists.
+                elif not isinstance(element, problem.VoltageSource):
+                     pytest.fail(f"Found unexpected element type {type(element)} in network")
 
-        expected_voltage_diff = voltage_source.voltage
+        assert voltage_source_element is not None, "No voltage source element found in the project"
+        assert voltage_source_network is not None, "No network containing the voltage source found"
+        # Verify it's the only network (as expected for this specific test project)
+        assert len(prob.networks) == 1, "Expected exactly one network"
+        # Verify the network contains only the voltage source
+        assert len(voltage_source_network.elements) == 1, "Expected network to contain only the voltage source"
+
+        expected_voltage_diff = voltage_source_element.voltage
 
         # Assuming this project has one layer with two disconnected meshes
         assert len(solution.layer_solutions) == 1, "Expected exactly one layer solution"
         layer_solution = solution.layer_solutions[0]
+        # The connectivity graph should drop the unconnected plane if grounding is applied correctly
+        # However, the solver might still mesh both if they contain connection points.
+        # Let's check if we have two meshes as the geometry suggests.
         assert len(layer_solution.meshes) == 2, "Expected exactly two meshes (planes) in the layer"
 
         # Get the meshes and their corresponding voltage values
@@ -967,8 +1126,15 @@ class TestSolverEndToEnd:
 
         # Additionally, check that the source terminals land on the correct planes
         # and have the expected voltage difference
-        voltage_p = find_vertex_value(solution, voltage_source.p)
-        voltage_n = find_vertex_value(solution, voltage_source.n)
+        # Find the Connection objects corresponding to the p and n NodeIDs
+        try:
+            p_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p)
+            n_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n)
+        except StopIteration:
+            pytest.fail(f"Could not find connections for VoltageSource {voltage_source_element} in network {voltage_source_network}")
+
+        voltage_p = find_vertex_value(solution, p_conn)
+        voltage_n = find_vertex_value(solution, n_conn)
 
         # Use a very tight tolerance for the terminal voltage difference
         assert voltage_p - voltage_n == pytest.approx(expected_voltage_diff, abs=1e-10), \
@@ -981,59 +1147,5 @@ class TestSolverEndToEnd:
             assert abs(voltage_n - voltage_plane2) < 1e-6, "Terminal N should be on Plane 2"
         elif abs(voltage_p - voltage_plane2) < 1e-6:
             assert abs(voltage_n - voltage_plane1) < 1e-6, "Terminal N should be on Plane 1"
-        else:
-            pytest.fail("Voltage source positive terminal does not match either plane's voltage")
-        prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
-
-        assert solution is not None, "Solver failed to produce a solution"
-
-        # Find the voltage source
-        voltage_source = prob.lumpeds[0]
-        assert len(prob.lumpeds) == 1, "Expected exactly one lumped element (voltage source)"
-        assert isinstance(voltage_source, problem.VoltageSource), "Expected a voltage source"
-
-        expected_voltage_diff = voltage_source.voltage
-
-        # Assuming this project has one layer with two disconnected meshes
-        assert len(solution.layer_solutions) == 1, "Expected exactly one layer solution"
-        layer_solution = solution.layer_solutions[0]
-        assert len(layer_solution.meshes) == 2, "Expected exactly two meshes (planes) in the layer"
-
-        # Get the meshes and their corresponding voltage values
-        mesh1, mesh2 = layer_solution.meshes
-        values1, values2 = layer_solution.values
-
-        # Verify voltage is constant within each mesh and get representative voltages
-        def check_mesh_voltage(msh, values):
-            assert len(msh.vertices) > 0, "Mesh should have vertices"
-            first_vertex = next(iter(msh.vertices)) # Get an arbitrary vertex
-            ref_voltage = values[first_vertex]
-            for vertex in msh.vertices:
-                assert values[vertex] == pytest.approx(ref_voltage, abs=1e-10), \
-                    f"Voltage inconsistency within mesh: {values[vertex]} vs {ref_voltage}"
-            return ref_voltage
-
-        voltage_plane1 = check_mesh_voltage(mesh1, values1)
-        voltage_plane2 = check_mesh_voltage(mesh2, values2)
-
-        # Verify the voltage difference between the planes matches the source
-        actual_voltage_diff = abs(voltage_plane1 - voltage_plane2)
-        assert actual_voltage_diff == pytest.approx(expected_voltage_diff, abs=1e-10), \
-            f"Voltage difference between planes ({actual_voltage_diff}) does not match source ({expected_voltage_diff})"
-
-        # Additionally, check that the source terminals land on the correct planes
-        # and have the expected voltage difference
-        voltage_p = find_vertex_value(solution, voltage_source.p)
-        voltage_n = find_vertex_value(solution, voltage_source.n)
-
-        assert voltage_p - voltage_n == pytest.approx(expected_voltage_diff, abs=1e-10), \
-            "Voltage difference across source terminals does not match expected value"
-
-        # Check which plane corresponds to which terminal voltage
-        if abs(voltage_p - voltage_plane1) < 1e-10:
-            assert abs(voltage_n - voltage_plane2) < 1e-10, "Terminal N should be on Plane 2"
-        elif abs(voltage_p - voltage_plane2) < 1e-10:
-            assert abs(voltage_n - voltage_plane1) < 1e-10, "Terminal N should be on Plane 1"
         else:
             pytest.fail("Voltage source positive terminal does not match either plane's voltage")

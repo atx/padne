@@ -134,29 +134,38 @@ class TestViaSpecs:
         # Check for a resistor connecting F.Cu and B.Cu at (132, 100)
         result = kicad.load_kicad_project(project.pro_path)
         found = False
-        for lumped in result.lumpeds:
-            if isinstance(lumped, problem.Resistor):
-                a = lumped.a
-                b = lumped.b
-                cond1 = (
-                    a.layer.name == "F.Cu" and
-                    b.layer.name == "B.Cu" and
-                    abs(a.point.x - 132) < 1e-3 and
-                    abs(a.point.y - 100) < 1e-3 and
-                    abs(b.point.x - 132) < 1e-3 and
-                    abs(b.point.y - 100) < 1e-3
-                )
-                cond2 = (
-                    b.layer.name == "F.Cu" and
-                    a.layer.name == "B.Cu" and
-                    abs(b.point.x - 132) < 1e-3 and
-                    abs(b.point.y - 100) < 1e-3 and
-                    abs(a.point.x - 132) < 1e-3 and
-                    abs(a.point.y - 100) < 1e-3
-                )
-                if cond1 or cond2:
-                    found = True
-                    break
+        for network in result.networks:
+            for element in network.elements:
+                if isinstance(element, problem.Resistor):
+                    # Find the connections associated with this resistor within this network
+                    conn_a = next((c for c in network.connections if c.node_id == element.a), None)
+                    conn_b = next((c for c in network.connections if c.node_id == element.b), None)
+
+                    if not conn_a or not conn_b:
+                        continue # Should not happen in a valid network
+
+                    # Check if this resistor connects the expected layers at the expected point
+                    cond1 = (
+                        conn_a.layer.name == "F.Cu" and
+                        conn_b.layer.name == "B.Cu" and
+                        abs(conn_a.point.x - 132) < 1e-3 and
+                        abs(conn_a.point.y - 100) < 1e-3 and
+                        abs(conn_b.point.x - 132) < 1e-3 and
+                        abs(conn_b.point.y - 100) < 1e-3
+                    )
+                    cond2 = (
+                        conn_b.layer.name == "F.Cu" and
+                        conn_a.layer.name == "B.Cu" and
+                        abs(conn_b.point.x - 132) < 1e-3 and
+                        abs(conn_b.point.y - 100) < 1e-3 and
+                        abs(conn_a.point.x - 132) < 1e-3 and
+                        abs(conn_a.point.y - 100) < 1e-3
+                    )
+                    if cond1 or cond2:
+                        found = True
+                        break
+            if found:
+                break
         assert found, "No resistor found connecting F.Cu and B.Cu at (132, 100)"
 
     def test_4layer_via_gets_converted_to_resistor_stack(self, kicad_test_projects):
@@ -171,17 +180,23 @@ class TestViaSpecs:
 
         # Find all resistors at this location and on these layers
         found_layers = set()
-        for lumped in result.lumpeds:
-            if isinstance(lumped, problem.Resistor):
-                a = lumped.a
-                b = lumped.b
-                # Check if both endpoints are at the via location
-                if (
-                    abs(a.point.x - 118.8) < 1e-3 and abs(a.point.y - 105.9) < 1e-3 and
-                    abs(b.point.x - 118.8) < 1e-3 and abs(b.point.y - 105.9) < 1e-3
-                ):
-                    # Record the pair of layers this resistor connects
-                    found_layers.add(tuple(sorted([a.layer.name, b.layer.name])))
+        for network in result.networks:
+            for element in network.elements:
+                if isinstance(element, problem.Resistor):
+                    # Find the connections associated with this resistor within this network
+                    conn_a = next((c for c in network.connections if c.node_id == element.a), None)
+                    conn_b = next((c for c in network.connections if c.node_id == element.b), None)
+
+                    if not conn_a or not conn_b:
+                        continue
+
+                    # Check if both endpoints are at the via location
+                    if (
+                        abs(conn_a.point.x - 118.8) < 1e-3 and abs(conn_a.point.y - 105.9) < 1e-3 and
+                        abs(conn_b.point.x - 118.8) < 1e-3 and abs(conn_b.point.y - 105.9) < 1e-3
+                    ):
+                        # Record the pair of layers this resistor connects
+                        found_layers.add(tuple(sorted([conn_a.layer.name, conn_b.layer.name])))
 
         # The expected resistor stack is between each adjacent pair of layers
         expected_pairs = [
@@ -349,7 +364,7 @@ class TestStackup:
         stackup = kicad.extract_stackup_from_kicad_pcb(board)
 
         # Check that we got a valid Stackup object
-        assert isinstance(stackup, kicad.Stackup), f"Stackup extraction failed for {project_name}"
+        assert isinstance(stackup, kicad.Stackup), f"Stackup extraction failed for {project.name}"
         assert len(stackup.items) > 0, f"No stackup items found for {project.name}"
 
 
@@ -365,8 +380,8 @@ class TestLoadKicadProject:
         assert isinstance(result, problem.Problem)
         # Should have at least one layer (F.Cu)
         assert len(result.layers) >= 1
-        # Should have our two lumped elements
-        assert len(result.lumpeds) == 2
+        # Should have our two lumped elements, each in its own network
+        assert len(result.networks) == 2
 
     def test_file_not_found_handling(self):
         """Test that appropriate exceptions are raised for missing files."""
@@ -399,38 +414,63 @@ class TestLoadKicadProject:
         project = kicad_test_projects["simple_geometry"]
         result = kicad.load_kicad_project(project.pro_path)
         
-        # Find the voltage source and resistor
-        voltage_source = next(
-            l for l in result.lumpeds
-            if isinstance(l, problem.VoltageSource)
-        )
-        resistor = next(
-            l for l in result.lumpeds
-            if isinstance(l, problem.Resistor)
-        )
+        # Find the voltage source and resistor by searching through networks
+        voltage_source_element = None
+        voltage_source_connections = []
+        resistor_element = None
+        resistor_connections = []
+
+        for network in result.networks:
+            for element in network.elements:
+                if isinstance(element, problem.VoltageSource):
+                    voltage_source_element = element
+                    voltage_source_connections = network.connections
+                    break
+            if voltage_source_element:
+                break
         
+        for network in result.networks:
+            for element in network.elements:
+                if isinstance(element, problem.Resistor):
+                    resistor_element = element
+                    resistor_connections = network.connections
+                    break
+            if resistor_element:
+                break
+
+        assert voltage_source_element is not None, "Voltage source element not found"
+        assert resistor_element is not None, "Resistor element not found"
+
         # Check voltage source properties
-        assert voltage_source.voltage == 1.0
+        assert voltage_source_element.voltage == 1.0
         # Check that it's connected to component R2, pads 1 and 2
         board = pcbnew.LoadBoard(str(project.pcb_path))
         r2_1_point = kicad.find_pad_location(board, "R2", "1")[1]
         r2_2_point = kicad.find_pad_location(board, "R2", "2")[1]
+
+        # Find the connections corresponding to the voltage source terminals
+        conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
+        conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
         
-        assert (voltage_source.p.point.x == r2_1_point.x and 
-                voltage_source.p.point.y == r2_1_point.y)
-        assert (voltage_source.n.point.x == r2_2_point.x and 
-                voltage_source.n.point.y == r2_2_point.y)
+        assert (conn_p.point.x == r2_1_point.x and 
+                conn_p.point.y == r2_1_point.y)
+        assert (conn_n.point.x == r2_2_point.x and 
+                conn_n.point.y == r2_2_point.y)
         
         # Check resistor properties
-        assert resistor.resistance == 0.01
+        assert resistor_element.resistance == 0.01
         # Check that it's connected to component R3, pads 1 and 2
         r3_1_point = kicad.find_pad_location(board, "R3", "1")[1]
         r3_2_point = kicad.find_pad_location(board, "R3", "2")[1]
+
+        # Find the connections corresponding to the resistor terminals
+        conn_a = next(c for c in resistor_connections if c.node_id == resistor_element.a)
+        conn_b = next(c for c in resistor_connections if c.node_id == resistor_element.b)
         
-        assert (resistor.a.point.x == r3_1_point.x and 
-                resistor.a.point.y == r3_1_point.y)
-        assert (resistor.b.point.x == r3_2_point.x and 
-                resistor.b.point.y == r3_2_point.y)
+        assert (conn_a.point.x == r3_1_point.x and 
+                conn_a.point.y == r3_1_point.y)
+        assert (conn_b.point.x == r3_2_point.x and 
+                conn_b.point.y == r3_2_point.y)
                 
     @for_all_kicad_projects
     def test_lumped_points_inside_layers(self, project):
@@ -442,14 +482,14 @@ class TestLoadKicadProject:
         # Load the KiCad project
         kicad_problem = kicad.load_kicad_project(project.pro_path)
             
-        # For each lumped element, verify that its endpoints are inside the layers
-        for i, lumped in enumerate(kicad_problem.lumpeds):
-            for terminal in lumped.terminals:
-                point_inside = terminal.layer.shape.contains(terminal.point)
+        # For each lumped element network, verify that its connection points are inside the layers
+        for i, network in enumerate(kicad_problem.networks):
+            for j, connection in enumerate(network.connections):
+                point_inside = connection.layer.shape.contains(connection.point)
 
                 assert point_inside, (
-                    f"Project {project.name}, lumped element {lumped} "
-                    f"point {terminal.point} is not inside its layer shape {terminal.layer.name}"
+                    f"Project {project.name}, network {i}, connection {j} "
+                    f"point {connection.point} is not inside its layer shape {connection.layer.name}"
                 )
 
     @for_all_kicad_projects
@@ -477,26 +517,40 @@ class TestLoadKicadProject:
         # Load the project
         result = kicad.load_kicad_project(project.pro_path)
         
-        # Find the voltage source lumped element
-        voltage_source = next(
-            (l for l in result.lumpeds if isinstance(l, problem.VoltageSource)),
-            None
-        )
+        # Find the voltage source lumped element by searching networks
+        voltage_source_element = None
+        voltage_source_connections = []
+        for network in result.networks:
+            for element in network.elements:
+                if isinstance(element, problem.VoltageSource):
+                    voltage_source_element = element
+                    voltage_source_connections = network.connections
+                    break
+            if voltage_source_element:
+                break
         
         # Check that we found a voltage source
-        assert voltage_source is not None, "No voltage source found in the simple_via project"
+        assert voltage_source_element is not None, "No voltage source found in the simple_via project"
+
+        # Find the connections corresponding to the voltage source terminals
+        conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
+        conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
         
         # Check that one endpoint is on F.Cu at position (122, 100)
-        if voltage_source.p.layer.name == "F.Cu":
-            f_cu_point = voltage_source.p.point
-            b_cu_point = voltage_source.n.point
-            f_cu_layer = voltage_source.p.layer
-            b_cu_layer = voltage_source.n.layer
+        # and the other is on B.Cu at (142, 100)
+        if conn_p.layer.name == "F.Cu":
+            f_cu_conn = conn_p
+            b_cu_conn = conn_n
+        elif conn_n.layer.name == "F.Cu":
+            f_cu_conn = conn_n
+            b_cu_conn = conn_p
         else:
-            f_cu_point = voltage_source.n.point
-            b_cu_point = voltage_source.p.point
-            f_cu_layer = voltage_source.n.layer
-            b_cu_layer = voltage_source.p.layer
+            pytest.fail("Neither connection point p nor n was on F.Cu")
+
+        f_cu_point = f_cu_conn.point
+        b_cu_point = b_cu_conn.point
+        f_cu_layer = f_cu_conn.layer
+        b_cu_layer = b_cu_conn.layer
         
         # Verify F.Cu point is at expected coordinates (122, 100)
         assert abs(f_cu_point.x - 122) < 1e-3, f"F.Cu point X should be 122, got {f_cu_point.x}"
