@@ -331,15 +331,14 @@ def process_lumped_elements(lumpeds: list[problem.BaseLumped],
         match elem:
             case problem.Resistor(a=a, b=b, resistance=resistance):
                 # TODO: What if the conductances of the layers differ?
-                val_a = 1 / resistance / a.layer.conductance
-                val_b = 1 / resistance / b.layer.conductance
+                conductance = 1 / resistance
                 i_a = terminal_index[a]
                 i_b = terminal_index[b]
 
-                L[i_a, i_a] -= val_a
-                L[i_b, i_b] -= val_b
-                L[i_a, i_b] += val_b
-                L[i_b, i_a] += val_a
+                L[i_a, i_a] -= conductance
+                L[i_b, i_b] -= conductance
+                L[i_a, i_b] += conductance
+                L[i_b, i_a] += conductance
             case problem.VoltageSource(p=p, n=n, voltage=voltage):
                 i_v = voltage_source_i
                 voltage_source_i += 1
@@ -358,18 +357,19 @@ def process_lumped_elements(lumpeds: list[problem.BaseLumped],
                 i_f = terminal_index[f]
                 i_t = terminal_index[t]
 
-                r[i_f] = current / f.layer.conductance
-                r[i_t] = -current / t.layer.conductance
+                r[i_f] = current
+                r[i_t] = -current
 
             case problem.VoltageRegulator():
                 raise NotImplementedError("Voltage regulators are not yet supported")
 
 
 def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
+                                   conductances: list[float],
                                    vindex: VertexIndexer,
                                    L: scipy.sparse.dok_matrix) -> None:
-    for i_mesh, msh in enumerate(meshes):
-        L_msh = laplace_operator(msh)
+    for i_mesh, (msh, conductance) in enumerate(zip(meshes, conductances)):
+        L_msh = conductance * laplace_operator(msh)
 
         # Glue them together into the global matrix
         for i, j, v in zip(L_msh.row, L_msh.col, L_msh.data):
@@ -500,7 +500,13 @@ def solve(prob: problem.Problem) -> Solution:
     # Now we compute the Laplace operator for each mesh and insert it into the
     # global L matrix.
     log.info("Constructing the Laplace operators")
-    process_mesh_laplace_operators(meshes, vindex, L)
+    # TODO: I am not a big fan of just passing a raw list of conductances
+    # around like this...
+    mesh_conductances = [
+        prob.layers[mesh_index_to_layer_index[i]].conductance
+        for i in range(len(meshes))
+    ]
+    process_mesh_laplace_operators(meshes, mesh_conductances, vindex, L)
 
     # Now we need to process the lumped elements, inserting them to the L matrix
     # and the right hand side
