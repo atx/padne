@@ -742,7 +742,7 @@ def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.ge
 
 def process_via_spec(via_spec: ViaSpec,
                      layer_dict: dict[str, problem.Layer],
-                     stackup: Stackup) -> list[problem.Resistor]:
+                     stackup: Stackup) -> list[problem.Network]:
     # In theory, they should already be in physical order, but we reorder
     # them based on the Stackup just in case this ever changes
 
@@ -771,15 +771,21 @@ def process_via_spec(via_spec: ViaSpec,
 
         resistance = via_spec.compute_resistance(segment_length)
 
-        terminal_a = problem.Terminal(layer=layer_a, point=via_spec.point)
-        terminal_b = problem.Terminal(layer=layer_b, point=via_spec.point)
+        conn_a = problem.Connection(layer=layer_a, point=via_spec.point)
+        conn_b = problem.Connection(layer=layer_b, point=via_spec.point)
         via_resistor = problem.Resistor(
-            a=terminal_a,
-            b=terminal_b,
+            a=conn_a.node_id,
+            b=conn_b.node_id,
             resistance=resistance
         )
+        # TODO: Eventually, we probably want to integrate the entire stack to
+        # a single Network object
+        network = problem.Network(
+            connections=[conn_a, conn_b],
+            elements=[via_resistor]
+        )
 
-        resistor_stack.append(via_resistor)
+        resistor_stack.append(network)
 
     return resistor_stack
 
@@ -830,8 +836,8 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
 
 def create_lumped_elements_from_directives(board: pcbnew.BOARD,
                                            directives: list[Directive],
-                                           layer_dict: dict[str, problem.Layer]) -> list[problem.BaseLumped]:
-    lumpeds = []
+                                           layer_dict: dict[str, problem.Layer]) -> list[problem.Network]:
+    networks = []
     for spec in directives.lumpeds:
         a_layer_name, a_point = find_pad_location(
             board, spec.endpoint_a.designator, spec.endpoint_a.pad
@@ -849,38 +855,43 @@ def create_lumped_elements_from_directives(board: pcbnew.BOARD,
         a_layer = layer_dict[a_layer_name]
         b_layer = layer_dict[b_layer_name]
         
-        # Create Terminal objects
-        terminal_a = problem.Terminal(layer=a_layer, point=a_point)
-        terminal_b = problem.Terminal(layer=b_layer, point=b_point)
+        # Create Connection objects
+        conn_a = problem.Connection(layer=a_layer, point=a_point)
+        conn_b = problem.Connection(layer=b_layer, point=b_point)
 
         # Create the specific lumped element subclass instance
         match spec.type:
             case LumpedSpec.Type.RESISTANCE:
                 lumped_element = problem.Resistor(
-                    a=terminal_a,
-                    b=terminal_b,
+                    a=conn_a.node_id,
+                    b=conn_b.node_id,
                     resistance=spec.value
                 )
             case LumpedSpec.Type.VOLTAGE:
                 # Assuming endpoint_a is positive (p) and endpoint_b is negative (n)
                 lumped_element = problem.VoltageSource(
-                    p=terminal_a,
-                    n=terminal_b,
+                    p=conn_a.node_id,
+                    n=conn_b.node_id,
                     voltage=spec.value
                 )
             case LumpedSpec.Type.CURRENT:
                 # Assuming current flows from endpoint_a (f) to endpoint_b (t)
                 lumped_element = problem.CurrentSource(
-                    f=terminal_a,
-                    t=terminal_b,
+                    f=conn_a.node_id,
+                    t=conn_b.node_id,
                     current=spec.value
                 )
             case _:
                 # This case should ideally not be reached if parse_lumped_spec_directive is correct
                 raise ValueError(f"Unhandled lumped element type: {spec.type}")
 
-        lumpeds.append(lumped_element)
-    return lumpeds
+        network = problem.Network(
+            connections=[conn_a, conn_b],
+            elements=[lumped_element]
+        )
+
+        networks.append(network)
+    return networks
 
 
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
@@ -914,13 +925,13 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     
     # Convert LumpedSpec objects to Lumped objects
     log.info("Creating lumped elements")
-    lumpeds = create_lumped_elements_from_directives(board, directives, layer_dict)
+    networks = create_lumped_elements_from_directives(board, directives, layer_dict)
 
     # TODO: We need to do something similar but for through hole pads
     log.info("Processing vias and through hole pads")
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
     for via_spec in via_specs:
-        lumpeds.extend(process_via_spec(via_spec, layer_dict, stackup))
+        networks.extend(process_via_spec(via_spec, layer_dict, stackup))
 
     # Get all layers as a list
     # TODO: Sort them using the stackup
@@ -930,4 +941,4 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     layers = [layer_dict[name] for name in layer_names_in_order]
     
     # Return the Problem object
-    return problem.Problem(layers=layers, lumpeds=lumpeds)
+    return problem.Problem(layers=layers, networks=networks)

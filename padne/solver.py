@@ -65,35 +65,32 @@ class ConnectivityGraph:
                  for geom_i, geom in enumerate(layer.shape.geoms)]
             )
 
-        # And finally, we walk through each lumped element, figure out
-        # which Nodes are connected to each of the Terminal and consider
-        # them connected to each other if they are a lumped element.
-        # Do note that for now, only two-terminal elements are supported,
-        # but this also works for arbitrary terminal lumped elements too.
-        for element in problem.lumpeds:
-            nodes_in_this_element = []
-            for terminal in element.terminals:
-                # Find the layer index for this terminal
-                layer_i = problem.layers.index(terminal.layer)
+        # And finally, we walk through each of the networks, figure out
+        # which Nodes are connected to each of the Connection and then
+        # consider those Nodes connected to each other.
+        for network in problem.networks:
+            nodes_in_this_network = []
+            for conn in network.connections:
+                # Find the layer index for this connection
+                layer_i = problem.layers.index(conn.layer)
                 kdtree = strtrees[layer_i]
 
-                # Find the closest vertex to this terminal
-                candidates = kdtree.query(terminal.point)
+                # Find the closest vertex to this connection
+                candidates = kdtree.query(conn.point)
 
                 for geom_i in candidates:
-                    # Check if this terminal is already in the index
-                    if not terminal.layer.shape.geoms[geom_i].intersects(terminal.point):
+                    # Check if this connection is already in the index
+                    if not conn.layer.shape.geoms[geom_i].intersects(conn.point):
                         continue
                     intersecting_node = nodes_by_layers[layer_i][geom_i]
-                    nodes_in_this_element.append(intersecting_node)
+                    nodes_in_this_network.append(intersecting_node)
 
-                    if element.is_source:
+                    if network.has_source:
                         intersecting_node.is_root = True
-
-                # Wire the elements together
-                for node_a, node_b in itertools.combinations(nodes_in_this_element, 2):
-                    node_a.neighbors.add(node_b)
-                    node_b.neighbors.add(node_a)
+            # Wire the nodes together
+            for node_a, node_b in itertools.combinations(nodes_in_this_network, 2):
+                node_a.neighbors.add(node_b)
+                node_b.neighbors.add(node_a)
 
         # And finally flatten the list of nodes into a single list
         nodes = [
@@ -132,11 +129,11 @@ def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[
         List of Points to be used as mesh seed points
     """
     seed_points = []
-    for elem in problem.lumpeds:
-        # Check if this lumped element connects to our layer
-        for terminal in elem.terminals:
-            if terminal.layer == layer:
-                seed_points.append(mesh.Point(terminal.point.x, terminal.point.y))
+    for network in problem.networks:
+        for conn in network.connections:
+            # Check if this connection is on our layer
+            if conn.layer == layer:
+                seed_points.append(mesh.Point(conn.point.x, conn.point.y))
     return seed_points
 
 
@@ -252,116 +249,161 @@ def generate_meshes_for_problem(prob: problem.Problem,
     return meshes, mesh_index_to_layer_index
 
 
-def make_terminal_index(prob: problem.Problem,
-                        meshes: list[mesh.Mesh],
-                        mesh_index_to_layer_index: list[int],
-                        vindex: VertexIndexer) -> dict[problem.Terminal, int]:
-    """
-    Create a mapping from terminals to their global indices.
-    
-    Args:
-        prob: The Problem object containing layers and lumped elements
-        vindex: The VertexIndexer object containing the global indices
-        
-    Returns:
-        A dictionary mapping terminals to their global indices
-    """
-    # TODO: This function mildly cursed. We need to somehow consolidate
-    # the arguments.
+@dataclass
+class NodeIndexer:
+    node_to_global_index: dict[problem.NodeID, int] = field(default_factory=dict)
+    extra_source_to_global_index: dict[problem.BaseLumped, int] = field(default_factory=dict)
 
-    # First, construct 2D kdtree for the mesh vertices
-    layer_to_kdtree = {}
-    layer_global_index_and_vertex = {}
-    for layer_idx in range(len(prob.layers)):
+    @classmethod
+    def _construct_kdtrees(cls,
+                           prob: problem.Problem,
+                           meshes: list[mesh.Mesh],
+                           mesh_index_to_layer_index: list[int],
+                           vindex: VertexIndexer) -> tuple[dict[int, scipy.spatial.KDTree], dict]:
+        """
+        Construct a kdtree for each layer in the problem.
+        """
+        # Maps a layer to a kdtree of _all_ vertices in _all_ meshes in that layer
+        layer_to_kdtree = {}
+        # Maps a layer to a list of (global_index, vertex) tuples
+        # This can be used to retrieve the original vertex from the index that
+        # gets returned by the kdtree query
+        layer_global_index_and_vertex = {}
 
-        layer_vertices = []
-        for i_mesh, msh in enumerate(meshes):
+        for layer_i in range(len(prob.layers)):
+            layer_vertices = []
 
-            if mesh_index_to_layer_index[i_mesh] != layer_idx:
+            for mesh_i, msh in enumerate(meshes):
+                if mesh_index_to_layer_index[mesh_i] != layer_i:
+                    continue
+
+                for vertex_i, vertex in enumerate(msh.vertices):
+                    global_index = vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
+                    layer_vertices.append((global_index, vertex.p))
+            if not layer_vertices:
+                # No vertices in this layer, skip it
+                # In theory, there _could_ be a terminal that attempts to bind to
+                # an empty layer. This is going to crash weirdly after, but
+                # we are not going to handle it for now.
                 continue
 
-            for i_vertex, vertex in enumerate(msh.vertices):
-                global_index = vindex.mesh_vertex_index_to_global_index[(i_mesh, i_vertex)]
-                layer_vertices.append((global_index, vertex.p))
+            layer_global_index_and_vertex[layer_i] = layer_vertices
+            layer_to_kdtree[layer_i] = scipy.spatial.KDTree(
+                [(p.x, p.y) for _, p in layer_vertices],
+                leafsize=32,
+            )
 
-        if not layer_vertices:
-            # No vertices in this layer, skip it
-            # In theory, there _could_ be a terminal that attempts to bind to
-            # an empty layer. This is going to crash weirdly after, but
-            # we are not going to handle it for now.
-            continue
+        return layer_to_kdtree, layer_global_index_and_vertex
 
-        layer_global_index_and_vertex[layer_idx] = layer_vertices
-        layer_to_kdtree[layer_idx] = scipy.spatial.KDTree(
-            [(p.x, p.y) for _, p in layer_vertices],
-            leafsize=32
+    @classmethod
+    def create(cls,
+               prob: problem.Problem,
+               meshes: list[mesh.Mesh],
+               mesh_index_to_layer_index: list[int],
+               vindex: VertexIndexer) -> "NodeIndexer":
+
+        layer_to_kdtree, layer_global_index_and_vertex = cls._construct_kdtrees(
+            prob,
+            meshes,
+            mesh_index_to_layer_index,
+            vindex
         )
 
-    terminals = [
-        t for lumped in prob.lumpeds for t in lumped.terminals
-    ]
-    terminal_index: dict[problem.Terminal, int] = {}
+        # Contains both the Connection-related nodes and the
+        # "virtual" nodes that only live inside a Network
+        node_to_global_index = {}
 
-    for terminal in terminals:
-        # Find the layer index for this terminal
-        layer_idx = prob.layers.index(terminal.layer)
-        kdtree = layer_to_kdtree[layer_idx]
+        # First, we index the NodeIDs that are used in a Connection
+        connections = [
+            conn for network in prob.networks for conn in network.connections
+        ]
+        for conn in connections:
+            layer_i = prob.layers.index(conn.layer)
+            kdtree = layer_to_kdtree[layer_i]
 
-        # Find the closest vertex to this terminal
-        _, vertex_idx_in_kdtree = kdtree.query((terminal.point.x, terminal.point.y), k=1)
-        vertex_global_idx = layer_global_index_and_vertex[layer_idx][vertex_idx_in_kdtree][0]
+            _, vertex_idx_in_kdtree = kdtree.query((conn.point.x, conn.point.y), k=1)
+            vertex_global_idx = layer_global_index_and_vertex[layer_i][vertex_idx_in_kdtree][0]
+            node = conn.node_id
 
-        # Check if this terminal is already in the index
-        if terminal in terminal_index and terminal_index[terminal] != vertex_global_idx:
-            raise ValueError("Duplicate terminal vertices found, this should not happen.")
-        terminal_index[terminal] = vertex_global_idx
+            # Check that we are not overwriting an existing node with different
+            # vertex index. This should never happen in practice
+            if node in node_to_global_index and node_to_global_index[node] != vertex_global_idx:
+                raise ValueError("Duplicate connection vertices found, this should not happen.")
+            node_to_global_index[node] = vertex_global_idx
 
-    return terminal_index
+        # Next, we allocate new indices for all the yet to be allocated nodes
+        nodes = [
+            node for network in prob.networks for node in network.nodes
+            if node not in node_to_global_index
+        ]
+        i_at = len(vindex.global_index_to_vertex_index)
+        for node in nodes:
+            node_to_global_index[node] = i_at
+            i_at += 1
+
+        # And finally we need to allocate indices for the voltage sources
+        # (those need an extra variable)
+        extra_sources = [
+            elem for network in prob.networks for elem in network.elements
+        ]
+        extra_source_to_global_index = {}
+        for elem in extra_sources:
+            for j in range(elem.extra_variable_count):
+                extra_source_to_global_index[elem] = i_at
+                i_at += 1
+
+        return cls(
+            node_to_global_index=node_to_global_index,
+            extra_source_to_global_index=extra_source_to_global_index
+        )
 
 
-def process_lumped_elements(lumpeds: list[problem.BaseLumped],
-                            terminal_index: dict[problem.Terminal, int],
-                            voltage_source_i: int,
-                            L: scipy.sparse.dok_matrix,
-                            r: np.ndarray) -> None:
-    for elem in lumpeds:
-        # TODO: Maybe we actually want to actually scale the L matrix since different
-        # layers have different conductances anyway?
-        # It is unclear how this ends up affecting the final solution.
-        match elem:
+def stamp_network_into_system(network: problem.Network,
+                              node_indexer: NodeIndexer,
+                              L: scipy.sparse.dok_matrix,
+                              r: np.ndarray) -> None:
+    for element in network.elements:
+        match element:
             case problem.Resistor(a=a, b=b, resistance=resistance):
-                # TODO: What if the conductances of the layers differ?
-                conductance = 1 / resistance
-                i_a = terminal_index[a]
-                i_b = terminal_index[b]
+                i_a = node_indexer.node_to_global_index[a]
+                i_b = node_indexer.node_to_global_index[b]
 
-                L[i_a, i_a] -= conductance
-                L[i_b, i_b] -= conductance
-                L[i_a, i_b] += conductance
-                L[i_b, i_a] += conductance
-            case problem.VoltageSource(p=p, n=n, voltage=voltage):
-                i_v = voltage_source_i
-                voltage_source_i += 1
-
-                i_p = terminal_index[p]
-                i_n = terminal_index[n]
-
-                L[i_v, i_p] = 1
-                L[i_p, i_v] = 1
-
-                L[i_v, i_n] = -1
-                L[i_n, i_v] = -1
-
-                r[i_v] = voltage
+                # (V_b - V_a) / R term
+                L[i_a, i_a] -= 1 / resistance
+                L[i_a, i_b] += 1 / resistance
+                # (V_a - V_b) / R term
+                L[i_b, i_b] -= 1 / resistance
+                L[i_b, i_a] += 1 / resistance
             case problem.CurrentSource(f=f, t=t, current=current):
-                i_f = terminal_index[f]
-                i_t = terminal_index[t]
+                i_f = node_indexer.node_to_global_index[f]
+                i_t = node_indexer.node_to_global_index[t]
 
+                # Σ(V_i - V_f) / R =  this
                 r[i_f] = current
+                # Σ(V_i - V_t) / R = -this
                 r[i_t] = -current
+            case problem.VoltageSource(p=p, n=n, voltage=voltage):
+                i_p = node_indexer.node_to_global_index[p]
+                i_n = node_indexer.node_to_global_index[n]
+                i_v = node_indexer.extra_source_to_global_index[element]
 
-            case problem.VoltageRegulator():
-                raise NotImplementedError("Voltage regulators are not yet supported")
+                # Okay, so, here, the idea is to introduce another variable (I_v).
+                # This time, the _unknown variable is the current_
+                # and the _right hand side variable is the voltage_.
+                # So, effectively, we get these equations:
+                # V_p - V_n = voltage
+                L[i_v, i_p] = 1
+                L[i_v, i_n] = -1
+                r[i_v] = voltage
+                # add and subtract the I_v current from the equations
+                # for the i_p and i_n nodes. Imagine we placed it to the right hand
+                # side where source currents live, but since it is an unknown,
+                # it has to live in the system matrix
+                # TODO: Explain this better
+                L[i_p, i_v] = 1
+                L[i_n, i_v] = -1
+            case _:
+                raise NotImplementedError(f"Unsupported node type {element}")
 
 
 def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
@@ -431,6 +473,29 @@ def filter_lumped_elements_in_dead_regions(prob: problem.Problem,
     return filtered_lumpeds
 
 
+def filter_networks_in_dead_regions(prob: problem.Problem,
+                                    connected_layer_mesh_pairs: set[tuple[int, int]]) -> list[problem.Network]:
+    filtered_networks = []
+    for network in prob.networks:
+        has_a_dead_terminal = False
+
+        for conn in network.connections:
+            layer_idx = prob.layers.index(conn.layer)
+
+            for geom_i, geom in enumerate(conn.layer.shape.geoms):
+                if not geom.intersects(conn.point):
+                    continue
+
+                if (layer_idx, geom_i) not in connected_layer_mesh_pairs:
+                    has_a_dead_terminal = True
+                    break
+
+        if not has_a_dead_terminal:
+            filtered_networks.append(network)
+
+    return filtered_networks
+
+
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -459,31 +524,20 @@ def solve(prob: problem.Problem) -> Solution:
     # In the next step, we assign a global index to each vertex in every mesh.
     # This is needed since we need to somehow map the vertex indices to the
     # matrix indices in the final system of equations
-    log.info("Indexing vertices and terminals")
+    log.info("Indexing vertices and connections")
     vindex = VertexIndexer.create(meshes)
 
-    # And for the last index, we create a mapping from terminals (= the lumped element endpoints)
-    # to the vertices they are connected to. This could be done later, but is kept here
-    # in order to improve clarity.
-    terminal_index = make_terminal_index(prob, meshes, mesh_index_to_layer_index, vindex)
-
-    # Now we need to filter out the lumped elements that are not connected to any
-    # of the meshes that we are driving with a source.
-    filtered_lumpeds = filter_lumped_elements_in_dead_regions(
+    log.info("Processing lumped element networks")
+    # Now we need to filter out the lumped element networks that are not connected
+    # to any of the meshes that we are driving with a source.
+    filtered_networks = filter_networks_in_dead_regions(
         prob, connected_layer_mesh_pairs
     )
-    log.info(f"Filtered lumped elements: {len(filtered_lumpeds)}/{len(prob.lumpeds)}")
-
-    # Next, we need to create the matrix of the system of equations and its right hand side.
-    
-    # Since we are using modified nodal analysis, every voltage source yields
-    # an additional variable in the system of equations. Do note that this
-    # extra dimension is a _voltage_ on the right hand side and a _current_ in the
-    # unknowns space (flipped from the other variables).
-    voltage_source_count = sum(
-        1 for elem in filtered_lumpeds
-        if isinstance(elem, problem.VoltageSource)
-    )
+    log.info(f"Filtered networks: {len(filtered_networks)}/{len(prob.networks)}")
+    # Next, we construct the _internal_ system of equations for each of the
+    # network.
+    log.info("Constructing node index for networks")
+    node_indexer = NodeIndexer.create(prob, meshes, mesh_index_to_layer_index, vindex)
 
     # We are solving the equation L * v = r
     # where L is the "laplace operator",
@@ -493,7 +547,8 @@ def solve(prob: problem.Problem) -> Solution:
     # feel like as long as the solver can handle it, we can just leave everything
     # floating and let the UI figure out. This can possibly lead to some
     # numerical instability, so it needs more stress testing.
-    N = len(vindex.global_index_to_vertex_index) + voltage_source_count
+    N = len(vindex.global_index_to_vertex_index) + \
+        len(node_indexer.extra_source_to_global_index)
     L = scipy.sparse.dok_matrix((N, N), dtype=DTYPE)
     r = np.zeros(N, dtype=DTYPE)
 
@@ -508,16 +563,17 @@ def solve(prob: problem.Problem) -> Solution:
     ]
     process_mesh_laplace_operators(meshes, mesh_conductances, vindex, L)
 
-    # Now we need to process the lumped elements, inserting them to the L matrix
-    # and the right hand side
-    log.info("Processing lumped elements")
-    process_lumped_elements(
-        filtered_lumpeds,
-        terminal_index,
-        len(vindex.global_index_to_vertex_index),
-        L,
-        r
-    )
+    # Now, we process the Networks, directly inserting them in-place into the
+    # system matrix. Esthetically, it would be nicer to construct them first
+    # and then insert them, but this requires a bit of extra work with regards
+    # to handling nodes that have Connections and nodes that do not.
+    log.info("Processing networks")
+    for network in filtered_networks:
+        # First, we need to insert the network elements into the system matrix
+        # This is done in-place, so we do not need to worry about the size of the
+        # matrix. The only thing we need to worry about is that the indices are
+        # correct.
+        stamp_network_into_system(network, node_indexer, L, r)
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
