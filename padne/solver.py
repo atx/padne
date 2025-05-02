@@ -379,9 +379,9 @@ def stamp_network_into_system(network: problem.Network,
                 i_t = node_indexer.node_to_global_index[t]
 
                 # Σ(V_i - V_f) / R =  this
-                r[i_f] = current
+                r[i_f] += current
                 # Σ(V_i - V_t) / R = -this
-                r[i_t] = -current
+                r[i_t] += -current
             case problem.VoltageSource(p=p, n=n, voltage=voltage):
                 i_p = node_indexer.node_to_global_index[p]
                 i_n = node_indexer.node_to_global_index[n]
