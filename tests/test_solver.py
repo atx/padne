@@ -871,14 +871,12 @@ class TestSolverEndToEnd:
         voltage_only_networks = []
         for network in full_problem.networks:
             new_elements = []
-            is_modified = False
             for element in network.elements:
                 if element == current_source_element:
                     # Replace current source with 0A version
                     new_elements.append(problem.CurrentSource(
                         f=element.f, t=element.t, current=0.0
                     ))
-                    is_modified = True
                 else:
                     new_elements.append(element)
             # Create new network with original connections and potentially modified elements
@@ -896,14 +894,12 @@ class TestSolverEndToEnd:
         current_only_networks = []
         for network in full_problem.networks:
             new_elements = []
-            is_modified = False
             for element in network.elements:
                 if element == voltage_source_element:
                     # Replace voltage source with 0V version
                     new_elements.append(problem.VoltageSource(
                         p=element.p, n=element.n, voltage=0.0
                     ))
-                    is_modified = True
                 else:
                     new_elements.append(element)
             # Create new network with original connections and potentially modified elements
@@ -1014,7 +1010,6 @@ class TestSolverEndToEnd:
             pytest.fail(f"Could not find connections for VoltageSource {voltage_source_element} in network {voltage_source_network}")
         
         # Get reference voltages at the source connection points
-        pos_voltage = find_vertex_value(solution, p_conn)
         neg_voltage = find_vertex_value(solution, n_conn)
         expected_diff = voltage_source_element.voltage  # Should be 1.0V
         

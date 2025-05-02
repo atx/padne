@@ -67,7 +67,7 @@ class BaseLumped(Protocol):
         return False
 
     @property
-    def extra_variable_count(self) -> bool:
+    def extra_variable_count(self) -> int:
         return 0
 
 
@@ -127,7 +127,7 @@ class VoltageSource(BaseLumped):
         return True
 
     @property
-    def extra_variable_count(self) -> bool:
+    def extra_variable_count(self) -> int:
         return 1
 
 
