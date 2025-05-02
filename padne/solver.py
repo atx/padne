@@ -348,6 +348,11 @@ class NodeIndexer:
         ]
         extra_source_to_global_index = {}
         for elem in extra_sources:
+
+            if elem.extra_variable_count > 1:
+                # TODO: Store a (elem, index) pair in the global index or something
+                raise NotImplementedError("Extra variable count > 1 not supported yet")
+
             for _ in range(elem.extra_variable_count):
                 extra_source_to_global_index[elem] = i_at
                 i_at += 1
