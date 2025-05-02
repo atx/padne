@@ -198,7 +198,7 @@ class VertexIndexer:
     def create(cls, meshes: list[mesh.Mesh]) -> "VertexIndexer":
         vindex = cls()
         for mesh_idx, msh in enumerate(meshes):
-            for vertex_idx, msh in enumerate(msh.vertices):
+            for vertex_idx, _ in enumerate(msh.vertices):
                 global_index = len(vindex.global_index_to_vertex_index)
                 vindex.global_index_to_vertex_index.append((mesh_idx, vertex_idx))
                 vindex.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
@@ -348,7 +348,7 @@ class NodeIndexer:
         ]
         extra_source_to_global_index = {}
         for elem in extra_sources:
-            for j in range(elem.extra_variable_count):
+            for _ in range(elem.extra_variable_count):
                 extra_source_to_global_index[elem] = i_at
                 i_at += 1
 
