@@ -1206,8 +1206,8 @@ class TestMesher:
         square = shapely.geometry.box(0, 0, 1, 1)
         
         # Create two meshers with different quality constraints
-        low_quality_mesher = Mesher(minimum_angle=5.0, maximum_area=0.1)
-        high_quality_mesher = Mesher(minimum_angle=30.0, maximum_area=0.01)
+        low_quality_mesher = Mesher(minimum_angle=5.0, maximum_size=0.1)
+        high_quality_mesher = Mesher(minimum_angle=30.0, maximum_size=0.01)
         
         low_quality_mesh = low_quality_mesher.poly_to_mesh(square)
         high_quality_mesh = high_quality_mesher.poly_to_mesh(square)
@@ -1215,7 +1215,7 @@ class TestMesher:
         # The higher quality mesh should have more triangles due to stricter constraints
         assert len(high_quality_mesh.faces) > len(low_quality_mesh.faces)
 
-    def test_seed_points(self):
+    def test_seed_points_simple(self):
         """Test that seed points are correctly incorporated into the mesh."""
         # Create a square
         square = shapely.geometry.box(0, 0, 10, 10)
@@ -1246,7 +1246,7 @@ class TestMesher:
         square = shapely.geometry.box(0, 0, 1, 1)
         
         # Create mesh without seed points
-        mesher = Mesher(minimum_angle=20.0, maximum_area=0.1)
+        mesher = Mesher(minimum_angle=20.0, maximum_size=0.1)
         mesh_without_seeds = mesher.poly_to_mesh(square, [])
         
         # Create mesh with a seed point in the middle
@@ -1357,7 +1357,7 @@ class TestMesher:
         # Create a tiny square
         tiny_square = shapely.geometry.box(0, 0, 1e-6, 1e-6)
         
-        mesher = Mesher(maximum_area=1e-12)  # Small enough for the tiny square
+        mesher = Mesher(maximum_size=1e-7)  # Small enough for the tiny square
         mesh = mesher.poly_to_mesh(tiny_square)
         
         # Verify that something was meshed
