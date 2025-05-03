@@ -1,0 +1,55 @@
+[build-system]
+# Minimum requirements for the build system to execute.
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Core project metadata (PEP 621)
+# See: https://packaging.python.org/en/latest/specifications/declaring-project-metadata/
+name = "padne"
+version = "0.0.1"
+description = "A DC power delivery network analyzer for KiCad"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+authors = [
+    { name = "atx", email = "atx@atx.name" } # TODO: Update with your details
+]
+# keywords = ["keyword1", "keyword2"] # Optional: Add keywords
+# classifiers = [ # Optional: Trove classifiers, see https://pypi.org/classifiers/
+#     "Programming Language :: Python :: 3",
+#     "License :: OSI Approved :: MIT License",
+#     "Operating System :: OS Independent",
+# ]
+
+# Add your runtime dependencies here
+dependencies = [
+    "matplotlib>=3.0.0",
+    "numpy>=2.0.0",
+    "pygerber>=2.4.3",
+    "PySide6>=6.8.0",
+    "PyOpenGL>=3.0.0",
+    "scipy>=1.15.0",
+    "sexpdata>=1.0.2",
+    "shapely>=2.0.0",
+    "triangle>=20250106"
+]
+
+# Optional dependencies (e.g., for testing, docs, specific features)
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+]
+# docs = [
+#     "sphinx",
+# ]
+
+# Project URLs (Optional)
+# [project.urls]
+# Homepage = "https://github.com/atx/padne"
+# Issues = "https://github.com/atx/padne/issues"
+# Documentation = "https://padne.readthedocs.io" # Example
+
+# Entry points (Optional) - e.g., for command-line scripts
+# [project.scripts]
+# padne-cli = "padne.cli:main"
