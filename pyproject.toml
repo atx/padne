@@ -1,7 +1,7 @@
 [build-system]
 # Minimum requirements for the build system to execute.
-requires = ["setuptools>=61.0.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.7", "pybind11>=2.10", "setuptools>=61.0.0", "wheel"]
+build-backend = "scikit_build_core.build"
 
 [project]
 # Core project metadata (PEP 621)
@@ -32,7 +32,6 @@ dependencies = [
     "scipy>=1.15.0",
     "sexpdata>=1.0.2",
     "shapely>=2.0.0",
-    "triangle>=20250106"
 ]
 
 # Optional dependencies (e.g., for testing, docs, specific features)
@@ -53,3 +52,15 @@ test = [
 # Entry points (Optional) - e.g., for command-line scripts
 # [project.scripts]
 # padne-cli = "padne.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["padne*"]
+
+[tool.scikit-build]
+cmake.source-dir = "padne/cpp"
+
+wheel.packages = ["padne"]
+build-dir = "build/{wheel_tag}"
+
+install.strip = false

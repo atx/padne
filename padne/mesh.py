@@ -425,16 +425,9 @@ class Mesher:
     Works through the triangle library.
     """
 
-    def __init__(self, minimum_angle: float = 20.0, maximum_area: float = 0.1):
+    def __init__(self, minimum_angle: float = 20.0, maximum_size: float = 0.6):
         self.minimum_angle = minimum_angle
-        self.maximum_area = maximum_area
-
-    def _make_triangle_args(self) -> str:
-        r = ""
-        r += "p"  # Planar straight line graph
-        r += f"q{self.minimum_angle}"  # Quality mesh generation with minimum angle
-        r += f"a{self.maximum_area}"  # Imposes a maximum triangle area constraint
-        return r
+        self.maximum_size = maximum_size
 
     def poly_to_mesh(self,
                      poly: shapely.geometry.Polygon,
@@ -448,17 +441,31 @@ class Mesher:
         Returns:
             A Mesh object representing the triangulated polygon
         """
-        import triangle as tr
+        import padne._cgal as cgal
 
         # This serves to deduplicate vertices.
         # In theory, deduplication should not be needed
         vertices = []
         segments = []
+        seeds = [
+            (seed_point.x, seed_point.y)
+            for seed_point in seed_points
+        ]
+        seeds.append(poly.representative_point().coords[0])
 
         def insert_linear_ring(ring):
             assert ring.is_closed
             if not ring.is_ccw:
                 ring = shapely.geometry.LinearRing(reversed(ring.coords))
+            # Simplify the ring to remove almost-duplicate points
+            # This is unfortunately a "bug" in pygerber, where drawing
+            # a circle is implemented by drawing an arbitrary degree arc,
+            # which sometimes results to the "starting" and "ending" points
+            # not being exactly the same such as
+            # (-1.0, 0.0) vs  (-1.0, 1.2246467991473532e-16)
+            # Again, it would be nice to fix this in pygerber, but that
+            # is a task for another day...
+            ring = ring.simplify(1e-4)
             # Add the first point
             i_first = len(vertices)
 
@@ -472,46 +479,14 @@ class Mesher:
 
         insert_linear_ring(poly.exterior)
 
-        hole_points = []
         for hole in poly.interiors:
-            # Note that we need to convert the LinearRing into a Polygon here.
-            # Otherwise representative_point returns a point that lies _on the linear ring_,
-            # not within the space enclosed by the ring!
-            rep_point = shapely.geometry.Polygon(hole).representative_point()
-            hole_points.append(rep_point.coords[0])
-
             insert_linear_ring(hole)
 
-        # Insert the seed points to the vertices list
-        # Those points are not part of any segment
-        vertices_set = set(vertices)
-        for seed_point in seed_points:
-            pt = (seed_point.x, seed_point.y)
-            # We have to check we are not passing duplicate points to triangle.
-            # This causes a malformed mesh to be generated at best and a segfault at worst.
-            # TODO: It seems that even a 1e-100 difference in coordinates is sufficient
-            # to prevent this bug. Not quite sure whether we should allow that though
-            if pt in vertices_set:
-                continue
-            vertices.append(pt)
-            # This is to make sure duplicate seed points are also handled
-            vertices_set.add(pt)
-
-        tri_input = {
-            "vertices": np.array(vertices),
-            "segments": np.array(segments),
-        }
-
-        if hole_points:
-            # There is a bug in the library that makes it crash when
-            # an empty holes array is passed
-            tri_input["holes"] = np.array(hole_points)
-
-        tri_output = tr.triangulate(tri_input, self._make_triangle_args())
+        cgal_output = cgal.mesh(self, vertices, segments, seeds)
 
         mesh = Mesh.from_triangle_soup(
-            [Point(*p) for p in tri_output['vertices']],
-            tri_output['triangles']
+            [Point(*p) for p in cgal_output['vertices']],
+            cgal_output['triangles']
         )
 
         return mesh
