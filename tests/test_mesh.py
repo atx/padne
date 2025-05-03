@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 import shapely.geometry
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
@@ -1087,6 +1088,55 @@ class TestZeroForm:
             result = zf1 - zf2
 
 
+def assert_mesh_minimum_angle(mesh, min_angle):
+   """Check that all faces have angles greater or equal to min_angle."""
+   min_angle_rad = np.radians(min_angle)
+   tolerance = 1e-6  # Tolerance for floating point comparisons
+
+   for face in mesh.faces:
+       vertices = list(face.vertices)
+       assert len(vertices) == 3, "Face is not a triangle"
+
+       p0, p1, p2 = vertices[0].p, vertices[1].p, vertices[2].p
+
+       # Calculate vectors for the sides
+       v01 = p1 - p0
+       v02 = p2 - p0
+       v12 = p2 - p1
+
+       # Calculate lengths of sides
+       len01 = abs(v01)
+       len02 = abs(v02)
+       len12 = abs(v12)
+
+       # Avoid division by zero for degenerate triangles (should not happen in valid mesh)
+       if len01 < tolerance or len02 < tolerance or len12 < tolerance:
+           # Or raise an error, or handle as appropriate
+           continue
+
+       # Calculate angles using dot product formula: cos(theta) = (a . b) / (|a| * |b|)
+       # Angle at p0
+       cos_angle0 = v01.dot(v02) / (len01 * len02)
+       # Clamp value to [-1, 1] due to potential floating point errors
+       cos_angle0 = np.clip(cos_angle0, -1.0, 1.0)
+       angle0 = np.arccos(cos_angle0)
+
+       # Angle at p1 (using vectors v10 = -v01 and v12)
+       cos_angle1 = (-v01).dot(v12) / (len01 * len12)
+       cos_angle1 = np.clip(cos_angle1, -1.0, 1.0)
+       angle1 = np.arccos(cos_angle1)
+
+       # Angle at p2 (using vectors v20 = -v02 and v21 = -v12)
+       cos_angle2 = (-v02).dot(-v12) / (len02 * len12)
+       cos_angle2 = np.clip(cos_angle2, -1.0, 1.0)
+       angle2 = np.arccos(cos_angle2)
+
+       # Check if all angles meet the minimum requirement
+       assert angle0 >= min_angle_rad - tolerance, f"Angle {np.degrees(angle0)} at vertex {p0} is less than {min_angle}"
+       assert angle1 >= min_angle_rad - tolerance, f"Angle {np.degrees(angle1)} at vertex {p1} is less than {min_angle}"
+       assert angle2 >= min_angle_rad - tolerance, f"Angle {np.degrees(angle2)} at vertex {p2} is less than {min_angle}"
+
+
 class TestMesher:
 
     def test_simple_square(self):
@@ -1102,6 +1152,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert len(mesh.halfedges) > 0
+        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)  # Check minimum angle constraint
         
         # A simple square should be triangulated into at least 2 triangles
         assert len(mesh.faces) >= 2
@@ -1120,6 +1171,7 @@ class TestMesher:
         # A simple triangle might be represented as one face
         # or more depending on quality constraints
         assert len(mesh.faces) >= 1
+        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
         
         # Check that all vertices are within the polygon bounds
         for _, vertex in mesh.vertices.items():
@@ -1147,6 +1199,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 0
+        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
 
         for vertex in mesh.vertices:
             x = vertex.p.x
@@ -1169,6 +1222,7 @@ class TestMesher:
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
+        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
 
         for vertex in mesh.vertices:
             x = vertex.p.x
@@ -1195,6 +1249,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
+        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
 
         # Check that all vertices are contained within the original polygon
         for vertex in mesh.vertices:
@@ -1211,6 +1266,9 @@ class TestMesher:
         
         low_quality_mesh = low_quality_mesher.poly_to_mesh(square)
         high_quality_mesh = high_quality_mesher.poly_to_mesh(square)
+
+        assert_mesh_minimum_angle(low_quality_mesh, low_quality_mesher.minimum_angle)
+        assert_mesh_minimum_angle(high_quality_mesh, high_quality_mesher.minimum_angle)
         
         # The higher quality mesh should have more triangles due to stricter constraints
         assert len(high_quality_mesh.faces) > len(low_quality_mesh.faces)
@@ -1342,6 +1400,7 @@ class TestMesher:
         assert mesh.euler_characteristic() == 1
         
         # Verify that all mesh triangles are valid
+        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
         
@@ -1364,6 +1423,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
+        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
 
     def test_seed_points_in_polygon_vertex(self):
         seed_points = [
