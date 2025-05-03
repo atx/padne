@@ -82,6 +82,7 @@ def for_all_kicad_projects(_func=None, *, include=None, exclude=None):
             if (include is None or project.name in include)
                 and (exclude is None or project.name not in exclude)
         ]
+        filtered_projects.sort(key=lambda x: x.name)
 
         @pytest.mark.parametrize(
             "project",
