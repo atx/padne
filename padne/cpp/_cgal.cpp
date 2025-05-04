@@ -32,37 +32,29 @@ typedef CGAL::Delaunay_mesher_2<CDT, Criteria> Mesher;
 typedef CDT::Vertex_handle Vertex_handle;
 typedef CDT::Point Point;
 
-py::dict mesh(const py::object& pymesher,
-              const std::vector<std::pair<double, double>>& vertices,
-              const std::vector<std::pair<int, int>>& segments,
-              const std::vector<std::pair<double, double>>& seeds) {
-    py::dict result;
-
-    // Redirect via python during the scope of this function
-    py::scoped_ostream_redirect stream_redirect;
-
-    CDT cdt;
+static void setup_cdt(CDT& cdt,
+                      const std::vector<std::pair<double, double>>& vertices,
+                      const std::vector<std::pair<int, int>>& segments,
+                      const std::vector<std::pair<double, double>>& seeds) {
     std::vector<Vertex_handle> vertex_handles;
-
     // First, we insert all the vertices into the cdt object, grabbing the handles
     // along the way
     for (const auto& vertex : vertices) {
-        Point p(vertex.first, vertex.second);
-        Vertex_handle vh = cdt.insert(p);
+        auto vh = cdt.insert(Point(vertex.first, vertex.second));
         vertex_handles.push_back(vh);
     }
     // Next, we insert the constraints
     for (const auto& segment : segments) {
-        int start_index = segment.first;
-        int end_index = segment.second;
+        int i_start = segment.first;
+        int i_end = segment.second;
 
-        if (start_index < 0 || start_index >= vertex_handles.size() ||
-            end_index < 0 || end_index >= vertex_handles.size()) {
+        if (i_end < 0 || i_start >= vertex_handles.size() ||
+            i_end < 0 || i_end >= vertex_handles.size()) {
             throw std::runtime_error("Segment indices out of bounds.");
         }
 
-        Vertex_handle start_vh = vertex_handles[start_index];
-        Vertex_handle end_vh = vertex_handles[end_index];
+        auto start_vh = vertex_handles[i_start];
+        auto end_vh = vertex_handles[i_end];
 
         cdt.insert_constraint(start_vh, end_vh);
     }
@@ -71,20 +63,21 @@ py::dict mesh(const py::object& pymesher,
     // We do this before creating the Mesher object, but I am not sure
     // if that is needed
     for (const auto& seed : seeds) {
-        Point p(seed.first, seed.second);
-        cdt.insert(p);
+        cdt.insert(Point(seed.first, seed.second));
     }
+}
 
-    Mesher mesher(cdt);
 
-    // Get the minimum_angle from the pymesher object
+void setup_mesher(Mesher& mesher,
+                  const py::object& pymesher,
+                  const std::vector<std::pair<double, double>>& seeds) {
     // TODO: We probably want to have the b value in the python object directly...
     auto minimum_angle = pymesher.attr("minimum_angle").cast<float>();
     auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
     auto b = 1 / (4*B*B);
     auto maximum_size = pymesher.attr("maximum_size").cast<float>();
     mesher.set_criteria(Criteria(b, maximum_size));
-
+    
     // Now we insert the seeds
     // Theoretically, it should not be necessary to insert _all_ the seeds,
     // since we have a single connected component. The python code
@@ -96,12 +89,11 @@ py::dict mesh(const py::object& pymesher,
         seed_points.push_back(p);
     }
     mesher.set_seeds(seed_points.begin(), seed_points.end(), true);
-    mesher.refine_mesh();
+}
 
-    // Okay, so for the result, we return
-    // result["vertices"], which is a list of tuples (x, y) from the triangulation
-    // result["triangles"] which is a list of tuples (v1, v2, v3) where v1, v2, and v3 are the indices of the vertices
-    
+
+std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
+{
     py::list py_vertices;
     std::map<Vertex_handle, int> vertex_index_map;
     for (auto it = cdt.finite_vertices_begin(); it != cdt.finite_vertices_end(); ++it) {
@@ -128,9 +120,35 @@ py::dict mesh(const py::object& pymesher,
         py_triangles.append(triangle);
     }
 
+    return std::make_pair(py_vertices, py_triangles);
+}
+
+
+py::dict mesh(const py::object& pymesher,
+              const std::vector<std::pair<double, double>>& vertices,
+              const std::vector<std::pair<int, int>>& segments,
+              const std::vector<std::pair<double, double>>& seeds) {
+
+    // Redirect via python during the scope of this function
+    py::scoped_ostream_redirect stream_redirect;
+
+    CDT cdt;
+    setup_cdt(cdt, vertices, segments, seeds);
+
+    Mesher mesher(cdt);
+    setup_mesher(mesher, pymesher, seeds);
+
+    mesher.refine_mesh();
+
+    // Okay, so for the result, we return
+    // result["vertices"], which is a list of tuples (x, y) from the triangulation
+    // result["triangles"] which is a list of tuples (v1, v2, v3) where v1, v2, and v3 are the indices of the vertices
+
+    auto [py_vertices, py_triangles] = convert_meshing_result_to_python(cdt);
+
+    py::dict result;
     result["vertices"] = py_vertices;
     result["triangles"] = py_triangles;
-
     return result;
 }
 
@@ -148,8 +166,6 @@ PYBIND11_MODULE(_cgal, m) {
            :toctree: _generate
     )pbdoc";
 
-    // Define functions and classes here later, e.g.:
-    // m.def("my_function", &my_function, "Does something amazing");
     m.def("mesh", &mesh, R"pbdoc(
         Meshes a set of points and segments using CGAL.
         Args:
