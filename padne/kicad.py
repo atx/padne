@@ -242,6 +242,17 @@ class LumpedSpec:
 
 
 @dataclass(frozen=True)
+class ConsumerSpec:
+    """
+    Specifies a star-topology consumer.
+    """
+    endpoints_f: list[LumpedSpec.Endpoint]
+    endpoints_t: list[LumpedSpec.Endpoint]
+    current: float
+    resistance: float
+
+
+@dataclass(frozen=True)
 class ViaSpec:
     """
     This class contains material parameters for a via.
@@ -366,6 +377,7 @@ class Directives:
     # Surface resistivity
     # TODO: Add default value for 1oz copper
     lumpeds: list[LumpedSpec]
+    consumers: list[ConsumerSpec]
 
 
 def parse_lumped_spec_directive(directive: Directive) -> LumpedSpec:
@@ -412,18 +424,39 @@ def parse_lumped_spec_directive(directive: Directive) -> LumpedSpec:
     )
 
 
+def parse_consumer_spec_directive(directive: Directive) -> ConsumerSpec:
+    resistance = units.Value.parse(directive.params.get("r", "0.01"))
+    current = units.Value.parse(directive.params["i"])
+    endpoints_f = [
+        parse_endpoint(ep) for ep in directive.params.get("f", "").split(",")
+    ]
+    endpoints_t = [
+        parse_endpoint(ep) for ep in directive.params.get("t", "").split(",")
+    ]
+    return ConsumerSpec(
+        resistance=resistance.value,
+        current=current.value,
+        endpoints_f=endpoints_f,
+        endpoints_t=endpoints_t
+    )
+
+
 def process_directives(directives: list[Directive]) -> Directives:
     lumpeds = []
+    consumers = []
 
     for directive in directives:
         match directive.name:
             case "VOLTAGE" | "CURRENT" | "RESISTANCE":
                 lumped = parse_lumped_spec_directive(directive)
                 lumpeds.append(lumped)
+            case "CONSUMER":
+                consumer = parse_consumer_spec_directive(directive)
+                consumers.append(consumer)
             case _:
                 warnings.warn(f"Unknown directive: {directive.key}")
 
-    return Directives(lumpeds=lumpeds)
+    return Directives(lumpeds=lumpeds, consumers=consumers)
 
 
 def parse_value(value_str: str) -> float:
@@ -895,6 +928,47 @@ def create_lumped_elements_from_directives(board: pcbnew.BOARD,
     return networks
 
 
+def create_consumer_from_spec(board: pcbnew.BOARD,
+                              spec: ConsumerSpec,
+                              layer_dict: dict[str, problem.Layer]) -> problem.Network:
+    node_f = problem.NodeID()
+    node_t = problem.NodeID()
+    elements = []
+    connections = []
+    current_source = problem.CurrentSource(
+        f=node_f,
+        t=node_t,
+        current=spec.current
+    )
+    elements.append(current_source)
+    for ep in spec.endpoints_f:
+        layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+        layer = layer_dict[layer_name]
+        conn = problem.Connection(layer=layer, point=point)
+        connections.append(conn)
+        elements.append(problem.Resistor(
+            a=node_f,
+            b=conn.node_id,
+            resistance=spec.resistance
+        ))
+
+    for ep in spec.endpoints_t:
+        layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+        layer = layer_dict[layer_name]
+        conn = problem.Connection(layer=layer, point=point)
+        connections.append(conn)
+        elements.append(problem.Resistor(
+            a=node_t,
+            b=conn.node_id,
+            resistance=spec.resistance
+        ))
+
+    return problem.Network(
+        elements=elements,
+        connections=connections
+    )
+
+
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
@@ -927,6 +1001,9 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Convert LumpedSpec objects to Lumped objects
     log.info("Creating lumped elements")
     networks = create_lumped_elements_from_directives(board, directives, layer_dict)
+    for consumer_spec in directives.consumers:
+        network = create_consumer_from_spec(board, consumer_spec, layer_dict)
+        networks.append(network)
 
     # TODO: We need to do something similar but for through hole pads
     log.info("Processing vias and through hole pads")

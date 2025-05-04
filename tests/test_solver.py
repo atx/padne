@@ -1144,3 +1144,78 @@ class TestSolverEndToEnd:
             assert abs(voltage_n - voltage_plane1) < 1e-6, "Terminal N should be on Plane 1"
         else:
             pytest.fail("Voltage source positive terminal does not match either plane's voltage")
+
+    def test_simple_consumer(self, kicad_test_projects):
+        project = kicad_test_projects["simple_consumer"]
+        # This project is designed to test the CONSUMER directive. The idea is that
+        # We have the following test points:
+        # TP6 @ 100,50
+        # TP7 @ 120,50
+        # TP8 @ 140,50
+
+        # TP2 @ 100,150
+        # TP3 @ 120,150
+        # TP4 @ 140,150
+
+        # TP5 @ 180,50
+        # TP1 @ 180,150
+
+        # There is a consumer pushing 3A from
+        # TP2,TP3,TP4 straight into TP1
+        # Together, these are flowing via a trace from TP1 to TP5
+        # and from TP5 back into the TP2,TP3,TP4
+        # We test that it works by checking that the voltage between
+        # TP6 and TP2
+        # TP7 and TP3
+        # TP8 and TP4
+        # is 0.24 (1A split)
+        # and that the voltage between
+        # TP1 and TP5
+        # is 3*0.24 (since it is shared)
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob)
+
+        assert solution is not None, "Solver failed to produce a solution"
+
+        # Find the connection objects for each test point
+        # For this specific test, we know the test points are at these specific coordinates
+        expected_coords = {
+            "TP1": (180, 150), "TP2": (100, 150), "TP3": (120, 150), "TP4": (140, 150),
+            "TP5": (180, 50), "TP6": (100, 50), "TP7": (120, 50), "TP8": (140, 50),
+        }
+
+        # Find connections that match these coordinates
+        tp_connections = {}
+        
+        for network in prob.networks:
+            for conn in network.connections:
+                # Find which test point this connection corresponds to
+                for tp_name, coords in expected_coords.items():
+                    if abs(conn.point.x - coords[0]) < 1e-3 and abs(conn.point.y - coords[1]) < 1e-3:
+                        tp_connections[tp_name] = conn
+                        break
+        
+        # Ensure we found all test points
+        assert len(tp_connections) == 8, f"Did not find all test points. Found: {list(tp_connections.keys())}"
+
+        # Get voltages at each test point
+        tp_voltages = {name: find_vertex_value(solution, conn) for name, conn in tp_connections.items()}
+
+        # Perform assertions
+        # Voltage drop across individual 1A paths (TP2-TP6, TP3-TP7, TP4-TP8)
+        # Assuming current flows from TP{2,3,4} towards TP1, and returns via TP5 towards TP{6,7,8}
+        # The voltage at TP{2,3,4} should be higher than TP{6,7,8} respectively.
+        # The resistance of the path segment is 0.24 Ohm (from project description).
+        # V_drop = I * R = 1A * 0.24 Ohm = 0.24V
+        expected_individual_drop = 0.24
+        assert tp_voltages["TP6"] - tp_voltages["TP2"] == pytest.approx(expected_individual_drop, abs=0.01)
+        assert tp_voltages["TP7"] - tp_voltages["TP3"] == pytest.approx(expected_individual_drop, abs=0.01)
+        assert tp_voltages["TP8"] - tp_voltages["TP4"] == pytest.approx(expected_individual_drop, abs=0.01)
+
+        # Voltage drop across the shared 3A path (TP1-TP5)
+        # Current flows from TP1 towards TP5. V(TP1) should be higher than V(TP5).
+        # V_drop = I_total * R = 3A * 0.24 Ohm = 0.72V
+        expected_shared_drop = 3 * 0.24
+        assert tp_voltages["TP1"] - tp_voltages["TP5"] == pytest.approx(expected_shared_drop, abs=0.02), \
+            f"Voltage drop TP1-TP5: {tp_voltages['TP1'] - tp_voltages['TP5']:.3f}V vs expected {expected_shared_drop:.3f}V"
+
