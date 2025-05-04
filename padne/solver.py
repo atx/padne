@@ -253,6 +253,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
 class NodeIndexer:
     node_to_global_index: dict[problem.NodeID, int] = field(default_factory=dict)
     extra_source_to_global_index: dict[problem.BaseLumped, int] = field(default_factory=dict)
+    internal_node_count: int = 0
 
     @classmethod
     def _construct_kdtrees(cls,
@@ -336,6 +337,7 @@ class NodeIndexer:
             node for network in prob.networks for node in network.nodes
             if node not in node_to_global_index
         ]
+        internal_node_count = len(nodes)
         i_at = len(vindex.global_index_to_vertex_index)
         for node in nodes:
             node_to_global_index[node] = i_at
@@ -359,7 +361,8 @@ class NodeIndexer:
 
         return cls(
             node_to_global_index=node_to_global_index,
-            extra_source_to_global_index=extra_source_to_global_index
+            extra_source_to_global_index=extra_source_to_global_index,
+            internal_node_count=internal_node_count
         )
 
 
@@ -553,6 +556,7 @@ def solve(prob: problem.Problem) -> Solution:
     # floating and let the UI figure out. This can possibly lead to some
     # numerical instability, so it needs more stress testing.
     N = len(vindex.global_index_to_vertex_index) + \
+        node_indexer.internal_node_count + \
         len(node_indexer.extra_source_to_global_index)
     L = scipy.sparse.dok_matrix((N, N), dtype=DTYPE)
     r = np.zeros(N, dtype=DTYPE)
