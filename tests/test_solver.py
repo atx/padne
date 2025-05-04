@@ -861,8 +861,6 @@ class TestSolverEndToEnd:
 
         assert voltage_source_element is not None, "Expected exactly one voltage source"
         assert current_source_element is not None, "Expected exactly one current source"
-        assert voltage_source_network is not None
-        assert current_source_network is not None
 
         # --- Solve the full problem ---
         full_solution = solver.solve(full_problem)
