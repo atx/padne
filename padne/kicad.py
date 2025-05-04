@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Iterator
 
-from . import problem
+from . import problem, units
 
 
 log = logging.getLogger(__name__)
@@ -399,7 +399,8 @@ def parse_lumped_spec_directive(directive: Directive) -> LumpedSpec:
         case _:
             raise ValueError(f"Unknown directive type: {directive.name}")
 
-    value = parse_value(directive.params[value_name])
+    # TODO: Check that the unit string is valid
+    value = units.Value.parse(directive.params[value_name])
     ep_a = parse_endpoint(directive.params[a_name])
     ep_b = parse_endpoint(directive.params[b_name])
 
@@ -407,7 +408,7 @@ def parse_lumped_spec_directive(directive: Directive) -> LumpedSpec:
         endpoint_a=ep_a,
         endpoint_b=ep_b,
         type=type_enum,
-        value=value
+        value=value.value
     )
 
 
