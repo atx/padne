@@ -458,29 +458,6 @@ def produce_layer_solutions(layers: list[problem.Layer],
     return layer_solutions
 
 
-def filter_lumped_elements_in_dead_regions(prob: problem.Problem,
-                                           connected_layer_mesh_pairs: set[tuple[int, int]]) -> list[problem.BaseLumped]:
-
-    filtered_lumpeds = []
-    for lumped in prob.lumpeds:
-        has_a_dead_terminal = False
-
-        for terminal in lumped.terminals:
-            layer_idx = prob.layers.index(terminal.layer)
-            for geom_i, geom in enumerate(terminal.layer.shape.geoms):
-                if not geom.intersects(terminal.point):
-                    continue
-
-                if (layer_idx, geom_i) not in connected_layer_mesh_pairs:
-                    has_a_dead_terminal = True
-                    break
-
-        if not has_a_dead_terminal:
-            filtered_lumpeds.append(lumped)
-
-    return filtered_lumpeds
-
-
 def filter_networks_in_dead_regions(prob: problem.Problem,
                                     connected_layer_mesh_pairs: set[tuple[int, int]]) -> list[problem.Network]:
     filtered_networks = []
