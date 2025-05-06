@@ -224,7 +224,10 @@ def generate_meshes_for_problem(prob: problem.Problem,
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
-        seed_points_in_layer = collect_seed_points(prob, layer)
+        seed_points_in_layer = [
+            shapely.geometry.Point(p.x, p.y)
+            for p in collect_seed_points(prob, layer)
+        ]
         for geom_i, geom in enumerate(layer.shape.geoms):
             if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                 # This layer is not connected to any lumped elements, skip it
@@ -234,7 +237,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
             # This layer is connected to at least one lumped element, so we need to mesh it
             seed_points_in_geom = [
                 p for p in seed_points_in_layer
-                if layer.shape.geoms[geom_i].intersects(shapely.geometry.Point(p.x, p.y))
+                if layer.shape.geoms[geom_i].intersects(p)
             ]
 
             assert seed_points_in_geom, "No seed points in this geometry, this should not happen"
