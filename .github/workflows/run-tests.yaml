@@ -1,0 +1,42 @@
+name: Build and Test
+
+on: [push, pull_request]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-full python3-dev python3-pip libcgal-dev git libegl1 libegl1-mesa-dev
+
+    - name: Add KiCad PPA and install KiCad
+      run: |
+        sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends kicad
+
+    - name: Install pygerber from git
+      run: |
+        pip3 install --break-system-packages --user git+https://github.com/Argmaster/pygerber
+
+    - name: Build C++ part of the repository
+      run: |
+        pip3 install --break-system-packages --user -e .[test] -v
+
+    - name: Run tests with pytest and generate report
+      run: |
+        python3 -m pytest --junitxml=pytest-results.xml
+
+    - name: Publish Test Results
+      uses: dorny/test-reporter@v1
+      if: always() # Always run this step to publish results, even if tests fail
+      with:
+        name: Pytest Results
+        path: pytest-results.xml
+        reporter: java-junit
+        fail-on-error: 'true'
