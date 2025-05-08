@@ -50,8 +50,8 @@ test = [
 # Documentation = "https://padne.readthedocs.io" # Example
 
 # Entry points (Optional) - e.g., for command-line scripts
-# [project.scripts]
-# padne-cli = "padne.cli:main"
+[project.scripts]
+padne = "padne.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

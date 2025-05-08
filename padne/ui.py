@@ -931,14 +931,9 @@ def configure_opengl():
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main():
+def main(args):
     """Main entry point for the UI application."""
-    # Check command line arguments
-    if len(sys.argv) < 2:
-        print("Usage: python -m padne.ui <path_to_kicad_pro_file>")
-        return 1
-    
-    kicad_pro_path = sys.argv[1]
+    kicad_pro_path = args.kicad_pro_file
     
     # Configure OpenGL
     configure_opengl()
@@ -948,7 +943,3 @@ def main():
     window = MainWindow(kicad_pro_path)
     window.show()
     return app.exec()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
