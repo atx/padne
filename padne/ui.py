@@ -764,7 +764,7 @@ class ColorScaleWidget(QWidget):
         
         # Delta label at the top of the stretch area
         self.delta_label = QLabel(f"Δ = 0 {self.unit}")  # Placeholder text
-        self.delta_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.delta_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.delta_label)
         
         # This stretch is where we'll paint our gradient
@@ -772,7 +772,7 @@ class ColorScaleWidget(QWidget):
         
         # Range label at the bottom showing absolute min/max values
         self.range_label = QLabel(f"Range: 0 {self.unit} - 0 {self.unit}")  # Placeholder text
-        self.range_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.range_label.setAlignment(Qt.AlignCenter)
         # Make range label slightly smaller font
         font = self.range_label.font()
         font.setPointSize(font.pointSize() - 1)
@@ -801,7 +801,7 @@ class ColorScaleWidget(QWidget):
         max_str = pretty_format_si_number(self.v_max, self.unit)
         
         self.delta_label.setText(f"Δ = {delta_str}")
-        self.range_label.setText(f"({min_str} → {max_str})")  # Show absolute range context
+        self.range_label.setText(f"{max_str}\n  ↑\n{min_str}")
     
     def paintEvent(self, event):
         """Paint the color gradient scale."""
