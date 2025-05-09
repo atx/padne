@@ -13,6 +13,12 @@ def parse_args():
         type=Path,
         help="Path to the input file",
     )
+    # TODO: Improve the UX here
+    parser_gui.add_argument(
+        "--just-solve",
+        action="store_true",
+        help="Exit immediately after producing the solution. Useful for profiling. ",
+    )
 
     return parser.parse_args()
 

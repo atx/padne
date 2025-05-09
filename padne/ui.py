@@ -857,7 +857,7 @@ class ColorScaleWidget(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, kicad_pro_path):
+    def __init__(self, kicad_pro_path, just_solve=False):
         super().__init__()
 
         self.setWindowTitle("PDN Simulator Viewer")
@@ -889,6 +889,10 @@ class MainWindow(QMainWindow):
         # Load and mesh the KiCad project
         self._configureLogging()
         self.loadProject(kicad_pro_path)
+        if just_solve:
+            # TODO: Maybe do not even start the Qt event loop?
+            import sys
+            sys.exit(1)
 
     def _configureLogging(self):
         logging.basicConfig(
@@ -940,6 +944,6 @@ def main(args):
     
     # Create and run application
     app = QApplication(sys.argv)
-    window = MainWindow(kicad_pro_path)
+    window = MainWindow(kicad_pro_path, args.just_solve)
     window.show()
     return app.exec()
