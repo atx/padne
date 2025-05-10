@@ -20,6 +20,8 @@ from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QToolBar
 
+import shapely.geometry # Add this import
+
 from . import kicad, mesh, solver
 
 
@@ -464,7 +466,8 @@ class MeshViewer(QOpenGLWidget):
 
     def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
         """
-        Find the value at the vertex closest to the specified world coordinates.
+        Find the value at the vertex closest to the specified world coordinates,
+        only if the world coordinates are within the layer's defined geometries.
         
         Args:
             world_x: X-coordinate in world space
@@ -472,52 +475,63 @@ class MeshViewer(QOpenGLWidget):
             
         Returns:
             The value at the nearest vertex, or None if no vertices are found
+            or if the point is outside the layer's geometries.
         """
         if not self.solution or not self.visible_layers or self.current_layer_index >= len(self.visible_layers):
             return None
 
-        # TODO: Eventually, we want to have a spatial index for this
+        current_layer_name = self.visible_layers[self.current_layer_index]
+
+        # Find the corresponding problem.Layer for the point-in-polygon check
+        problem_layer_for_check: Optional[solver.problem.Layer] = None 
+        layer_index_for_solution = -1
+
+        for idx, p_layer in enumerate(self.solution.problem.layers):
+            if p_layer.name == current_layer_name:
+                problem_layer_for_check = p_layer
+                layer_index_for_solution = idx # Store index for consistent LayerSolution access
+                break
         
-        # Get current layer name
-        current_layer = self.visible_layers[self.current_layer_index]
-        
-        # Check if this layer has rendered meshes
-        if current_layer not in self.rendered_meshes:
+        if not problem_layer_for_check:
+            logging.debug(f"Layer {current_layer_name} not found in problem definition.")
             return None
+
+        # Perform point-in-polygon check using Shapely
+        shapely_point = shapely.geometry.Point(world_x, world_y)
         
-        # Create a point at the specified world coordinates
+        if not problem_layer_for_check.shape.contains(shapely_point):
+            logging.debug(f"Point ({world_x}, {world_y}) is outside defined shape for layer {current_layer_name}.")
+            return None # Click is outside the defined MultiPolygon for this layer
+
+        # If the point is inside, proceed to find the nearest vertex value
         target_point = mesh.Point(world_x, world_y)
         
-        # Initialize variables to track the closest vertex
         closest_distance = float('inf')
         closest_value = None
         
-        # Find the corresponding layer solution
-        layer_index = None
-        for i, layer in enumerate(self.solution.problem.layers):
-            if layer.name == current_layer:
-                layer_index = i
-                break
-        
-        if layer_index is None:
+        # Access the LayerSolution using the stored index
+        if layer_index_for_solution == -1 or layer_index_for_solution >= len(self.solution.layer_solutions):
+            logging.warning(f"Could not find matching LayerSolution for {current_layer_name} using index {layer_index_for_solution}.")
             return None
+            
+        layer_solution = self.solution.layer_solutions[layer_index_for_solution]
         
-        layer_solution = self.solution.layer_solutions[layer_index]
-        
-        # Check each mesh in the current layer
+        # Check each mesh in the current layer's solution
         for mesh_index, msh in enumerate(layer_solution.meshes):
             values = layer_solution.values[mesh_index]
             
-            # Check each vertex in the mesh
             for vertex in msh.vertices:
-                # Calculate distance to this vertex
                 distance = vertex.p.distance(target_point)
                 
-                # Update closest vertex if this one is closer
                 if distance < closest_distance:
                     closest_distance = distance
                     closest_value = values[vertex]
         
+        if closest_value is not None:
+            logging.debug(f"Nearest value for point ({world_x}, {world_y}) in layer {current_layer_name} is {closest_value}.")
+        else:
+            logging.debug(f"Point ({world_x}, {world_y}) was inside geometry for layer {current_layer_name}, but no nearest vertex value found.")
+            
         return closest_value
 
     def autoscaleValue(self):
