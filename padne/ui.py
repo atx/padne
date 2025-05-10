@@ -11,12 +11,14 @@ from typing import Optional
 from pathlib import Path
 from dataclasses import dataclass, field
 
-from PySide6 import QtGui
+import enum
+import abc # Add this
+from PySide6 import QtGui, QtCore 
 from PySide6.QtCore import Qt, Signal, Slot, QRect
-from PySide6.QtGui import QSurfaceFormat, QPainter, QPen, QColor
+from PySide6.QtGui import QSurfaceFormat, QPainter, QPen, QColor, QAction, QActionGroup
 from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QToolBar
 
 from . import kicad, mesh, solver
 
@@ -149,6 +151,162 @@ void main() {
 COLOR_MAP = matplotlib.colormaps["viridis"]
 
 
+# Removed Tool enum:
+# class Tool(enum.Enum):
+#     PAN = enum.auto()
+#     SET_MIN_VALUE = enum.auto()
+#     SET_MAX_VALUE = enum.auto()
+#     # Future tools can be added here
+
+
+class BaseTool(abc.ABC):
+    def __init__(self, mesh_viewer: 'MeshViewer', tool_manager: 'ToolManager'):
+        self.mesh_viewer = mesh_viewer
+        self.tool_manager = tool_manager
+
+    @abc.abstractmethod
+    def name(self) -> str:
+        """Returns the display name of the tool."""
+        pass
+
+    @abc.abstractmethod
+    def status_tip(self) -> str:
+        """Returns the status tip for the tool."""
+        pass
+
+    def on_activate(self):
+        """Called when the tool becomes active."""
+        pass
+
+    def on_deactivate(self):
+        """Called when the tool becomes inactive."""
+        pass
+
+    def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
+        """Handles a click event on the mesh."""
+        pass
+
+    def on_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
+        """Handles a screen drag event."""
+        pass
+
+
+class PanTool(BaseTool):
+    def name(self) -> str:
+        return "Pan"
+
+    def status_tip(self) -> str:
+        return "Pan and zoom the view"
+
+    def on_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
+        if event.buttons() & Qt.LeftButton:
+            self.mesh_viewer.pan_view_by_screen_delta(dx, dy)
+
+
+class SetMinValueTool(PanTool):
+    def name(self) -> str:
+        return "Set Min"
+
+    def status_tip(self) -> str:
+        return "Set minimum value for color scale from cursor"
+
+    def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self.mesh_viewer.set_min_value_from_world_point(world_point)
+            # Optional: Switch back to Pan tool after action
+            # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
+
+
+class SetMaxValueTool(PanTool):
+    def name(self) -> str:
+        return "Set Max"
+
+    def status_tip(self) -> str:
+        return "Set maximum value for color scale from cursor"
+
+    def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self.mesh_viewer.set_max_value_from_world_point(world_point)
+            # Optional: Switch back to Pan tool after action
+            # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
+
+
+class ToolManager(QtCore.QObject):
+    def __init__(self, mesh_viewer: 'MeshViewer', parent=None):
+        super().__init__(parent)
+        self.mesh_viewer = mesh_viewer
+        
+        self.available_tools: list[BaseTool] = [
+            PanTool(self.mesh_viewer, self),
+            SetMinValueTool(self.mesh_viewer, self),
+            SetMaxValueTool(self.mesh_viewer, self)
+        ]
+        
+        self.active_tool: Optional[BaseTool] = None
+        if self.available_tools:
+            # Activate the first tool by default, but don't call on_activate yet
+            # as the tool might not be fully ready (e.g. UI elements)
+            # on_activate will be called by the first explicit activate_tool call
+            self.active_tool = self.available_tools[0] 
+        
+        logging.debug(f"ToolManager initialized. Default tool: {self.active_tool.name() if self.active_tool else 'None'}")
+
+    @Slot(BaseTool)
+    def activate_tool(self, tool_to_activate: BaseTool):
+        if self.active_tool == tool_to_activate:
+            return
+
+        if self.active_tool:
+            logging.debug(f"Deactivating Tool: {self.active_tool.name()}")
+            self.active_tool.on_deactivate()
+
+        self.active_tool = tool_to_activate
+        
+        if self.active_tool:
+            logging.debug(f"Activating Tool: {self.active_tool.name()}")
+            self.active_tool.on_activate()
+
+    @Slot(object, QtGui.QMouseEvent)
+    def handle_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
+        if self.active_tool:
+            logging.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name()}. Button: {event.button()}")
+            self.active_tool.on_mesh_click(world_point, event)
+
+    @Slot(float, float, QtGui.QMouseEvent)
+    def handle_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
+        if self.active_tool:
+            logging.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name()}. Buttons: {event.buttons()}")
+            self.active_tool.on_screen_drag(dx, dy, event)
+
+
+class AppToolBar(QToolBar):
+    def __init__(self, tool_manager: ToolManager, parent=None):
+        super().__init__("Main Toolbar", parent)
+        self.tool_manager = tool_manager
+        self._setup_actions()
+
+    def _setup_actions(self):
+        tool_action_group = QActionGroup(self)
+        tool_action_group.setExclusive(True)
+
+        for tool_instance in self.tool_manager.available_tools:
+            action = QAction(tool_instance.name(), self)
+            action.setStatusTip(tool_instance.status_tip())
+            action.setCheckable(True)
+            
+            action.triggered.connect(
+                lambda checked, t=tool_instance: self.tool_manager.activate_tool(t)
+            )
+            
+            self.addAction(action)
+            tool_action_group.addAction(action)
+
+            # Set the default tool (first tool in the list) as checked
+            if self.tool_manager.active_tool == tool_instance:
+                action.setChecked(True)
+                self.tool_manager.activate_tool(tool_instance)
+
+
 @dataclass
 class ShaderProgram:
     shader_program: QOpenGLShaderProgram = field(default_factory=QOpenGLShaderProgram)
@@ -277,6 +435,9 @@ class MeshViewer(QOpenGLWidget):
     valueRangeChanged = Signal(float, float)
     # Signal to notify when the current layer changes
     currentLayerChanged = Signal(str)
+    # Signals for tools
+    meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
+    screenDragged = Signal(float, float, QtGui.QMouseEvent)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -287,7 +448,7 @@ class MeshViewer(QOpenGLWidget):
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
-        self.last_pos = None
+        self.last_mouse_screen_pos: Optional[QtCore.QPointF] = None # Renamed from last_pos and initialized
         self.setMouseTracking(True)
         
         # Set focus policy to receive keyboard events
@@ -588,46 +749,123 @@ class MeshViewer(QOpenGLWidget):
         
         gl.glBindVertexArray(0)
 
-    def mousePressEvent(self, event):
-        """Handle mouse press events for panning."""
-        self.last_pos = event.position()
+    def _screen_to_world(self, screen_pos: QtCore.QPointF) -> mesh.Point:
+        if self.width() <= 0 or self.height() <= 0:
+            logging.warning("MeshViewer not sized, cannot convert screen to world coordinates.")
+            return mesh.Point(0.0, 0.0) # Return a default point
+
+        viewport_x = screen_pos.x()
+        viewport_y = screen_pos.y()
+        
+        # Convert to normalized device coordinates (NDC)
+        # Qt screen Y is 0 at top, self.height() at bottom.
+        # This calculation results in NDC where Y is -1 at top, 1 at bottom.
+        ndc_x = (2.0 * viewport_x / self.width()) - 1.0
+        ndc_y = (2.0 * viewport_y / self.height()) - 1.0 
+
+        aspect = self.width() / self.height()
+        
+        # Inverse transformation based on the projection and view matrices
+        # These formulas were implicitly used in _getValueFromCursor and worked for picking.
+        world_x = (ndc_x * aspect / self.scale) - self.offset_x
+        world_y = (ndc_y / self.scale) - self.offset_y 
+
+        return mesh.Point(world_x, world_y)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent):
+        """Handle mouse press events."""
+        if event.buttons() & Qt.LeftButton: # Typically, tools operate on left click
+            self.last_mouse_screen_pos = event.position()
+        
         self.setFocus()  # Ensure the widget gets focus when clicked
 
-    def _handlePanning(self, current_pos):
+        # Emit meshClicked signal regardless of button for potential right-click tools etc.
+        # The tool itself can check event.button()
+        world_point = self._screen_to_world(event.position())
+        self.meshClicked.emit(world_point, event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent):
+        """Handle mouse movement."""
+        if event.buttons() & Qt.LeftButton and self.last_mouse_screen_pos is not None:
+            delta = event.position() - self.last_mouse_screen_pos
+            dx = float(delta.x())
+            dy = float(delta.y())
+            
+            self.screenDragged.emit(dx, dy, event)
+            
+            self.last_mouse_screen_pos = event.position()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
+        """Handle mouse release events."""
+        if event.button() == Qt.LeftButton and self.last_mouse_screen_pos is not None:
+            # Potentially emit a clickReleased signal if tools need it
+            # world_point = self._screen_to_world(event.position())
+            # self.meshClickReleased.emit(world_point, event) # Example
+            self.last_mouse_screen_pos = None # Clear drag state
+
+    def pan_view_by_screen_delta(self, dx_screen: float, dy_screen: float):
         """
-        Handle the panning logic when the user drags with the left mouse button.
+        Pans the view based on a screen delta.
         
         Args:
-            current_pos: The current mouse position
+            dx_screen: Change in x screen coordinate.
+            dy_screen: Change in y screen coordinate.
         """
-        # Calculate the current aspect ratio
-        aspect = self.width() / self.height() if self.height() > 0 else 1.0
+        if self.width() <= 0 or self.height() <= 0:
+            return
+
+        aspect = self.width() / self.height()
         
-        # Convert screen coordinates to world coordinates
-        delta = current_pos - self.last_pos
-        
-        # The conversion factor should consider:
-        # 1. The current scale
-        # 2. The viewport size
-        # 3. The orthographic projection bounds
-        
+        # Convert screen delta to world delta
         # Horizontal movement (adjusted for aspect ratio)
-        dx_world = (delta.x() / self.width()) * (2.0 / self.scale) * aspect
+        dx_world = (dx_screen / self.width()) * (2.0 / self.scale) * aspect
         
-        # Vertical movement (note: Qt's y axis points down, now consistent with flipped OpenGL Y-axis)
-        dy_world = (delta.y() / self.height()) * (2.0 / self.scale)
+        # Vertical movement (note: Qt's y axis points down, OpenGL Y-axis was flipped in projection)
+        # A positive dy_screen (mouse down) should result in a positive dy_world (content moves down)
+        dy_world = (dy_screen / self.height()) * (2.0 / self.scale)
         
-        # Update offsets
         self.offset_x += dx_world
         self.offset_y += dy_world
-        
-        # Update the last position
-        self.last_pos = current_pos
+        self.update()
 
-    def mouseMoveEvent(self, event):
-        """Handle mouse movement for panning."""
-        if event.buttons() & Qt.LeftButton and self.last_pos is not None:
-            self._handlePanning(event.position())
+    def set_min_value_from_world_point(self, world_point: mesh.Point):
+        """
+        Sets the minimum value of the color scale from a world point.
+        If the selected value is greater than the current maximum, both min and max
+        are set to the selected value.
+        
+        Args:
+            world_point: The point in world coordinates.
+        """
+        value = self._getNearestValue(world_point.x, world_point.y)
+        
+        if value is not None:
+            if value > self.max_value:
+                self.min_value = value
+                self.max_value = value
+            else:
+                self.min_value = value
+            self.valueRangeChanged.emit(self.min_value, self.max_value)
+            self.update()
+
+    def set_max_value_from_world_point(self, world_point: mesh.Point):
+        """
+        Sets the maximum value of the color scale from a world point.
+        If the selected value is less than the current minimum, both min and max
+        are set to the selected value.
+
+        Args:
+            world_point: The point in world coordinates.
+        """
+        value = self._getNearestValue(world_point.x, world_point.y)
+        
+        if value is not None:
+            if value < self.min_value:
+                self.max_value = value
+                self.min_value = value
+            else:
+                self.max_value = value
+            self.valueRangeChanged.emit(self.min_value, self.max_value)
             self.update()
 
     def wheelEvent(self, event):
@@ -643,82 +881,9 @@ class MeshViewer(QOpenGLWidget):
         """Handle keyboard events."""
         if event.key() == Qt.Key_V:
             self.switchToNextLayer()
-        elif event.key() == Qt.Key_M:
-            # Shift+M: Set maximum value from cursor position
-            if event.modifiers() & Qt.ShiftModifier:
-                self.setMaxValueFromCursor()
-            # m: Set minimum value from cursor position
-            else:
-                self.setMinValueFromCursor()
         else:
             super().keyPressEvent(event)
             
-    def _getValueFromCursor(self) -> float:
-        """
-        Helper method to get the value at the cursor position in world coordinates.
-        
-        Returns:
-            The value at the nearest vertex, or None if no value could be found
-        """
-        # Get cursor position in screen coordinates
-        cursor_pos = self.mapFromGlobal(QtGui.QCursor.pos())
-        
-        # Convert to OpenGL viewport coordinates
-        viewport_x = cursor_pos.x()
-        viewport_y = cursor_pos.y()  # No need to flip y-coordinate since we flipped the projection matrix
-        
-        # Convert to normalized device coordinates (NDC)
-        ndc_x = 2.0 * viewport_x / self.width() - 1.0
-        ndc_y = 2.0 * viewport_y / self.height() - 1.0
-        
-        # Convert to world coordinates
-        aspect = self.width() / self.height() if self.height() > 0 else 1.0
-        world_x = (ndc_x * aspect / self.scale) - self.offset_x
-        world_y = (ndc_y / self.scale) - self.offset_y
-        
-        # Get nearest value at this position
-        return self._getNearestValue(world_x, world_y)
-        
-    def setMinValueFromCursor(self):
-        """Set the minimum value of the color scale from the cursor position.
-        If the selected value is greater than the current maximum, both min and max
-        are set to the selected value.
-        """
-        value = self._getValueFromCursor()
-        
-        # Update minimum value if a valid value was found
-        if value is not None:
-            if value > self.max_value:
-                # If new min is above current max, clamp range to this value
-                self.min_value = value
-                self.max_value = value
-            else:
-                # Otherwise, just set the new minimum
-                self.min_value = value
-            # Emit signal to notify about the new value range
-            self.valueRangeChanged.emit(self.min_value, self.max_value)
-            self.update()
-
-    def setMaxValueFromCursor(self):
-        """Set the maximum value of the color scale from the cursor position.
-        If the selected value is less than the current minimum, both min and max
-        are set to the selected value.
-        """
-        value = self._getValueFromCursor()
-        
-        # Update maximum value if a valid value was found
-        if value is not None:
-            if value < self.min_value:
-                # If new max is below current min, clamp range to this value
-                self.max_value = value
-                self.min_value = value
-            else:
-                # Otherwise, just set the new maximum
-                self.max_value = value
-            # Emit signal to notify about the new value range
-            self.valueRangeChanged.emit(self.min_value, self.max_value)
-            self.update()
-
     def switchToNextLayer(self):
         """Switch to the next layer in the cycle."""
         if not self.visible_layers:
@@ -861,33 +1026,46 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("PDN Simulator Viewer")
-        self.setGeometry(100, 100, 900, 600)  # Slightly wider to accommodate color scale
+        self.setGeometry(100, 100, 900, 600)
         
+        # Configure logging early
+        self._configureLogging()
+
         # Create main widget and layout
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)  # Set zero padding/margin
-        main_layout.setSpacing(0)  # Remove spacing between widgets
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
         # Create the mesh viewer
         self.mesh_viewer = MeshViewer(self)
         
+        # Create ToolManager
+        self.tool_manager = ToolManager(self.mesh_viewer, self)
+
         # Create color scale widget
         self.color_scale = ColorScaleWidget(self)
         self.color_scale.setFixedWidth(120)
         
         # Add widgets to layout
-        main_layout.addWidget(self.mesh_viewer)  # Mesh viewer takes remaining space
-        main_layout.addWidget(self.color_scale)  # Color scale has fixed width
+        main_layout.addWidget(self.mesh_viewer)
+        main_layout.addWidget(self.color_scale)
         
         # Set the main widget as central widget
         self.setCentralWidget(main_widget)
+
+        # Create and add the AppToolBar
+        self.app_toolbar = AppToolBar(self.tool_manager, self)
+        self.addToolBar(Qt.TopToolBarArea, self.app_toolbar)
         
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         
+        # Connect the ToolManager
+        self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
+        self.mesh_viewer.screenDragged.connect(self.tool_manager.handle_screen_drag)
+        
         # Load and mesh the KiCad project
-        self._configureLogging()
         self.loadProject(kicad_pro_path)
         if just_solve:
             # TODO: Maybe do not even start the Qt event loop?
