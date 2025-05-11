@@ -18,7 +18,10 @@ from PySide6.QtCore import Qt, Signal, Slot, QRect
 from PySide6.QtGui import QSurfaceFormat, QPainter, QPen, QColor, QAction, QActionGroup
 from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QToolBar
+from PySide6.QtWidgets import ( # Ensure these are imported
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, 
+    QToolBar, QSizePolicy, QToolButton, QMenu 
+)
 
 import shapely.geometry # Add this import
 
@@ -291,9 +294,10 @@ class ToolManager(QtCore.QObject):
 
 
 class AppToolBar(QToolBar):
-    def __init__(self, tool_manager: ToolManager, parent=None):
+    def __init__(self, tool_manager: ToolManager, mesh_viewer: 'MeshViewer', parent=None):
         super().__init__("Main Toolbar", parent)
         self.tool_manager = tool_manager
+        self.mesh_viewer = mesh_viewer
         self._setup_actions()
 
     def _setup_actions(self):
@@ -316,7 +320,39 @@ class AppToolBar(QToolBar):
             # Set the default tool (first tool in the list) as checked
             if self.tool_manager.active_tool == tool_instance:
                 action.setChecked(True)
-                self.tool_manager.activate_tool(tool_instance)
+                # self.tool_manager.activate_tool(tool_instance) # Already active by default in ToolManager
+
+        # Add a separator after the tool actions
+        self.addSeparator()
+
+        # Create the "View" QToolButton
+        view_menu_button = QToolButton(self)
+        view_menu_button.setText("View")
+        view_menu_button.setToolTip("View options")
+        # This makes it into a popup menu
+        view_menu_button.setPopupMode(QToolButton.InstantPopup)
+
+        # Create the menu that will be shown by the QToolButton
+        view_menu = QMenu(view_menu_button)
+
+        # Create "Show Edges" action for the menu
+        show_edges_action_in_menu = QAction("Show Edges", self)
+        show_edges_action_in_menu.setStatusTip("Toggle visibility of mesh edges")
+        show_edges_action_in_menu.setToolTip("Toggle visibility of mesh edges")
+        show_edges_action_in_menu.setCheckable(True)
+        show_edges_action_in_menu.setChecked(True)  # Default to visible
+        
+        # Connect to MeshViewer's slot
+        show_edges_action_in_menu.triggered.connect(self.mesh_viewer.set_edges_visible)
+        
+        # Add the action to the menu
+        view_menu.addAction(show_edges_action_in_menu)
+        
+        # Set the menu for the QToolButton
+        view_menu_button.setMenu(view_menu)
+        
+        # Add the QToolButton to the toolbar
+        self.addWidget(view_menu_button)
 
 
 @dataclass
@@ -473,6 +509,8 @@ class MeshViewer(QOpenGLWidget):
         # OpenGL objects
         self.mesh_shader = None
         self.edge_shader = None
+        
+        self.edges_visible = True
 
     def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
         """
@@ -725,7 +763,8 @@ class MeshViewer(QOpenGLWidget):
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         
         if not self.mesh_shader or not self.rendered_meshes or not self.visible_layers:
-            print("No shader program or meshes to render")
+            # Changed from print to log.debug for consistency
+            log.debug("No shader program or meshes to render")
             return
         
         mvp = self._computeMVP()
@@ -759,17 +798,18 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in self.rendered_meshes[current_layer]:
                 rmesh.render_triangles()
         
-        # Draw edges with edge shader
-        with self.edge_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.edge_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
-            
-            # Draw edges for current layer only
-            for rmesh in self.rendered_meshes[current_layer]:
-                rmesh.render_edges()
+        # Conditionally render edges
+        if self.edges_visible:
+            with self.edge_shader.use():
+                # Set the MVP uniform
+                gl.glUniformMatrix4fv(
+                    self.edge_shader.shader_program.uniformLocation("mvp"),
+                    1, gl.GL_TRUE, mvp.flatten()
+                )
+                
+                # Draw edges for current layer only
+                for rmesh in self.rendered_meshes[current_layer]:
+                    rmesh.render_edges()
         
         gl.glBindVertexArray(0)
 
@@ -922,6 +962,13 @@ class MeshViewer(QOpenGLWidget):
         
         # Refresh the display
         self.update()
+
+    @Slot(bool)
+    def set_edges_visible(self, visible: bool):
+        """Slot to set the visibility of mesh edges."""
+        self.edges_visible = visible
+        log.debug(f"Mesh edges visibility set to: {self.edges_visible}")
+        self.update() # Trigger a repaint
 
 
 class ColorScaleWidget(QWidget):
@@ -1076,7 +1123,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
         # Create and add the AppToolBar
-        self.app_toolbar = AppToolBar(self.tool_manager, self)
+        self.app_toolbar = AppToolBar(self.tool_manager, self.mesh_viewer, self) # Pass mesh_viewer
         self.addToolBar(Qt.TopToolBarArea, self.app_toolbar)
         
         # Connect signals/slots
