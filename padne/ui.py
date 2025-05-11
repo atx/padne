@@ -210,7 +210,7 @@ class PanTool(BaseTool):
 
 class SetMinValueTool(PanTool):
     def name(self) -> str:
-        return "Set Min"
+        return "Min"
 
     def status_tip(self) -> str:
         return "Set minimum value for color scale from cursor"
@@ -224,7 +224,7 @@ class SetMinValueTool(PanTool):
 
 class SetMaxValueTool(PanTool):
     def name(self) -> str:
-        return "Set Max"
+        return "Max"
 
     def status_tip(self) -> str:
         return "Set maximum value for color scale from cursor"
@@ -295,6 +295,7 @@ class AppToolBar(QToolBar):
         for tool_instance in self.tool_manager.available_tools:
             action = QAction(tool_instance.name(), self)
             action.setStatusTip(tool_instance.status_tip())
+            action.setToolTip(tool_instance.status_tip())
             action.setCheckable(True)
             
             action.triggered.connect(
