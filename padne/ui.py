@@ -25,6 +25,9 @@ import shapely.geometry # Add this import
 from . import kicad, mesh, solver
 
 
+log = logging.getLogger(__name__)
+
+
 def pretty_format_si_number(value: float, unit: str):
     """Pretty format a number with SI prefix and unit.
     
@@ -250,8 +253,6 @@ class ToolManager(QtCore.QObject):
             # as the tool might not be fully ready (e.g. UI elements)
             # on_activate will be called by the first explicit activate_tool call
             self.active_tool = self.available_tools[0] 
-        
-        logging.debug(f"ToolManager initialized. Default tool: {self.active_tool.name() if self.active_tool else 'None'}")
 
     @Slot(BaseTool)
     def activate_tool(self, tool_to_activate: BaseTool):
@@ -259,25 +260,25 @@ class ToolManager(QtCore.QObject):
             return
 
         if self.active_tool:
-            logging.debug(f"Deactivating Tool: {self.active_tool.name()}")
+            log.debug(f"Deactivating Tool: {self.active_tool.name()}")
             self.active_tool.on_deactivate()
 
         self.active_tool = tool_to_activate
         
         if self.active_tool:
-            logging.debug(f"Activating Tool: {self.active_tool.name()}")
+            log.debug(f"Activating Tool: {self.active_tool.name()}")
             self.active_tool.on_activate()
 
     @Slot(object, QtGui.QMouseEvent)
     def handle_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if self.active_tool:
-            logging.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name()}. Button: {event.button()}")
+            log.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name()}. Button: {event.button()}")
             self.active_tool.on_mesh_click(world_point, event)
 
     @Slot(float, float, QtGui.QMouseEvent)
     def handle_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
         if self.active_tool:
-            logging.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name()}. Buttons: {event.buttons()}")
+            log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name()}. Buttons: {event.buttons()}")
             self.active_tool.on_screen_drag(dx, dy, event)
 
 
@@ -493,14 +494,14 @@ class MeshViewer(QOpenGLWidget):
                 break
         
         if not problem_layer_for_check:
-            logging.debug(f"Layer {current_layer_name} not found in problem definition.")
+            log.debug(f"Layer {current_layer_name} not found in problem definition.")
             return None
 
         # Perform point-in-polygon check using Shapely
         shapely_point = shapely.geometry.Point(world_x, world_y)
         
         if not problem_layer_for_check.shape.contains(shapely_point):
-            logging.debug(f"Point ({world_x}, {world_y}) is outside defined shape for layer {current_layer_name}.")
+            log.debug(f"Point ({world_x}, {world_y}) is outside defined shape for layer {current_layer_name}.")
             return None # Click is outside the defined MultiPolygon for this layer
 
         # If the point is inside, proceed to find the nearest vertex value
@@ -511,7 +512,7 @@ class MeshViewer(QOpenGLWidget):
         
         # Access the LayerSolution using the stored index
         if layer_index_for_solution == -1 or layer_index_for_solution >= len(self.solution.layer_solutions):
-            logging.warning(f"Could not find matching LayerSolution for {current_layer_name} using index {layer_index_for_solution}.")
+            log.warning(f"Could not find matching LayerSolution for {current_layer_name} using index {layer_index_for_solution}.")
             return None
             
         layer_solution = self.solution.layer_solutions[layer_index_for_solution]
@@ -528,9 +529,9 @@ class MeshViewer(QOpenGLWidget):
                     closest_value = values[vertex]
         
         if closest_value is not None:
-            logging.debug(f"Nearest value for point ({world_x}, {world_y}) in layer {current_layer_name} is {closest_value}.")
+            log.debug(f"Nearest value for point ({world_x}, {world_y}) in layer {current_layer_name} is {closest_value}.")
         else:
-            logging.debug(f"Point ({world_x}, {world_y}) was inside geometry for layer {current_layer_name}, but no nearest vertex value found.")
+            log.debug(f"Point ({world_x}, {world_y}) was inside geometry for layer {current_layer_name}, but no nearest vertex value found.")
             
         return closest_value
 
@@ -765,7 +766,7 @@ class MeshViewer(QOpenGLWidget):
 
     def _screen_to_world(self, screen_pos: QtCore.QPointF) -> mesh.Point:
         if self.width() <= 0 or self.height() <= 0:
-            logging.warning("MeshViewer not sized, cannot convert screen to world coordinates.")
+            log.warning("MeshViewer not sized, cannot convert screen to world coordinates.")
             return mesh.Point(0.0, 0.0) # Return a default point
 
         viewport_x = screen_pos.x()
