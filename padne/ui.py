@@ -169,12 +169,12 @@ class BaseTool(abc.ABC):
         self.mesh_viewer = mesh_viewer
         self.tool_manager = tool_manager
 
-    @abc.abstractmethod
+    @property
     def name(self) -> str:
         """Returns the display name of the tool."""
         pass
 
-    @abc.abstractmethod
+    @property
     def status_tip(self) -> str:
         """Returns the status tip for the tool."""
         pass
@@ -197,9 +197,12 @@ class BaseTool(abc.ABC):
 
 
 class PanTool(BaseTool):
+
+    @property
     def name(self) -> str:
         return "Pan"
 
+    @property
     def status_tip(self) -> str:
         return "Pan and zoom the view"
 
@@ -209,9 +212,12 @@ class PanTool(BaseTool):
 
 
 class SetMinValueTool(PanTool):
+
+    @property
     def name(self) -> str:
         return "Min"
 
+    @property
     def status_tip(self) -> str:
         return "Set minimum value for color scale from cursor"
 
@@ -223,9 +229,11 @@ class SetMinValueTool(PanTool):
 
 
 class SetMaxValueTool(PanTool):
+    @property
     def name(self) -> str:
         return "Max"
 
+    @property
     def status_tip(self) -> str:
         return "Set maximum value for color scale from cursor"
 
@@ -260,25 +268,25 @@ class ToolManager(QtCore.QObject):
             return
 
         if self.active_tool:
-            log.debug(f"Deactivating Tool: {self.active_tool.name()}")
+            log.debug(f"Deactivating Tool: {self.active_tool.name}")
             self.active_tool.on_deactivate()
 
         self.active_tool = tool_to_activate
         
         if self.active_tool:
-            log.debug(f"Activating Tool: {self.active_tool.name()}")
+            log.debug(f"Activating Tool: {self.active_tool.name}")
             self.active_tool.on_activate()
 
     @Slot(object, QtGui.QMouseEvent)
     def handle_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if self.active_tool:
-            log.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name()}. Button: {event.button()}")
+            log.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name}. Button: {event.button()}")
             self.active_tool.on_mesh_click(world_point, event)
 
     @Slot(float, float, QtGui.QMouseEvent)
     def handle_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
         if self.active_tool:
-            log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name()}. Buttons: {event.buttons()}")
+            log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name}. Buttons: {event.buttons()}")
             self.active_tool.on_screen_drag(dx, dy, event)
 
 
@@ -293,9 +301,9 @@ class AppToolBar(QToolBar):
         tool_action_group.setExclusive(True)
 
         for tool_instance in self.tool_manager.available_tools:
-            action = QAction(tool_instance.name(), self)
-            action.setStatusTip(tool_instance.status_tip())
-            action.setToolTip(tool_instance.status_tip())
+            action = QAction(tool_instance.name, self)
+            action.setStatusTip(tool_instance.status_tip)
+            action.setToolTip(tool_instance.status_tip)
             action.setCheckable(True)
             
             action.triggered.connect(
