@@ -1,12 +1,30 @@
 
 import argparse
-
+import logging # Add this import
 from pathlib import Path
+
+
+def setup_logging(debug_mode: bool):
+    """Configures basic logging for the application."""
+    level = logging.DEBUG if debug_mode else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", # Added %(name)s
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-d", "--debug",
+        action="store_true",
+        help="Enable debug logging output."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    
     parser_gui = subparsers.add_parser("gui", help="Run the GUI")
     parser_gui.add_argument(
         "kicad_pro_file",
@@ -30,6 +48,11 @@ def do_gui(args):
 
 def main():
     args = parse_args()
+    setup_logging(args.debug)
+    
+    log = logging.getLogger(__name__)
+    log.debug(f"Parsed arguments: {args}")
+
     {
         "gui": do_gui,
     }[args.command](args)

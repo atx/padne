@@ -1042,9 +1042,6 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("PDN Simulator Viewer")
         self.setGeometry(100, 100, 900, 600)
-        
-        # Configure logging early
-        self._configureLogging()
 
         # Create main widget and layout
         main_widget = QWidget()
@@ -1087,15 +1084,6 @@ class MainWindow(QMainWindow):
             import sys
             sys.exit(1)
 
-    def _configureLogging(self):
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.StreamHandler()
-            ]
-        )
-        
     def loadProject(self, kicad_pro_path):
         """Load a KiCad project and display the F.Cu layer."""
         # Load the KiCad project
