@@ -11,19 +11,18 @@ from typing import Optional
 from pathlib import Path
 from dataclasses import dataclass, field
 
-import enum
-import abc # Add this
-from PySide6 import QtGui, QtCore 
+import abc
+from PySide6 import QtGui, QtCore
 from PySide6.QtCore import Qt, Signal, Slot, QRect
 from PySide6.QtGui import QSurfaceFormat, QPainter, QPen, QColor, QAction, QActionGroup
 from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import ( # Ensure these are imported
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout, 
-    QToolBar, QSizePolicy, QToolButton, QMenu 
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout,
+    QToolBar, QToolButton, QMenu
 )
 
-import shapely.geometry # Add this import
+import shapely.geometry
 
 from . import kicad, mesh, solver
 
@@ -99,6 +98,7 @@ def pretty_format_si_number(value: float, unit: str):
     # Return the formatted string with prefix and unit
     return f"{formatted_value} {prefixes[exponent]}{unit}"
 
+
 # Define shader source code
 VERTEX_SHADER_MESH = """
 #version 330 core
@@ -157,14 +157,6 @@ void main() {
 
 
 COLOR_MAP = matplotlib.colormaps["viridis"]
-
-
-# Removed Tool enum:
-# class Tool(enum.Enum):
-#     PAN = enum.auto()
-#     SET_MIN_VALUE = enum.auto()
-#     SET_MAX_VALUE = enum.auto()
-#     # Future tools can be added here
 
 
 class BaseTool(abc.ABC):
@@ -263,7 +255,7 @@ class ToolManager(QtCore.QObject):
             # Activate the first tool by default, but don't call on_activate yet
             # as the tool might not be fully ready (e.g. UI elements)
             # on_activate will be called by the first explicit activate_tool call
-            self.active_tool = self.available_tools[0] 
+            self.active_tool = self.available_tools[0]
 
     @Slot(BaseTool)
     def activate_tool(self, tool_to_activate: BaseTool):
@@ -496,7 +488,7 @@ class MeshViewer(QOpenGLWidget):
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
-        self.last_mouse_screen_pos: Optional[QtCore.QPointF] = None # Renamed from last_pos and initialized
+        self.last_mouse_screen_pos: Optional[QtCore.QPointF] = None
         self.setMouseTracking(True)
         
         # Set focus policy to receive keyboard events
@@ -531,13 +523,14 @@ class MeshViewer(QOpenGLWidget):
         current_layer_name = self.visible_layers[self.current_layer_index]
 
         # Find the corresponding problem.Layer for the point-in-polygon check
-        problem_layer_for_check: Optional[solver.problem.Layer] = None 
+        problem_layer_for_check: Optional[solver.problem.Layer] = None
         layer_index_for_solution = -1
 
         for idx, p_layer in enumerate(self.solution.problem.layers):
             if p_layer.name == current_layer_name:
                 problem_layer_for_check = p_layer
-                layer_index_for_solution = idx # Store index for consistent LayerSolution access
+                # Store index for consistent LayerSolution access
+                layer_index_for_solution = idx
                 break
         
         if not problem_layer_for_check:
@@ -548,8 +541,9 @@ class MeshViewer(QOpenGLWidget):
         shapely_point = shapely.geometry.Point(world_x, world_y)
         
         if not problem_layer_for_check.shape.contains(shapely_point):
+            # Click is outside the defined MultiPolygon for this layer
             log.debug(f"Point ({world_x}, {world_y}) is outside defined shape for layer {current_layer_name}.")
-            return None # Click is outside the defined MultiPolygon for this layer
+            return None
 
         # If the point is inside, proceed to find the nearest vertex value
         target_point = mesh.Point(world_x, world_y)
@@ -763,7 +757,6 @@ class MeshViewer(QOpenGLWidget):
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         
         if not self.mesh_shader or not self.rendered_meshes or not self.visible_layers:
-            # Changed from print to log.debug for consistency
             log.debug("No shader program or meshes to render")
             return
         
@@ -816,7 +809,7 @@ class MeshViewer(QOpenGLWidget):
     def _screen_to_world(self, screen_pos: QtCore.QPointF) -> mesh.Point:
         if self.width() <= 0 or self.height() <= 0:
             log.warning("MeshViewer not sized, cannot convert screen to world coordinates.")
-            return mesh.Point(0.0, 0.0) # Return a default point
+            return mesh.Point(0.0, 0.0)
 
         viewport_x = screen_pos.x()
         viewport_y = screen_pos.y()
@@ -825,20 +818,20 @@ class MeshViewer(QOpenGLWidget):
         # Qt screen Y is 0 at top, self.height() at bottom.
         # This calculation results in NDC where Y is -1 at top, 1 at bottom.
         ndc_x = (2.0 * viewport_x / self.width()) - 1.0
-        ndc_y = (2.0 * viewport_y / self.height()) - 1.0 
+        ndc_y = (2.0 * viewport_y / self.height()) - 1.0
 
         aspect = self.width() / self.height()
         
         # Inverse transformation based on the projection and view matrices
         # These formulas were implicitly used in _getValueFromCursor and worked for picking.
         world_x = (ndc_x * aspect / self.scale) - self.offset_x
-        world_y = (ndc_y / self.scale) - self.offset_y 
+        world_y = (ndc_y / self.scale) - self.offset_y
 
         return mesh.Point(world_x, world_y)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse press events."""
-        if event.buttons() & Qt.LeftButton: # Typically, tools operate on left click
+        if event.buttons() & Qt.LeftButton:  # Typically, tools operate on left click
             self.last_mouse_screen_pos = event.position()
         
         self.setFocus()  # Ensure the widget gets focus when clicked
@@ -862,10 +855,9 @@ class MeshViewer(QOpenGLWidget):
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse release events."""
         if event.button() == Qt.LeftButton and self.last_mouse_screen_pos is not None:
-            # Potentially emit a clickReleased signal if tools need it
-            # world_point = self._screen_to_world(event.position())
-            # self.meshClickReleased.emit(world_point, event) # Example
-            self.last_mouse_screen_pos = None # Clear drag state
+            # TODO: Potentially emit a clickReleased signal if tools need it
+            # Clear drag state
+            self.last_mouse_screen_pos = None
 
     def pan_view_by_screen_delta(self, dx_screen: float, dy_screen: float):
         """
@@ -968,7 +960,7 @@ class MeshViewer(QOpenGLWidget):
         """Slot to set the visibility of mesh edges."""
         self.edges_visible = visible
         log.debug(f"Mesh edges visibility set to: {self.edges_visible}")
-        self.update() # Trigger a repaint
+        self.update()
 
 
 class ColorScaleWidget(QWidget):
@@ -983,8 +975,8 @@ class ColorScaleWidget(QWidget):
         self.v_max = 1.0
         self.unit = "V"  # Default unit
         
-        self.setMinimumWidth(110)  # Increased minimum width for range label
-        self.setMinimumHeight(200)  # Set a reasonable minimum height
+        self.setMinimumWidth(110)
+        self.setMinimumHeight(200)
         
         # New labels
         self.delta_label = None
@@ -992,14 +984,13 @@ class ColorScaleWidget(QWidget):
         
         self.setupUI()
 
-    
     def setupUI(self):
         """Set up the UI components."""
         layout = QVBoxLayout(self)
         layout.setSpacing(2)  # Add a little vertical spacing
         
         # Delta label at the top of the stretch area
-        self.delta_label = QLabel(f"Δ = 0 {self.unit}")  # Placeholder text
+        self.delta_label = QLabel(f"Δ = 0 {self.unit}")
         self.delta_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.delta_label)
         
@@ -1007,7 +998,7 @@ class ColorScaleWidget(QWidget):
         layout.addStretch(10)
         
         # Range label at the bottom showing absolute min/max values
-        self.range_label = QLabel(f"Range: 0 {self.unit} - 0 {self.unit}")  # Placeholder text
+        self.range_label = QLabel(f"Range: 0 {self.unit} - 0 {self.unit}")
         self.range_label.setAlignment(Qt.AlignCenter)
         # Make range label slightly smaller font
         font = self.range_label.font()
@@ -1021,7 +1012,7 @@ class ColorScaleWidget(QWidget):
         self.v_min = v_min
         self.v_max = v_max
         self.updateLabels()
-        self.update()  # Trigger repaint
+        self.update()
     
     @Slot(str)
     def setUnit(self, unit):
@@ -1123,7 +1114,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
         # Create and add the AppToolBar
-        self.app_toolbar = AppToolBar(self.tool_manager, self.mesh_viewer, self) # Pass mesh_viewer
+        self.app_toolbar = AppToolBar(self.tool_manager, self.mesh_viewer, self)
         self.addToolBar(Qt.TopToolBarArea, self.app_toolbar)
         
         # Connect signals/slots
