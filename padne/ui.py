@@ -182,6 +182,13 @@ class BaseTool(abc.ABC):
         """Called when the tool becomes inactive."""
         pass
 
+    @property
+    def shortcut(self) -> tuple[Qt.Key, Qt.KeyboardModifier] | None:
+        return None
+
+    def on_shortcut_press(self, world_point: mesh.Point):
+        pass
+
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         """Handles a click event on the mesh."""
         pass
@@ -216,11 +223,19 @@ class SetMinValueTool(PanTool):
     def status_tip(self) -> str:
         return "Set minimum value for color scale from cursor"
 
+    @property
+    def shortcut(self):
+        return (Qt.Key_M, Qt.NoModifier)
+
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
             self.mesh_viewer.set_min_value_from_world_point(world_point)
             # Optional: Switch back to Pan tool after action
             # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
+
+    def on_shortcut_press(self, world_point: mesh.Point):
+        log.debug(f"SetMinValueTool: Shortcut pressed at {world_point}")
+        self.mesh_viewer.set_min_value_from_world_point(world_point)
 
 
 class SetMaxValueTool(PanTool):
@@ -232,11 +247,19 @@ class SetMaxValueTool(PanTool):
     def status_tip(self) -> str:
         return "Set maximum value for color scale from cursor"
 
+    @property
+    def shortcut(self):
+        return (Qt.Key_M, Qt.ShiftModifier)
+
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
             self.mesh_viewer.set_max_value_from_world_point(world_point)
             # Optional: Switch back to Pan tool after action
             # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
+
+    def on_shortcut_press(self, world_point: mesh.Point):
+        log.debug(f"SetMaxValueTool: Shortcut pressed at {world_point}")
+        self.mesh_viewer.set_max_value_from_world_point(world_point)
 
 
 class ToolManager(QtCore.QObject):
@@ -283,6 +306,20 @@ class ToolManager(QtCore.QObject):
         if self.active_tool:
             log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name}. Buttons: {event.buttons()}")
             self.active_tool.on_screen_drag(dx, dy, event)
+
+    @Slot(mesh.Point, int, Qt.KeyboardModifiers)
+    def handle_key_press_in_mesh(self,
+                                 world_point: mesh.Point,
+                                 key: Qt.Key,
+                                 modifiers: Qt.KeyboardModifiers):
+        for tool in self.available_tools:
+            shortcut_def = tool.shortcut
+            if not shortcut_def:
+                continue
+            shortcut_key, shortcut_modifier = shortcut_def
+            if key == shortcut_key and modifiers == shortcut_modifier:
+                log.debug(f"Shortcut {key} with modifiers {modifiers} matched for tool {tool.name} at {world_point}")
+                tool.on_shortcut_press(world_point)
 
 
 class AppToolBar(QToolBar):
@@ -478,6 +515,7 @@ class MeshViewer(QOpenGLWidget):
     # Signals for tools
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
+    keyPressedInMesh = Signal(mesh.Point, int, Qt.KeyboardModifiers)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -933,11 +971,26 @@ class MeshViewer(QOpenGLWidget):
             self.scale /= zoom_factor
         self.update()
         
-    def keyPressEvent(self, event):
+    def keyPressEvent(self, event: QtGui.QKeyEvent):
         """Handle keyboard events."""
+        # Get current mouse position in widget coordinates
+        screen_pos = self.mapFromGlobal(QtGui.QCursor.pos())
+        # Check if mouse is within widget bounds; if not, world_point might be less meaningful
+        # but _screen_to_world should still compute a value.
+        # Alternatively, could use center of view if mouse is outside. For now, use cursor.
+        world_point = self._screen_to_world(screen_pos)
+        
+        # Emit signal for ToolManager to handle general shortcuts
+        self.keyPressedInMesh.emit(world_point, event.key(), event.modifiers())
+
         if event.key() == Qt.Key_V:
             self.switchToNextLayer()
-        else:
+        # else: # Allow other key events to be processed if not handled by shortcuts or specific keys
+            # super().keyPressEvent(event) # This might not be needed if all keys are handled via signal or specific checks
+        
+        # If the event was not accepted by any tool via the signal or specific key checks,
+        # then call superclass implementation.
+        if not event.isAccepted():
             super().keyPressEvent(event)
             
     def switchToNextLayer(self):
@@ -1123,6 +1176,7 @@ class MainWindow(QMainWindow):
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
         self.mesh_viewer.screenDragged.connect(self.tool_manager.handle_screen_drag)
+        self.mesh_viewer.keyPressedInMesh.connect(self.tool_manager.handle_key_press_in_mesh)
         
         # Load and mesh the KiCad project
         self.loadProject(kicad_pro_path)
