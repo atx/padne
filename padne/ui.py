@@ -297,15 +297,18 @@ class ToolManager(QtCore.QObject):
 
     @Slot(object, QtGui.QMouseEvent)
     def handle_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
-        if self.active_tool:
-            log.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name}. Button: {event.button()}")
-            self.active_tool.on_mesh_click(world_point, event)
+        if not self.active_tool:
+            return
+
+        log.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name}. Button: {event.button()}")
+        self.active_tool.on_mesh_click(world_point, event)
 
     @Slot(float, float, QtGui.QMouseEvent)
     def handle_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
-        if self.active_tool:
-            log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name}. Buttons: {event.buttons()}")
-            self.active_tool.on_screen_drag(dx, dy, event)
+        if not self.active_tool:
+            return
+        log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name}. Buttons: {event.buttons()}")
+        self.active_tool.on_screen_drag(dx, dy, event)
 
     @Slot(mesh.Point, int, Qt.KeyboardModifiers)
     def handle_key_press_in_mesh(self,
@@ -932,15 +935,17 @@ class MeshViewer(QOpenGLWidget):
             world_point: The point in world coordinates.
         """
         value = self._getNearestValue(world_point.x, world_point.y)
+
+        if value is None:
+            return
         
-        if value is not None:
-            if value > self.max_value:
-                self.min_value = value
-                self.max_value = value
-            else:
-                self.min_value = value
-            self.valueRangeChanged.emit(self.min_value, self.max_value)
-            self.update()
+        if value > self.max_value:
+            self.min_value = value
+            self.max_value = value
+        else:
+            self.min_value = value
+        self.valueRangeChanged.emit(self.min_value, self.max_value)
+        self.update()
 
     def set_max_value_from_world_point(self, world_point: mesh.Point):
         """
@@ -952,15 +957,17 @@ class MeshViewer(QOpenGLWidget):
             world_point: The point in world coordinates.
         """
         value = self._getNearestValue(world_point.x, world_point.y)
+
+        if value is None:
+            return
         
-        if value is not None:
-            if value < self.min_value:
-                self.max_value = value
-                self.min_value = value
-            else:
-                self.max_value = value
-            self.valueRangeChanged.emit(self.min_value, self.max_value)
-            self.update()
+        if value < self.min_value:
+            self.max_value = value
+            self.min_value = value
+        else:
+            self.max_value = value
+        self.valueRangeChanged.emit(self.min_value, self.max_value)
+        self.update()
 
     def wheelEvent(self, event):
         """Handle mouse wheel for zooming."""
@@ -1110,30 +1117,31 @@ class ColorScaleWidget(QWidget):
         )
         
         # Draw gradient bar border only if height is positive
-        if gradient_rect.height() > 0:
-            painter.setPen(QPen(Qt.black, 1))
-            painter.drawRect(gradient_rect)
+        if gradient_rect.height() == 0:
+            return
+        painter.setPen(QPen(Qt.black, 1))
+        painter.drawRect(gradient_rect)
+        
+        # Draw the gradient
+        for i in range(gradient_rect.height()):
+            # Map position to color
+            t = 1.0 - (i / gradient_rect.height())
+            color = COLOR_MAP(t)
             
-            # Draw the gradient
-            for i in range(gradient_rect.height()):
-                # Map position to color
-                t = 1.0 - (i / gradient_rect.height())
-                color = COLOR_MAP(t)
-                
-                # Convert to QColor
-                qcolor = QColor(
-                    int(color[0] * 255),
-                    int(color[1] * 255),
-                    int(color[2] * 255)
-                )
-                
-                painter.setPen(qcolor)
-                painter.drawLine(
-                    gradient_rect.left() + 1,
-                    gradient_rect.top() + i,
-                    gradient_rect.right() - 1,
-                    gradient_rect.top() + i
-                )
+            # Convert to QColor
+            qcolor = QColor(
+                int(color[0] * 255),
+                int(color[1] * 255),
+                int(color[2] * 255)
+            )
+            
+            painter.setPen(qcolor)
+            painter.drawLine(
+                gradient_rect.left() + 1,
+                gradient_rect.top() + i,
+                gradient_rect.right() - 1,
+                gradient_rect.top() + i
+            )
 
 
 class MainWindow(QMainWindow):
