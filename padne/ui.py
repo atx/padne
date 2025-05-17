@@ -1215,7 +1215,10 @@ class MainWindow(QMainWindow):
     def __init__(self, kicad_pro_path, just_solve=False):
         super().__init__()
 
-        self.setWindowTitle("PDN Simulator Viewer")
+        self.project_file_name = None
+
+        # Should be overwritten soon
+        self.setWindowTitle("padne")
         self.setGeometry(100, 100, 900, 600)
 
         # Create main widget and layout
@@ -1267,8 +1270,12 @@ class MainWindow(QMainWindow):
     def loadProject(self, kicad_pro_path):
         """Load a KiCad project and display the F.Cu layer."""
         # Load the KiCad project
-        print(f"Loading project: {kicad_pro_path}")
-        prob = kicad.load_kicad_project(Path(kicad_pro_path))
+        kicad_pro_path = Path(kicad_pro_path)
+        # TODO: Instead of this, we should propagate this into Problem
+        # somehow. This would allow us to access it elsewhere...
+        self.project_file_name = kicad_pro_path.name
+        log.info(f"Loading project: {kicad_pro_path}")
+        prob = kicad.load_kicad_project(kicad_pro_path)
         
         # Solve the problem to get the values for visualization
         solution = solver.solve(prob)
@@ -1277,7 +1284,7 @@ class MainWindow(QMainWindow):
 
     def updateCurrentLayer(self, layer_name):
         """Update the window title to show the current layer."""
-        self.setWindowTitle(f"PDN Simulator Viewer - Layer: {layer_name}")
+        self.setWindowTitle(f"padne: {self.project_file_name} - {layer_name}")
 
 
 def configure_opengl():
