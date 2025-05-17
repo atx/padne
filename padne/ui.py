@@ -695,6 +695,7 @@ class MeshViewer(QOpenGLWidget):
             else:
                 self.scale = margin_factor * 2.0 / (height / aspect)
 
+    @Slot(solver.Solution)
     def setSolution(self, solution: solver.Solution):
         """Set the solution for the mesh viewer."""
         self.solution = solution
@@ -1145,6 +1146,9 @@ class ColorScaleWidget(QWidget):
 
 
 class MainWindow(QMainWindow):
+
+    projectLoaded = Signal(solver.Solution)
+
     def __init__(self, kicad_pro_path, just_solve=False):
         super().__init__()
 
@@ -1180,6 +1184,8 @@ class MainWindow(QMainWindow):
         
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
+        self.projectLoaded.connect(self.mesh_viewer.setSolution)
+        self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
@@ -1202,14 +1208,8 @@ class MainWindow(QMainWindow):
         # Solve the problem to get the values for visualization
         solution = solver.solve(prob)
 
-        self.mesh_viewer.setSolution(solution)
-        
-        # Connect the layer change signal to update the window title
-        self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
-        
-        # Set an appropriate unit (assuming voltage for now)
-        self.color_scale.setUnit("V")
-            
+        self.projectLoaded.emit(solution)
+
     def updateCurrentLayer(self, layer_name):
         """Update the window title to show the current layer."""
         self.setWindowTitle(f"PDN Simulator Viewer - Layer: {layer_name}")
