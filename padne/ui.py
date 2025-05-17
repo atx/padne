@@ -155,6 +155,28 @@ void main() {
 }
 """
 
+VERTEX_SHADER_POINTS = """
+#version 330 core
+layout(location = 0) in vec2 position;
+uniform mat4 mvp;
+uniform float point_size = 5.0;
+
+void main() {
+    gl_Position = mvp * vec4(position, 0.0, 1.0);
+    gl_PointSize = point_size;
+}
+"""
+
+FRAGMENT_SHADER_POINTS = """
+#version 330 core
+out vec4 out_color;
+uniform vec3 point_color = vec3(1.0, 0.0, 0.0);
+
+void main() {
+    out_color = vec4(point_color, 1.0);
+}
+"""
+
 
 COLOR_MAP = matplotlib.colormaps["viridis"]
 
@@ -380,6 +402,16 @@ class AppToolBar(QToolBar):
         # Add the action to the menu
         view_menu.addAction(show_edges_action_in_menu)
         
+        # Create "Show Connection Points" action for the menu
+        show_connection_points_action = QAction("Show Connection Points", self)
+        show_connection_points_action.setStatusTip("Toggle visibility of connection points")
+        show_connection_points_action.setToolTip("Toggle visibility of connection points")
+        show_connection_points_action.setCheckable(True)
+        show_connection_points_action.setChecked(True) # Default to visible
+        show_connection_points_action.triggered.connect(self.mesh_viewer.set_connection_points_visible)
+        view_menu.addAction(show_connection_points_action)
+
+
         # Set the menu for the QToolButton
         view_menu_button.setMenu(view_menu)
         
@@ -557,6 +589,50 @@ class RenderedMesh:
         gl.glDrawArrays(gl.GL_LINES, 0, self.edge_count)
 
 
+@dataclass
+class RenderedPoints:
+    vao_points: int
+    point_count: int
+
+    @classmethod
+    def from_points(cls, points_coords: list[tuple[float, float]]):
+        if not points_coords:
+            # Handle empty list to avoid errors with glBufferData
+            # Create an empty VAO and VBO, or return a special marker
+            # For now, let's create an empty VAO and set point_count to 0
+            vao_points = gl.glGenVertexArrays(1)
+            # Optionally, create and bind an empty VBO if strictness requires
+            # vbo_points = gl.glGenBuffers(1)
+            # gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_points)
+            # gl.glBufferData(gl.GL_ARRAY_BUFFER, np.array([], dtype=np.float32), gl.GL_STATIC_DRAW)
+            return cls(vao_points, 0)
+
+        flat_points = []
+        for p_x, p_y in points_coords:
+            flat_points.extend([p_x, p_y])
+
+        vao_points = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao_points)
+
+        vbo_points = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_points)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            np.array(flat_points, dtype=np.float32),
+            gl.GL_STATIC_DRAW
+        )
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+
+        gl.glBindVertexArray(0)
+        return cls(vao_points, len(points_coords))
+
+    def render(self):
+        if self.point_count > 0:
+            gl.glBindVertexArray(self.vao_points)
+            gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
+
+
 class MeshViewer(QOpenGLWidget):
     # Signal to notify when the value range changes
     valueRangeChanged = Signal(float, float)
@@ -574,6 +650,8 @@ class MeshViewer(QOpenGLWidget):
         self.solution: None | solver.Solution = None
         # Layer name -> RenderedMesh
         self.rendered_meshes: dict[str, list] = {}
+        self.rendered_connection_points: dict[str, RenderedPoints] = {}
+        self.connection_points_visible: bool = True
 
         self.scale = 1.0
         self.offset_x = 0.0
@@ -591,6 +669,7 @@ class MeshViewer(QOpenGLWidget):
         # OpenGL objects
         self.mesh_shader = None
         self.edge_shader = None
+        self.points_shader = None
         
         self.edges_visible = True
 
@@ -766,6 +845,7 @@ class MeshViewer(QOpenGLWidget):
 
         if self.mesh_shader is not None:
             self.setupMeshData()
+            self.setupConnectionPointsData()
 
         self.update()
 
@@ -785,6 +865,29 @@ class MeshViewer(QOpenGLWidget):
                     RenderedMesh.from_mesh(msh, values)
                 )
 
+    def setupConnectionPointsData(self):
+        """Set up the connection points data for rendering."""
+        self.rendered_connection_points.clear()
+
+        if not self.solution or not self.solution.problem:
+            return
+
+        points_by_layer: dict[str, list[tuple[float, float]]] = {}
+
+        for network in self.solution.problem.networks:
+            for connection in network.connections:
+                layer_name = connection.layer.name
+                point_coords = (connection.point.x, connection.point.y)
+                
+                if layer_name not in points_by_layer:
+                    points_by_layer[layer_name] = []
+                points_by_layer[layer_name].append(point_coords)
+
+        for layer_name, collected_points in points_by_layer.items():
+            if collected_points: # Only create if there are points
+                rendered_obj = RenderedPoints.from_points(collected_points)
+                self.rendered_connection_points[layer_name] = rendered_obj
+
     def initializeGL(self):
         """Initialize OpenGL settings."""
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)  # Background
@@ -798,6 +901,10 @@ class MeshViewer(QOpenGLWidget):
         self.edge_shader = ShaderProgram.from_source(
             VERTEX_SHADER_EDGES, FRAGMENT_SHADER_EDGES
         )
+        
+        self.points_shader = ShaderProgram.from_source(
+            VERTEX_SHADER_POINTS, FRAGMENT_SHADER_POINTS
+        )
 
         # Set the color map uniform to Gradient.rainbow
         with self.mesh_shader.use():
@@ -810,6 +917,7 @@ class MeshViewer(QOpenGLWidget):
         # If meshes are already set, setup the mesh data
         if self.solution:
             self.setupMeshData()
+            self.setupConnectionPointsData()
 
     def resizeGL(self, width, height):
         """Handle window resizing."""
@@ -899,6 +1007,20 @@ class MeshViewer(QOpenGLWidget):
                 for rmesh in self.rendered_meshes[current_layer]:
                     rmesh.render_edges()
         
+        # Conditionally render connection points
+        if self.connection_points_visible and self.points_shader:
+            rendered_points_obj = self.rendered_connection_points[current_layer]
+            if rendered_points_obj.point_count > 0:
+                with self.points_shader.use():
+                    # Set the MVP uniform
+                    gl.glUniformMatrix4fv(
+                        self.points_shader.shader_program.uniformLocation("mvp"),
+                        1, gl.GL_TRUE, mvp.flatten()
+                    )
+
+                    gl.glEnable(gl.GL_PROGRAM_POINT_SIZE)
+                    rendered_points_obj.render()
+                    gl.glDisable(gl.GL_PROGRAM_POINT_SIZE)
         gl.glBindVertexArray(0)
 
     def _screen_to_world(self, screen_pos: QtCore.QPointF) -> mesh.Point:
@@ -1074,6 +1196,13 @@ class MeshViewer(QOpenGLWidget):
         """Slot to set the visibility of mesh edges."""
         self.edges_visible = visible
         log.debug(f"Mesh edges visibility set to: {self.edges_visible}")
+        self.update()
+
+    @Slot(bool)
+    def set_connection_points_visible(self, visible: bool):
+        """Slot to set the visibility of connection points."""
+        self.connection_points_visible = visible
+        log.debug(f"Connection points visibility set to: {self.connection_points_visible}")
         self.update()
 
     @Slot(str)
