@@ -955,6 +955,64 @@ class MeshViewer(QOpenGLWidget):
         # Combine matrices: projection * translation
         return np.dot(proj_matrix, trans_matrix)
 
+    def _render_mesh_triangles(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+        """Renders the triangles of the meshes for the current layer."""
+        with self.mesh_shader.use():
+            # Set the MVP uniform
+            gl.glUniformMatrix4fv(
+                self.mesh_shader.shader_program.uniformLocation("mvp"),
+                1, gl.GL_TRUE, mvp.flatten()
+            )
+
+            # Set the min/max value uniforms for color scaling
+            gl.glUniform1f(
+                self.mesh_shader.shader_program.uniformLocation("v_min"),
+                self.min_value
+            )
+            gl.glUniform1f(
+                self.mesh_shader.shader_program.uniformLocation("v_max"),
+                self.max_value
+            )
+
+            # Draw triangles for current layer only
+            for rmesh in rendered_mesh_list:
+                rmesh.render_triangles()
+
+    def _render_mesh_edges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+        """Renders the edges of the meshes for the current layer."""
+        if not self.edges_visible or not self.edge_shader:
+            return
+
+        with self.edge_shader.use():
+            # Set the MVP uniform
+            gl.glUniformMatrix4fv(
+                self.edge_shader.shader_program.uniformLocation("mvp"),
+                1, gl.GL_TRUE, mvp.flatten()
+            )
+
+            # Draw edges for current layer only
+            for rmesh in rendered_mesh_list:
+                rmesh.render_edges()
+
+    def _render_connection_points(self, mvp: np.ndarray, rendered_points_obj: Optional[RenderedPoints]):
+        """Renders the connection points for the current layer."""
+        if not self.connection_points_visible or not self.points_shader:
+            return
+        
+        if not rendered_points_obj or rendered_points_obj.point_count == 0:
+            return
+
+        with self.points_shader.use():
+            # Set the MVP uniform
+            gl.glUniformMatrix4fv(
+                self.points_shader.shader_program.uniformLocation("mvp"),
+                1, gl.GL_TRUE, mvp.flatten()
+            )
+
+            gl.glEnable(gl.GL_PROGRAM_POINT_SIZE)
+            rendered_points_obj.render()
+            gl.glDisable(gl.GL_PROGRAM_POINT_SIZE)
+
     def paintGL(self):
         """Render the mesh using shaders."""
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
@@ -966,61 +1024,14 @@ class MeshViewer(QOpenGLWidget):
         mvp = self._computeMVP()
         
         # Get current layer name
-        current_layer = self.visible_layers[self.current_layer_index]
-        
-        # Only proceed if the current layer has rendered meshes
-        if current_layer not in self.rendered_meshes:
-            return
-        
-        # Draw triangles with mesh shader
-        with self.mesh_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.mesh_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
-            
-            # Set the min/max value uniforms for color scaling
-            gl.glUniform1f(
-                self.mesh_shader.shader_program.uniformLocation("v_min"),
-                self.min_value
-            )
-            gl.glUniform1f(
-                self.mesh_shader.shader_program.uniformLocation("v_max"),
-                self.max_value
-            )
-            
-            # Draw triangles for current layer only
-            for rmesh in self.rendered_meshes[current_layer]:
-                rmesh.render_triangles()
-        
-        # Conditionally render edges
-        if self.edges_visible:
-            with self.edge_shader.use():
-                # Set the MVP uniform
-                gl.glUniformMatrix4fv(
-                    self.edge_shader.shader_program.uniformLocation("mvp"),
-                    1, gl.GL_TRUE, mvp.flatten()
-                )
-                
-                # Draw edges for current layer only
-                for rmesh in self.rendered_meshes[current_layer]:
-                    rmesh.render_edges()
-        
-        # Conditionally render connection points
-        if self.connection_points_visible and self.points_shader:
-            rendered_points_obj = self.rendered_connection_points[current_layer]
-            if rendered_points_obj.point_count > 0:
-                with self.points_shader.use():
-                    # Set the MVP uniform
-                    gl.glUniformMatrix4fv(
-                        self.points_shader.shader_program.uniformLocation("mvp"),
-                        1, gl.GL_TRUE, mvp.flatten()
-                    )
+        current_layer_name = self.visible_layers[self.current_layer_index]
+        current_layer_mesh_list = self.rendered_meshes[current_layer_name]
+        self._render_mesh_triangles(mvp, current_layer_mesh_list)
+        self._render_mesh_edges(mvp, current_layer_mesh_list)
 
-                    gl.glEnable(gl.GL_PROGRAM_POINT_SIZE)
-                    rendered_points_obj.render()
-                    gl.glDisable(gl.GL_PROGRAM_POINT_SIZE)
+        rendered_points_obj = self.rendered_connection_points[current_layer_name]
+        self._render_connection_points(mvp, rendered_points_obj)
+        
         gl.glBindVertexArray(0)
 
     def _screen_to_world(self, screen_pos: QtCore.QPointF) -> mesh.Point:
