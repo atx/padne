@@ -24,79 +24,10 @@ from PySide6.QtWidgets import (
 
 import shapely.geometry
 
-from . import kicad, mesh, solver
+from . import kicad, mesh, solver, units
 
 
 log = logging.getLogger(__name__)
-
-
-def pretty_format_si_number(value: float, unit: str):
-    """Pretty format a number with SI prefix and unit.
-    
-    Args:
-        value: The numeric value to format
-        unit: The unit symbol/abbreviation
-        
-    Returns:
-        A formatted string with the value, appropriate SI prefix, and unit
-    
-    Examples:
-        >>> pretty_format_si_number(0.000001, "A")
-        '1.000 μA'
-        >>> pretty_format_si_number(1500, "V")
-        '1.500 kV'
-    """
-    if value == 0:
-        return f"0 {unit}"
-        
-    # Define SI prefixes and their corresponding powers of 10
-    prefixes = {
-        -12: "p",  # pico
-        -9: "n",   # nano
-        -6: "μ",   # micro
-        -3: "m",   # milli
-        0: "",     # base unit
-        3: "k",    # kilo
-        6: "M",    # mega
-        9: "G",    # giga
-        12: "T"    # tera
-    }
-    
-    # Determine the appropriate prefix for the value
-    abs_value = abs(value)
-    exponent = 0
-    
-    if abs_value < 1e-10:
-        return f"0 {unit}"  # Treat very small values as zero
-        
-    if abs_value >= 1:
-        while abs_value >= 1000 and exponent < 12:
-            abs_value /= 1000
-            exponent += 3
-    else:
-        while abs_value < 1 and exponent > -12:
-            abs_value *= 1000
-            exponent -= 3
-    
-    # Format the value with the appropriate precision
-    # Use fewer decimal places for larger numbers
-    if abs_value >= 100:
-        formatted_value = f"{abs_value:.1f}"
-    elif abs_value >= 10:
-        formatted_value = f"{abs_value:.2f}"
-    else:
-        formatted_value = f"{abs_value:.3f}"
-    
-    # Remove trailing zeros after decimal point
-    if "." in formatted_value:
-        formatted_value = formatted_value.rstrip("0").rstrip(".")
-    
-    # Apply the sign from the original value
-    if value < 0:
-        formatted_value = "-" + formatted_value
-    
-    # Return the formatted string with prefix and unit
-    return f"{formatted_value} {prefixes[exponent]}{unit}"
 
 
 # Define shader source code
@@ -1287,9 +1218,9 @@ class ColorScaleWidget(QWidget):
     def updateLabels(self):
         """Update the delta and range labels."""
         delta = self.v_max - self.v_min
-        delta_str = pretty_format_si_number(delta, self.unit)
-        min_str = pretty_format_si_number(self.v_min, self.unit)
-        max_str = pretty_format_si_number(self.v_max, self.unit)
+        delta_str = units.Value(delta, self.unit).pretty_format()
+        min_str = units.Value(self.v_min, self.unit).pretty_format()
+        max_str = units.Value(self.v_max, self.unit).pretty_format()
         
         self.delta_label.setText(f"Δ = {delta_str}")
         self.range_label.setText(f"{max_str}\n  ↑\n{min_str}")

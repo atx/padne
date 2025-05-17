@@ -70,3 +70,76 @@ class TestParsing:
         """Test that invalid strings raise ValueError."""
         with pytest.raises(ValueError):
             units.Value.parse(invalid_str)
+
+
+class TestSIPrettyFormat:
+
+    def test_zero_value(self):
+        """Test that zero is formatted correctly."""
+        assert units.Value(0, "V").pretty_format() == "0 V"
+        assert units.Value(0.0, "A").pretty_format() == "0 A"
+
+    def test_very_small_values(self):
+        """Test that very small values are treated as zero."""
+        assert units.Value(1e-15, "W").pretty_format() == "0 W"
+        assert units.Value(-1e-15, "Ω").pretty_format() == "0 Ω"
+
+    def test_small_values(self):
+        """Test values requiring smaller SI prefixes."""
+        assert units.Value(0.000000001, "A").pretty_format() == "1 nA"
+        assert units.Value(0.000001, "V").pretty_format() == "1 μV"
+        assert units.Value(0.001, "W").pretty_format() == "1 mW"
+        assert units.Value(0.0012, "A").pretty_format() == "1.2 mA"
+        assert units.Value(0.0000000567, "V").pretty_format() == "56.7 nV"
+
+    def test_regular_values(self):
+        """Test values without SI prefixes."""
+        assert units.Value(1, "m").pretty_format() == "1 m"
+        assert units.Value(2.5, "s").pretty_format() == "2.5 s"
+        assert units.Value(9.99, "Hz").pretty_format() == "9.99 Hz"
+        assert units.Value(10, "kg").pretty_format() == "10 kg"
+        assert units.Value(99.9, "°C").pretty_format() == "99.9 °C"
+        assert units.Value(100, "Pa").pretty_format() == "100 Pa"
+        assert units.Value(999, "m").pretty_format() == "999 m"
+
+    def test_large_values(self):
+        """Test values requiring larger SI prefixes."""
+        assert units.Value(1000, "Hz").pretty_format() == "1 kHz"
+        assert units.Value(1234, "V").pretty_format() == "1.234 kV"
+        assert units.Value(1000000, "W").pretty_format() == "1 MW"
+        assert units.Value(1200000, "A").pretty_format() == "1.2 MA"
+        assert units.Value(1000000000, "Pa").pretty_format() == "1 GPa"
+        assert units.Value(1200000000000, "Hz").pretty_format() == "1.2 THz"
+
+    def test_negative_values(self):
+        """Test negative values."""
+        assert units.Value(-1000, "V").pretty_format() == "-1 kV"
+        assert units.Value(-0.001, "A").pretty_format() == "-1 mA"
+        assert units.Value(-10, "°C").pretty_format() == "-10 °C"
+
+    def test_different_units(self):
+        """Test with various unit symbols."""
+        assert units.Value(1500, "V").pretty_format() == "1.5 kV"
+        assert units.Value(1500, "W").pretty_format() == "1.5 kW"
+        assert units.Value(1500, "Ω").pretty_format() == "1.5 kΩ"
+        assert units.Value(1500, "").pretty_format() == "1.5 k"  # No unit
+
+    def test_precision_handling(self):
+        """Test precision rules for different magnitudes."""
+        # >100: 1 decimal place
+        assert units.Value(123.456, "V").pretty_format() == "123.5 V"
+        # 10-100: 2 decimal places
+        assert units.Value(12.345, "V").pretty_format() == "12.35 V"
+
+    def test_trailing_zeros_removal(self):
+        """Test that trailing zeros are removed."""
+        assert units.Value(1.000, "V").pretty_format() == "1 V"
+        assert units.Value(1.200, "V").pretty_format() == "1.2 V"
+        assert units.Value(1.230, "V").pretty_format() == "1.23 V"
+
+    def test_boundary_cases(self):
+        """Test values at the boundaries between SI prefixes."""
+        assert units.Value(999.9, "V").pretty_format() == "999.9 V"
+        assert units.Value(1000, "V").pretty_format() == "1 kV"
+        assert units.Value(0.001, "V").pretty_format() == "1 mV"
+        assert units.Value(0.0009999, "V").pretty_format() == "999.9 μV"
