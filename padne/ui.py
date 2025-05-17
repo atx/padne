@@ -386,6 +386,53 @@ class AppToolBar(QToolBar):
         # Add the QToolButton to the toolbar
         self.addWidget(view_menu_button)
 
+        # Add a separator
+        self.addSeparator()
+
+        # Create the "Layers" QToolButton
+        self.layers_button = QToolButton(self)
+        self.layers_button.setText("Layers")
+        self.layers_button.setToolTip("Select active layer")
+        self.layers_button.setPopupMode(QToolButton.InstantPopup)
+
+        self.layers_menu = QMenu(self.layers_button)
+        self.layer_action_group = QActionGroup(self)
+        self.layer_action_group.setExclusive(True)
+
+        self.layers_button.setMenu(self.layers_menu)
+        self.addWidget(self.layers_button)
+
+    @Slot(list)
+    def updateLayerSelectionMenu(self, layer_names: list[str]):
+        self.layers_menu.clear()
+        # Clear actions from group. QActionGroup doesn't have a clear method.
+        for action in self.layer_action_group.actions():
+            self.layer_action_group.removeAction(action)
+            # QActionGroup does not take ownership, so actions are not deleted.
+            # If they were added to the menu, menu.clear() handles their deletion.
+
+        for layer_name in layer_names:
+            action = QAction(layer_name, self)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda checked, name=layer_name: self.mesh_viewer.setCurrentLayerByName(name)
+            )
+            self.layers_menu.addAction(action)
+            self.layer_action_group.addAction(action)
+        
+        # Ensure the currently active layer in mesh_viewer is checked
+        if self.mesh_viewer.visible_layers and self.mesh_viewer.current_layer_index < len(self.mesh_viewer.visible_layers):
+            active_layer_name = self.mesh_viewer.visible_layers[self.mesh_viewer.current_layer_index]
+            self.updateActiveLayerInMenu(active_layer_name)
+
+
+    @Slot(str)
+    def updateActiveLayerInMenu(self, active_layer_name: str):
+        for action in self.layers_menu.actions():
+            if action.text() == active_layer_name:
+                action.setChecked(True)
+                break
+
 
 @dataclass
 class ShaderProgram:
@@ -515,6 +562,8 @@ class MeshViewer(QOpenGLWidget):
     valueRangeChanged = Signal(float, float)
     # Signal to notify when the current layer changes
     currentLayerChanged = Signal(str)
+    # Signal to notify when the list of available layers changes
+    availableLayersChanged = Signal(list)
     # Signals for tools
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
@@ -703,6 +752,10 @@ class MeshViewer(QOpenGLWidget):
         # Initialize the list of layers from the solution
         self.visible_layers = [layer.name for layer in solution.problem.layers]
         self.current_layer_index = 0
+        
+        # Emit signal with available layers
+        if self.visible_layers:
+            self.availableLayersChanged.emit(self.visible_layers)
         
         # Emit signal with initial layer
         if self.visible_layers:
@@ -1023,6 +1076,16 @@ class MeshViewer(QOpenGLWidget):
         log.debug(f"Mesh edges visibility set to: {self.edges_visible}")
         self.update()
 
+    @Slot(str)
+    def setCurrentLayerByName(self, layer_name: str):
+        """Sets the current layer by its name."""
+        if layer_name in self.visible_layers:
+            self.current_layer_index = self.visible_layers.index(layer_name)
+            self.currentLayerChanged.emit(layer_name)
+            self.update()
+        else:
+            log.warning(f"Attempted to set current layer to unknown layer: {layer_name}")
+
 
 class ColorScaleWidget(QWidget):
     """Widget that displays a color scale with delta and absolute range."""
@@ -1186,6 +1249,8 @@ class MainWindow(QMainWindow):
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         self.projectLoaded.connect(self.mesh_viewer.setSolution)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
+        self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
+        self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
         
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
