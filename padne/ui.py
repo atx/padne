@@ -823,6 +823,9 @@ class MeshViewer(QOpenGLWidget):
         """Initialize OpenGL settings."""
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)  # Background
         gl.glDisable(gl.GL_CULL_FACE)
+        gl.glEnable(gl.GL_LINE_SMOOTH)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         
         # Create and compile shaders
         self.mesh_shader = ShaderProgram.from_source(
