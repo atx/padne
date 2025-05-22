@@ -1286,10 +1286,10 @@ class MainWindow(QMainWindow):
 
     projectLoaded = Signal(solver.Solution)
 
-    def __init__(self, kicad_pro_path, just_solve=False):
+    def __init__(self, solution: solver.Solution, project_name: Optional[str]):
         super().__init__()
 
-        self.project_file_name = None
+        self.project_file_name = project_name if project_name else "Loaded Solution"
 
         # Should be overwritten soon
         self.setWindowTitle("padne")
@@ -1334,27 +1334,9 @@ class MainWindow(QMainWindow):
         self.mesh_viewer.screenDragged.connect(self.tool_manager.handle_screen_drag)
         self.mesh_viewer.keyPressedInMesh.connect(self.tool_manager.handle_key_press_in_mesh)
         
-        # Load and mesh the KiCad project
-        self.loadProject(kicad_pro_path)
-        if just_solve:
-            # TODO: Maybe do not even start the Qt event loop?
-            import sys
-            sys.exit(1)
-
-    def loadProject(self, kicad_pro_path):
-        """Load a KiCad project and display the F.Cu layer."""
-        # Load the KiCad project
-        kicad_pro_path = Path(kicad_pro_path)
-        # TODO: Instead of this, we should propagate this into Problem
-        # somehow. This would allow us to access it elsewhere...
-        self.project_file_name = kicad_pro_path.name
-        log.info(f"Loading project: {kicad_pro_path}")
-        prob = kicad.load_kicad_project(kicad_pro_path)
-        
-        # Solve the problem to get the values for visualization
-        solution = solver.solve(prob)
-
         self.projectLoaded.emit(solution)
+
+    # Removed loadProject method
 
     def updateCurrentLayer(self, layer_name):
         """Update the window title to show the current layer."""
@@ -1371,15 +1353,20 @@ def configure_opengl():
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main(args):
+def main(solution: solver.Solution, project_name: Optional[str]):
     """Main entry point for the UI application."""
-    kicad_pro_path = args.kicad_pro_file
-    
     # Configure OpenGL
     configure_opengl()
     
     # Create and run application
-    app = QApplication(sys.argv)
-    window = MainWindow(kicad_pro_path, args.just_solve)
+    # Try to get existing instance, or create one if not present.
+    # Using sys.argv can be problematic in some contexts (e.g. pytest),
+    # but is standard for standalone Qt apps. Using [] if no Qt-specific args are needed.
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv if hasattr(sys, 'argv') else [])
+
+    window = MainWindow(solution, project_name)
+
     window.show()
     return app.exec()

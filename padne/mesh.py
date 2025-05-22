@@ -85,6 +85,17 @@ class HalfEdge:
     prev: Optional["HalfEdge"] = None
     face: Optional["Face"] = None
 
+    def __getstate__(self):
+        # We _do not_ pickle the twin/next/prev halfedges explicitly
+        # to avoid reaching recursion depth limits
+        # The Mesh class performs additional bookkeeping and rehydration
+        # to ensure that the topology is properly unpickled.
+        state = self.__dict__.copy()
+        censor_keys = ["next", "prev"]
+        for key in censor_keys:
+            state[key] = id(state[key])
+        return state
+
     @property
     def is_boundary(self) -> bool:
         return self.face.is_boundary
@@ -183,6 +194,27 @@ class Mesh:
         self.faces = IndexMap[Face]()
         self.boundaries = IndexMap[Face]()
         self._edge_map: dict[tuple[int, int], HalfEdge] = {}
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Will be important for rehydrating the mesh
+        ids_to_hedges = {
+            id(hedge): hedge for hedge in state["halfedges"]
+        }
+        state["_ids_to_hedges"] = ids_to_hedges
+        return state
+
+    def __setstate__(self, state):
+        _ids_to_hedges = state.pop("_ids_to_hedges")
+        # Rehydrate the halfedges
+        for hedge in state["halfedges"]:
+            # This should be set to id(...) in the __getstate__ method
+            # of HalfEdge
+            assert isinstance(hedge.next, int) and isinstance(hedge.prev, int)
+            hedge.next = _ids_to_hedges[hedge.next]
+            hedge.prev = _ids_to_hedges[hedge.prev]
+
+        self.__dict__.update(state)
 
     def make_vertex(self, p: Point) -> Vertex:
         v = Vertex(p)
