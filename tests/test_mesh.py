@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import pickle
 import shapely.geometry
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
@@ -929,6 +930,89 @@ class TestIndexMap:
         assert index_map.to_object(point_idx) == point
 
 
+def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
+    """
+    Asserts that two mesh objects are equivalent, checking their structure
+    and data after a process like pickling and unpickling.
+    """
+    # Compare basic counts
+    assert len(mesh1.vertices) == len(mesh2.vertices)
+    assert len(mesh1.halfedges) == len(mesh2.halfedges)
+    assert len(mesh1.faces) == len(mesh2.faces)
+    assert len(mesh1.boundaries) == len(mesh2.boundaries)
+    assert len(mesh1._edge_map) == len(mesh2._edge_map)
+
+    # Compare Vertices
+    for i in range(len(mesh1.vertices)):
+        v1 = mesh1.vertices.to_object(i)
+        v2 = mesh2.vertices.to_object(i)
+        assert v1.p == v2.p  # Point data
+        if v1.out is not None:
+            assert v2.out is not None
+            assert mesh1.halfedges.to_index(v1.out) == mesh2.halfedges.to_index(v2.out)
+        else:
+            assert v2.out is None
+
+    # Compare HalfEdges
+    for i in range(len(mesh1.halfedges)):
+        h1 = mesh1.halfedges.to_object(i)
+        h2 = mesh2.halfedges.to_object(i)
+
+        assert mesh1.vertices.to_index(h1.origin) == mesh2.vertices.to_index(h2.origin)
+        
+        assert h1.twin is not None and h2.twin is not None
+        assert mesh1.halfedges.to_index(h1.twin) == mesh2.halfedges.to_index(h2.twin)
+        
+        assert h1.next is not None and h2.next is not None
+        assert mesh1.halfedges.to_index(h1.next) == mesh2.halfedges.to_index(h2.next)
+        
+        assert h1.prev is not None and h2.prev is not None
+        assert mesh1.halfedges.to_index(h1.prev) == mesh2.halfedges.to_index(h2.prev)
+
+        if h1.face is not None:
+            assert h2.face is not None
+            assert h1.face.is_boundary == h2.face.is_boundary
+            if h1.face.is_boundary:
+                assert mesh1.boundaries.to_index(h1.face) == mesh2.boundaries.to_index(h2.face)
+            else:
+                assert mesh1.faces.to_index(h1.face) == mesh2.faces.to_index(h2.face)
+        else:
+            assert h2.face is None
+
+    # Compare Faces (interior faces)
+    for i in range(len(mesh1.faces)):
+        f1 = mesh1.faces.to_object(i)
+        f2 = mesh2.faces.to_object(i)
+        assert f1.is_boundary == f2.is_boundary # Should be False for mesh.faces
+        assert not f1.is_boundary
+        if f1.edge is not None:
+            assert f2.edge is not None
+            assert mesh1.halfedges.to_index(f1.edge) == mesh2.halfedges.to_index(f2.edge)
+        else:
+            assert f2.edge is None
+
+    # Compare Boundaries (which are also Face objects, but stored in mesh.boundaries)
+    for i in range(len(mesh1.boundaries)):
+        b1 = mesh1.boundaries.to_object(i)
+        b2 = mesh2.boundaries.to_object(i)
+        assert b1.is_boundary == b2.is_boundary # Should be True for mesh.boundaries
+        assert b1.is_boundary
+        if b1.edge is not None:
+            assert b2.edge is not None
+            assert mesh1.halfedges.to_index(b1.edge) == mesh2.halfedges.to_index(b2.edge)
+        else:
+            assert b2.edge is None
+
+    # Compare _edge_map by converting HalfEdge values to their indices
+    edge_map1_indexed = {key: mesh1.halfedges.to_index(value) for key, value in mesh1._edge_map.items()}
+    edge_map2_indexed = {key: mesh2.halfedges.to_index(value) for key, value in mesh2._edge_map.items()}
+    assert edge_map1_indexed == edge_map2_indexed
+
+    # Final validation of the unpickled mesh structure
+    assert_mesh_topology_okay(mesh2)
+    assert_mesh_structure_valid(mesh2)
+
+
 class TestZeroForm:
     @pytest.fixture
     def simple_mesh(self):
@@ -1446,6 +1530,79 @@ class TestMesher:
 
         assert_mesh_structure_valid(mesh)
         assert_mesh_topology_okay(mesh)
+
+
+class TestMeshPickling:
+
+    def test_pickle_single_triangle_mesh(self):
+        """Test pickling and unpickling a mesh with a single triangle."""
+        points = [
+            Point(0.0, 0.0),
+            Point(1.0, 0.0),
+            Point(0.0, 1.0)
+        ]
+        triangles = [(0, 1, 2)]
+        original_mesh = Mesh.from_triangle_soup(points, triangles)
+
+        pickled_mesh = pickle.dumps(original_mesh)
+        unpickled_mesh = pickle.loads(pickled_mesh)
+
+        assert_meshes_equivalent(original_mesh, unpickled_mesh)
+        # Also check Euler characteristic for the unpickled mesh
+        assert unpickled_mesh.euler_characteristic() == 1 
+
+    def test_references_preserved(self):
+        """Test that if we pickle multiple objects simultaneously, the Vertex/HalfEdge/Face objects references get preserved"""
+        points = [
+            Point(0.0, 0.0),
+            Point(1.0, 0.0),
+            Point(0.0, 1.0)
+        ]
+        triangles = [(0, 1, 2)]
+        original_mesh = Mesh.from_triangle_soup(points, triangles)
+
+        # Create a few references to the same objects
+        v = original_mesh.vertices.to_object(1)
+        h = original_mesh.halfedges.to_object(3)
+        f = original_mesh.faces.to_object(0)
+
+        pickled_mesh = pickle.dumps((original_mesh, v, h, f))
+        (unpickled_mesh, vl, hl, fl) = pickle.loads(pickled_mesh)
+
+        assert unpickled_mesh.vertices.to_object(1) == vl
+        assert unpickled_mesh.halfedges.to_object(3) == hl
+        assert unpickled_mesh.faces.to_object(0) == fl
+
+    def test_pickle_complex_mesh_with_hole(self):
+        """Test pickling and unpickling a more complex mesh with a hole."""
+        points = [
+            Point(0.0, 0.0),   # 0: Outer square bottom-left
+            Point(4.0, 0.0),   # 1: Outer square bottom-right
+            Point(4.0, 4.0),   # 2: Outer square top-right
+            Point(0.0, 4.0),   # 3: Outer square top-left
+            Point(1.0, 1.0),   # 4: Inner square bottom-left
+            Point(3.0, 1.0),   # 5: Inner square bottom-right
+            Point(3.0, 3.0),   # 6: Inner square top-right
+            Point(1.0, 3.0),   # 7: Inner square top-left
+        ]
+        triangles = [
+            (0, 1, 4), (1, 5, 4), # Bottom strip
+            (1, 2, 5), (2, 6, 5), # Right strip
+            (2, 3, 6), (3, 7, 6), # Top strip
+            (3, 0, 7), (0, 4, 7)  # Left strip
+        ]
+        original_mesh = Mesh.from_triangle_soup(points, triangles)
+
+        pickled_mesh = pickle.dumps(original_mesh)
+        unpickled_mesh = pickle.loads(pickled_mesh)
+
+        assert_meshes_equivalent(original_mesh, unpickled_mesh)
+        # Also check Euler characteristic for the unpickled mesh
+        # For a surface with one hole (genus 1, 2 boundaries if we count outer and inner)
+        # V - E + F = 2 - 2g - b_loops = 2 - 2*0 - num_boundaries (if planar embedding)
+        # Here, num_boundaries = 2 (outer, inner hole)
+        # So, V - E + F = 2 - 2 = 0
+        assert unpickled_mesh.euler_characteristic() == 0
 
     def test_seed_points_in_hole_vertex(self):
         seed_points = [
