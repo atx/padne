@@ -1651,3 +1651,27 @@ class TestMeshPickling:
                     seed_point_vertices += 1
                     break
             assert seed_point_vertices == 1, "Duplicate seed points weren't properly handled"
+
+    @pytest.mark.xfail(reason="Recursion limits not yet completely eliminated")
+    def test_pickle_large_mesh(self):
+        # This test should construct a large-ish mesh and try to pickle it
+        # to ensure that the pickling process does not fail on maximum recursion
+        # depth.
+        
+        # Create a square polygon
+        square = shapely.geometry.box(0, 0, 10, 10)
+        
+        # Use a Mesher to create a reasonably complex mesh
+        # A smaller maximum_size will result in more triangles.
+        mesher = Mesher(minimum_angle=20.0, maximum_size=0.1) 
+        original_mesh = mesher.poly_to_mesh(square)
+
+        # Ensure the mesh is non-trivial
+        assert len(original_mesh.faces) > 50, "Generated mesh is too small for a 'large' mesh test."
+
+        pickled_mesh = pickle.dumps(original_mesh)
+        unpickled_mesh = pickle.loads(pickled_mesh)
+
+        assert_meshes_equivalent(original_mesh, unpickled_mesh)
+        # For a simple square, Euler characteristic should be 1
+        assert unpickled_mesh.euler_characteristic() == 1
