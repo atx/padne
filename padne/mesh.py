@@ -91,7 +91,7 @@ class HalfEdge:
         # The Mesh class performs additional bookkeeping and rehydration
         # to ensure that the topology is properly unpickled.
         state = self.__dict__.copy()
-        censor_keys = ["next", "prev"]
+        censor_keys = ["next", "prev", "twin"]
         for key in censor_keys:
             state[key] = id(state[key])
         return state
@@ -210,9 +210,11 @@ class Mesh:
         for hedge in state["halfedges"]:
             # This should be set to id(...) in the __getstate__ method
             # of HalfEdge
-            assert isinstance(hedge.next, int) and isinstance(hedge.prev, int)
+            assert isinstance(hedge.next, int) and isinstance(hedge.prev, int) \
+                and isinstance(hedge.twin, int), "HalfEdge state is not properly serialized"
             hedge.next = _ids_to_hedges[hedge.next]
             hedge.prev = _ids_to_hedges[hedge.prev]
+            hedge.twin = _ids_to_hedges[hedge.twin]
 
         self.__dict__.update(state)
 

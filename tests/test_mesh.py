@@ -1652,7 +1652,6 @@ class TestMeshPickling:
                     break
             assert seed_point_vertices == 1, "Duplicate seed points weren't properly handled"
 
-    @pytest.mark.xfail(reason="Recursion limits not yet completely eliminated")
     def test_pickle_large_mesh(self):
         # This test should construct a large-ish mesh and try to pickle it
         # to ensure that the pickling process does not fail on maximum recursion
