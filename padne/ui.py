@@ -88,22 +88,26 @@ void main() {
 VERTEX_SHADER_POINTS = """
 #version 330 core
 layout(location = 0) in vec2 position;
+layout(location = 1) in vec3 vertex_color; // Added color attribute
+out vec3 frag_color;                       // Added varying for fragment shader
 uniform mat4 mvp;
 uniform float point_size = 5.0;
 
 void main() {
     gl_Position = mvp * vec4(position, 0.0, 1.0);
     gl_PointSize = point_size;
+    frag_color = vertex_color; // Pass color to fragment shader
 }
 """
 
 FRAGMENT_SHADER_POINTS = """
 #version 330 core
+in vec3 frag_color; // Input color from vertex shader
 out vec4 out_color;
-uniform vec3 point_color = vec3(1.0, 0.0, 0.0);
+// uniform vec3 point_color = vec3(1.0, 0.0, 0.0); // Removed uniform color
 
 void main() {
-    out_color = vec4(point_color, 1.0);
+    out_color = vec4(frag_color, 1.0); // Use varying color
 }
 """
 
@@ -525,37 +529,47 @@ class RenderedPoints:
     point_count: int
 
     @classmethod
-    def from_points(cls, points_coords: list[tuple[float, float]]):
-        if not points_coords:
+    def from_points(cls, points_data: list[tuple[tuple[float, float], tuple[float, float, float]]]):
+        if not points_data:
             # Handle empty list to avoid errors with glBufferData
-            # Create an empty VAO and VBO, or return a special marker
-            # For now, let's create an empty VAO and set point_count to 0
             vao_points = gl.glGenVertexArrays(1)
-            # Optionally, create and bind an empty VBO if strictness requires
-            # vbo_points = gl.glGenBuffers(1)
-            # gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_points)
-            # gl.glBufferData(gl.GL_ARRAY_BUFFER, np.array([], dtype=np.float32), gl.GL_STATIC_DRAW)
+            # No need to create VBOs if there's no data
             return cls(vao_points, 0)
 
-        flat_points = []
-        for p_x, p_y in points_coords:
-            flat_points.extend([p_x, p_y])
+        flat_points_coords = []
+        flat_points_colors = []
+        for (p_x, p_y), (r, g, b) in points_data:
+            flat_points_coords.extend([p_x, p_y])
+            flat_points_colors.extend([r, g, b])
 
         vao_points = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao_points)
 
-        vbo_points = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_points)
+        # VBO for point coordinates
+        vbo_point_coords = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_point_coords)
         gl.glBufferData(
             gl.GL_ARRAY_BUFFER,
-            np.array(flat_points, dtype=np.float32),
+            np.array(flat_points_coords, dtype=np.float32),
             gl.GL_STATIC_DRAW
         )
         gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
 
+        # VBO for point colors
+        vbo_point_colors = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_point_colors)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            np.array(flat_points_colors, dtype=np.float32),
+            gl.GL_STATIC_DRAW
+        )
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(1)
+
         gl.glBindVertexArray(0)
-        return cls(vao_points, len(points_coords))
+        # The number of points is the length of the original points_data list
+        return cls(vao_points, len(points_data))
 
     def render(self):
         if self.point_count > 0:
@@ -802,21 +816,37 @@ class MeshViewer(QOpenGLWidget):
         if not self.solution or not self.solution.problem:
             return
 
-        points_by_layer: dict[str, list[tuple[float, float]]] = {}
+        # Store list of (coordinates, color) tuples for each layer
+        points_by_layer: dict[str, list[tuple[tuple[float, float], tuple[float, float, float]]]] = {}
 
         for network in self.solution.problem.networks:
+            # Determine color based on whether the network has a source
+            if network.has_source:
+                color = (1.0, 0.0, 0.0)  # Red for networks with a source
+            else:
+                color = (0.5, 0.5, 0.5)  # Gray for networks without a source
+            
             for connection in network.connections:
                 layer_name = connection.layer.name
                 point_coords = (connection.point.x, connection.point.y)
                 
                 if layer_name not in points_by_layer:
                     points_by_layer[layer_name] = []
-                points_by_layer[layer_name].append(point_coords)
+                
+                # Append a tuple of (coordinates, color)
+                points_by_layer[layer_name].append((point_coords, color))
 
-        for layer_name, collected_points in points_by_layer.items():
-            if collected_points: # Only create if there are points
-                rendered_obj = RenderedPoints.from_points(collected_points)
-                self.rendered_connection_points[layer_name] = rendered_obj
+        for layer_name, collected_points_data in points_by_layer.items():
+            if not collected_points_data:
+                continue
+            # We want to render the _red_ points over the gray ones,
+            # so we draw them _last_. This is a hack to order them, it
+            # depends on the fact that (1.0, 0.0, 0.0) > (0.5, 0.5, 0.5)
+            # _This will break if the colors change!_
+            collected_points_data.sort(key=lambda x: x[1])
+            # Pass the list of (coordinates, color) tuples
+            rendered_obj = RenderedPoints.from_points(collected_points_data)
+            self.rendered_connection_points[layer_name] = rendered_obj
 
     def initializeGL(self):
         """Initialize OpenGL settings."""
@@ -958,11 +988,18 @@ class MeshViewer(QOpenGLWidget):
         
         # Get current layer name
         current_layer_name = self.visible_layers[self.current_layer_index]
+        
+        # Ensure current_layer_name exists in rendered_meshes before accessing
+        if current_layer_name not in self.rendered_meshes:
+            log.warning(f"Current layer {current_layer_name} not found in rendered_meshes.")
+            return
+            
         current_layer_mesh_list = self.rendered_meshes[current_layer_name]
         self._render_mesh_triangles(mvp, current_layer_mesh_list)
         self._render_mesh_edges(mvp, current_layer_mesh_list)
 
-        rendered_points_obj = self.rendered_connection_points[current_layer_name]
+        # Use .get() for safer access, as a layer might not have connection points
+        rendered_points_obj = self.rendered_connection_points.get(current_layer_name)
         self._render_connection_points(mvp, rendered_points_obj)
         
         gl.glBindVertexArray(0)
