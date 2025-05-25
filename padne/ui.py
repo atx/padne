@@ -3,7 +3,6 @@
 import contextlib
 import logging
 import numpy as np
-import matplotlib
 import sys
 import OpenGL.GL as gl
 
@@ -24,7 +23,7 @@ from PySide6.QtWidgets import (
 
 import shapely.geometry
 
-from . import kicad, mesh, solver, units
+from . import kicad, mesh, solver, units, colormaps
 
 
 log = logging.getLogger(__name__)
@@ -109,7 +108,7 @@ void main() {
 """
 
 
-COLOR_MAP = matplotlib.colormaps["viridis"]
+COLOR_MAP = colormaps.VIRIDIS
 
 
 class BaseTool(abc.ABC):

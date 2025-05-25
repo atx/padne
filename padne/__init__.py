@@ -1,5 +1,5 @@
 
-from . import kicad, mesh, solver, problem, units
+from . import kicad, mesh, solver, problem, units, colormaps
 
 __all__ = [
     "kicad",
@@ -7,4 +7,5 @@ __all__ = [
     "solver",
     "problem",
     "units",
+    "colormaps",
 ]
