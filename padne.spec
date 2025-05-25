@@ -24,7 +24,6 @@ hiddenimports += [
     'OpenGL.arrays.numbers',
     'OpenGL.arrays.strings',
     'OpenGL.arrays.nones',
-    'matplotlib.backends.backend_qtagg',
     '_pcbnew',
 ]
 
@@ -43,14 +42,10 @@ FILTERED_DATA_FILES = [
     # Remove other unnecessary Qt data
     'fonts', 'share/fonts',
     'qml', 'share/qml',
-    # Remove matplotlib test data
-    'matplotlib/tests',
-    'matplotlib/mpl-data'
 ]
 
 # Collect data files
 datas = []
-datas += collect_data_files('matplotlib')
 datas += collect_data_files('pygerber')
 datas += collect_data_files('PySide6')
 
@@ -73,10 +68,15 @@ excludes = [
     # only use it for the viridis color map.
     'PyQt5',
     'PySide2',
+    'matplotlib',
     'matplotlib.backends.backend_qt5agg',
     'matplotlib.backends.backend_qt5',
     'matplotlib.backends.backend_qt4agg',
     'matplotlib.backends.backend_qt4',
+    'matplotlib.backends.backend_gtk3agg',
+    'matplotlib.backends.backend_gtk4agg',
+    'matplotlib.backends.backend_gtk3cairo',
+    'matplotlib.backends.backend_gtk4cairo',
     # Exlude random Qt shit that is wayyyy too large
     # QtWebEngine is like 160MB...
     'PySide6.QtWebEngine',
@@ -111,11 +111,6 @@ excludes = [
     'gi.repository.GLib',
     'gi.repository.Gio',
     'gi.repository.GObject',
-    # Block matplotlib GTK backend
-    'matplotlib.backends.backend_gtk3agg',
-    'matplotlib.backends.backend_gtk4agg',
-    'matplotlib.backends.backend_gtk3cairo',
-    'matplotlib.backends.backend_gtk4cairo',
 ]
 
 binaries_exclude = [
