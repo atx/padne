@@ -417,6 +417,25 @@ def stamp_network_into_system(network: problem.Network,
                 raise NotImplementedError(f"Unsupported node type {element}")
 
 
+def setup_ground_node(i_gnd: int,
+                      L: scipy.sparse.lil_matrix,
+                      r: np.ndarray):
+    # This effectively wires a voltage source of 0V from i_gnd to a
+    # virtual (not in the matrix) "ground" node.
+    # A more useful way of thinking about this is that:
+    # 1. We construct a VoltageSource as above.
+    # 2. We imagine that the voltage at its negative terminal is 0V.
+    # 3. This means that whatever happens at the corresponding _column_ is going to result in 0 being added anyway
+    # 4. This also means there is no point in keeping the corresponding row,
+    #    since we already decided that the corresponding voltage is going to be zero
+    # 5. So, we drop both the row and column for the ground node.
+    # It's worth noting that there is still a "ground current" variable
+    # --- this is the variable at -1 index in the system.
+    L[-1, i_gnd] = 1
+    L[i_gnd, -1] = 1
+    r[-1] = 0  # Ground node voltage is 0
+
+
 def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
                                    conductances: list[float],
                                    vindex: VertexIndexer,
@@ -537,7 +556,8 @@ def solve(prob: problem.Problem) -> Solution:
     # numerical instability, so it needs more stress testing.
     N = len(vindex.global_index_to_vertex_index) + \
         node_indexer.internal_node_count + \
-        len(node_indexer.extra_source_to_global_index)
+        len(node_indexer.extra_source_to_global_index) + \
+        1  # +1 for the ground node
     L = scipy.sparse.lil_matrix((N, N), dtype=DTYPE)
     r = np.zeros(N, dtype=DTYPE)
 
@@ -564,6 +584,9 @@ def solve(prob: problem.Problem) -> Solution:
         # correct.
         stamp_network_into_system(network, node_indexer, L, r)
 
+    # TODO: Implement a better way to pick the ground node.
+    setup_ground_node(0, L, r)
+
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
     # TODO: This is a symmetric positive definite matrix, so we can theoretically
@@ -572,6 +595,9 @@ def solve(prob: problem.Problem) -> Solution:
     # for every connected component.
     log.info("Solving the system of equations")
     v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
+
+    # TODO: Add a verification check that checks if the ground node _current_
+    # is indeed 0. (otherwise we have unterminated current loops).
 
     # And now we just grab the final solution vector and reconstruct it back
     # into a solution object for easier consumption by the caller.
