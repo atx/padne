@@ -3,10 +3,102 @@ import itertools
 import shapely.geometry
 import math
 import numpy as np
+import scipy.sparse
 
 from padne import solver, problem, mesh, kicad
 
 from conftest import for_all_kicad_projects
+
+
+class TestNetworkSolver:
+
+    def create_test_system(self, network: problem.Network) -> tuple[solver.NodeIndexer, scipy.sparse.lil_matrix, np.ndarray]:
+        # For reasons unknown, network.nodes is not a list of NodeIDs
+        # but instead a dict mapping NodeIDs to numbers from 0 to N-1.
+        # So we just use that here
+        node_to_global_index = network.nodes
+        extra_source_to_global_index = {}
+        for elem in network.elements:
+            if elem.extra_variable_count == 0:
+                continue
+            if elem.extra_variable_count > 1:
+                raise ValueError(f"Element {elem} has more than one extra variable, which is not supported")
+            extra_source_to_global_index[elem] = len(extra_source_to_global_index) \
+                    + len(node_to_global_index)
+
+        node_indexer = solver.NodeIndexer(
+            node_to_global_index=node_to_global_index,
+            extra_source_to_global_index=extra_source_to_global_index
+        )
+
+        N = len(node_indexer.node_to_global_index) + len(node_indexer.extra_source_to_global_index)
+        L = scipy.sparse.lil_matrix((N, N), dtype=solver.DTYPE)
+        r = np.zeros(N, dtype=solver.DTYPE)
+        return node_indexer, L, r
+
+    def solve_network(self, network):
+        """Solves the given Network and returns a Solution."""
+        node_indexer, L, r = self.create_test_system(network)
+        solver.stamp_network_into_system(network, node_indexer, L, r)
+        # Drop the first row and column, which correspond to the ground node
+        # TODO: It is unclear how is it possible that this works fine
+        # in the main solver code, but crashes here.
+        # However, the main solver code should also force a ground node
+        # to improve numerical stability, so this is a mystery likely not worth
+        # solving...
+        print(L.todense())
+        L = L.todense()[1:,1:]
+        v = np.linalg.solve(L, r[1:])  # Solve the system
+        v = np.concatenate(([0.0], v))  # Add ground node voltage back
+        node_to_value = {
+            node_id: v[node_indexer.node_to_global_index[node_id]]
+            for node_id in node_indexer.node_to_global_index.keys()
+        }
+        return node_indexer, v, node_to_value
+
+    def test_current_into_resistor(self):
+        n_f = problem.NodeID()
+        n_t = problem.NodeID()
+
+        csrc = problem.CurrentSource(
+            f=n_f, t=n_t, current=1.1
+        )
+        res = problem.Resistor(
+            a=n_f, b=n_t, resistance=2.2
+        )
+
+        network = problem.Network(
+            connections=[],
+            elements=[csrc, res],
+        )
+
+        _, _, s = self.solve_network(network)
+        v_diff = s[n_t] - s[n_f]
+        assert v_diff == pytest.approx(csrc.current * res.resistance, abs=1e-6)
+
+    def test_voltage_into_resistor(self):
+        n_p = problem.NodeID()
+        n_n = problem.NodeID()
+
+        vsrc = problem.VoltageSource(
+            p=n_p, n=n_n, voltage=3.3
+        )
+        res = problem.Resistor(
+            a=n_p, b=n_n, resistance=2.2
+        )
+
+        network = problem.Network(
+            connections=[],
+            elements=[vsrc, res],
+        )
+
+        node_indexer, v, s = self.solve_network(network)
+        v_diff = s[n_p] - s[n_n]
+        assert v_diff == pytest.approx(vsrc.voltage, abs=1e-6)
+
+        i_vsrc = node_indexer.extra_source_to_global_index[vsrc]
+        current_through_resistor = v[i_vsrc]
+        assert current_through_resistor == pytest.approx(vsrc.voltage / res.resistance, abs=1e-6)
 
 
 # Helper function to find the voltage at the vertex closest to a connection point
