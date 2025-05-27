@@ -137,7 +137,7 @@ def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[
     return seed_points
 
 
-def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.dok_matrix:
+def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
     """
     Compute the Laplace operator for a given mesh. This is in "mesh-local"
     indices, so the variable indices are given by the mesh.vertices indices.
@@ -371,7 +371,7 @@ class NodeIndexer:
 
 def stamp_network_into_system(network: problem.Network,
                               node_indexer: NodeIndexer,
-                              L: scipy.sparse.dok_matrix,
+                              L: scipy.sparse.lil_matrix,
                               r: np.ndarray) -> None:
     for element in network.elements:
         match element:
@@ -420,7 +420,7 @@ def stamp_network_into_system(network: problem.Network,
 def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
                                    conductances: list[float],
                                    vindex: VertexIndexer,
-                                   L: scipy.sparse.dok_matrix) -> None:
+                                   L: scipy.sparse.lil_matrix) -> None:
     for i_mesh, (msh, conductance) in enumerate(zip(meshes, conductances)):
         L_msh = conductance * laplace_operator(msh)
 
@@ -538,7 +538,7 @@ def solve(prob: problem.Problem) -> Solution:
     N = len(vindex.global_index_to_vertex_index) + \
         node_indexer.internal_node_count + \
         len(node_indexer.extra_source_to_global_index)
-    L = scipy.sparse.dok_matrix((N, N), dtype=DTYPE)
+    L = scipy.sparse.lil_matrix((N, N), dtype=DTYPE)
     r = np.zeros(N, dtype=DTYPE)
 
     # Now we compute the Laplace operator for each mesh and insert it into the
