@@ -7,7 +7,6 @@ import sys
 import OpenGL.GL as gl
 
 from typing import Optional
-from pathlib import Path
 from dataclasses import dataclass, field
 
 import abc
@@ -23,7 +22,7 @@ from PySide6.QtWidgets import (
 
 import shapely.geometry
 
-from . import kicad, mesh, solver, units, colormaps
+from . import mesh, solver, units, colormaps
 
 
 log = logging.getLogger(__name__)
