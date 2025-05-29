@@ -1,6 +1,5 @@
 
 
-import collections
 import itertools
 import logging
 import numpy as np
@@ -8,6 +7,7 @@ import scipy.sparse
 import scipy.spatial
 import shapely
 import shapely.geometry
+import warnings
 
 from dataclasses import dataclass, field
 
@@ -17,6 +17,15 @@ log = logging.getLogger(__name__)
 
 
 DTYPE = np.float64
+
+
+class SolverWarning(Warning):
+    """
+    A warning that is raised by the solver when it encounters a problem
+    that does not prevent it from solving the problem, but may indicate
+    a potential issue with the problem definition.
+    """
+    pass
 
 
 @dataclass
@@ -596,8 +605,13 @@ def solve(prob: problem.Problem) -> Solution:
     log.info("Solving the system of equations")
     v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
 
-    # TODO: Add a verification check that checks if the ground node _current_
-    # is indeed 0. (otherwise we have unterminated current loops).
+    if not np.isclose(v[-1], 0):
+        # This is a warning, but we still continue to produce the solution object
+        # since it may still be useful for the user.
+        warnings.warn(
+            "Ground node voltage is not zero, this may indicate a problem with the system.",
+            SolverWarning
+        )
 
     # And now we just grab the final solution vector and reconstruct it back
     # into a solution object for easier consumption by the caller.

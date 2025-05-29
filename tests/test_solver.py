@@ -714,7 +714,8 @@ class TestVertexIndexer:
 
 class TestSolverEndToEnd:
 
-    @for_all_kicad_projects(exclude=["tht_component"])
+    @for_all_kicad_projects(exclude=["tht_component",
+                                     "unterminated_current_loop"])
     def test_all_test_projects_solve(self, project):
         """Test that solver.solve works on all test projects."""
         # Load the problem from the KiCad project
@@ -742,7 +743,9 @@ class TestSolverEndToEnd:
                     # here, since the solver may decide to return np.float32 or something
                     assert np.isfinite(value[vertex])
 
-    @for_all_kicad_projects(exclude=["tht_component", "long_trace_current"])
+    @for_all_kicad_projects(exclude=["tht_component",
+                                     "long_trace_current",
+                                     "unterminated_current_loop"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
@@ -1309,3 +1312,10 @@ class TestSolverEndToEnd:
         assert tp_voltages["TP1"] - tp_voltages["TP5"] == pytest.approx(expected_shared_drop, abs=0.02), \
             f"Voltage drop TP1-TP5: {tp_voltages['TP1'] - tp_voltages['TP5']:.3f}V vs expected {expected_shared_drop:.3f}V"
 
+    def test_unterminated_current_loop_warning(self, kicad_test_projects):
+        project = kicad_test_projects["unterminated_current_loop"]
+        prob = kicad.load_kicad_project(project.pro_path)
+        with pytest.warns(solver.SolverWarning, match="Ground node voltage is not zero"):
+            solution = solver.solve(prob)
+        # TODO: Ideally, we would sanity check that the solution object is
+        # at least reasonably structured
