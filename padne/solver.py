@@ -512,6 +512,24 @@ def filter_networks_in_dead_regions(prob: problem.Problem,
     return filtered_networks
 
 
+def find_best_ground_node_index(prob: problem.Problem, node_indexer: NodeIndexer) -> int:
+    max_voltage = float('-inf')
+    ground_node_index = 0  # Default to the first node
+
+    for network in prob.networks:
+        for element in network.elements:
+            if not isinstance(element, problem.VoltageSource):
+                continue
+            # We are looking for the node with the highest voltage
+            if element.voltage > max_voltage:
+                max_voltage = element.voltage
+                ground_node_index = node_indexer.node_to_global_index[element.n]
+
+    log.debug(f"Selected ground node index: {ground_node_index}")
+
+    return ground_node_index
+
+
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -594,7 +612,8 @@ def solve(prob: problem.Problem) -> Solution:
         stamp_network_into_system(network, node_indexer, L, r)
 
     # TODO: Implement a better way to pick the ground node.
-    setup_ground_node(0, L, r)
+    i_gnd = find_best_ground_node_index(prob, node_indexer)
+    setup_ground_node(i_gnd, L, r)
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
