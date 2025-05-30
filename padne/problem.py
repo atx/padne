@@ -147,6 +147,29 @@ class CurrentSource(BaseLumped):
 
 
 @dataclass(frozen=True)
+class VoltageRegulator(BaseLumped):
+    v_p: NodeID
+    v_n: NodeID
+    s_f: NodeID
+    s_t: NodeID
+
+    voltage: float
+    gain: float
+
+    @property
+    def terminals(self) -> list[NodeID]:
+        return [self.v_p, self.v_n, self.s_f, self.s_t]
+
+    @property
+    def is_source(self) -> bool:
+        return True
+
+    @property
+    def extra_variable_count(self) -> int:
+        return 1
+
+
+@dataclass(frozen=True)
 class Problem:
     layers: list[Layer]
     networks: list[Network]

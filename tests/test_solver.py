@@ -100,6 +100,46 @@ class TestNetworkSolver:
         current_through_resistor = v[i_vsrc]
         assert current_through_resistor == pytest.approx(vsrc.voltage / res.resistance, abs=1e-6)
 
+    def test_voltage_regulator(self):
+        n_p = problem.NodeID()
+        n_n = problem.NodeID()
+        n_f = problem.NodeID()
+        n_t = problem.NodeID()
+
+        res_vsrc = problem.Resistor(
+            a=n_p, b=n_n, resistance=2.2
+        )
+        res_csrc = problem.Resistor(
+            a=n_f, b=n_t, resistance=1.4
+        )
+
+        # This is just so that we do not have two floating connected components
+        res_coupling = problem.Resistor(
+            a=n_t, b=n_n, resistance=100000
+        )
+
+        reg = problem.VoltageRegulator(
+            v_p=n_p, v_n=n_n,
+            s_f=n_f, s_t=n_t,
+            voltage=3.3,
+            gain=0.3,
+        )
+
+        network = problem.Network(
+            connections=[],
+            elements=[res_csrc, res_vsrc, res_coupling, reg],
+        )
+
+        node_indexer, v, s = self.solve_network(network)
+        v_at_vsrc_side = s[n_p] - s[n_n]
+        assert v_at_vsrc_side == pytest.approx(reg.voltage, abs=1e-6)
+        vsrc_current = v[node_indexer.extra_source_to_global_index[reg]]
+        assert vsrc_current == pytest.approx(reg.voltage / res_vsrc.resistance, abs=1e-6)
+        expected_current_at_csrc = vsrc_current * reg.gain
+        expected_voltage_at_csrc = expected_current_at_csrc * res_csrc.resistance
+        v_at_csrc_side = s[n_f] - s[n_t]
+        assert v_at_csrc_side == pytest.approx(expected_voltage_at_csrc, abs=1e-6)
+
 
 # Helper function to find the voltage at the vertex closest to a connection point
 def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
