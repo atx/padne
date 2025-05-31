@@ -4,6 +4,7 @@ import shapely.geometry
 import math
 import numpy as np
 import scipy.sparse
+import warnings
 
 from padne import solver, problem, mesh, kicad
 
@@ -169,6 +170,30 @@ def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
         f"(closest found: {closest_vertex_point} with dist={best_dist})"
     assert found_value is not None
     return found_value
+
+
+# Add this helper function at the module level
+def _find_connection_at_point(prob: problem.Problem,
+                             coords: tuple[float, float],
+                             layer_name: str,
+                             tolerance: float = 1e-2) -> problem.Connection:
+    """
+    Finds a problem.Connection at the given coordinates on the specified layer.
+    Raises ValueError if no connection is found.
+    Warns and returns the first if multiple are found within tolerance.
+    """
+    target_point = shapely.geometry.Point(coords)
+    found_connections = []
+
+    for network in prob.networks:
+        for conn in network.connections:
+            if conn.layer.name == layer_name and conn.point.distance(target_point) < tolerance:
+                found_connections.append(conn)
+    
+    if not found_connections:
+        raise ValueError(f"Connection at {coords} on layer '{layer_name}' not found within tolerance {tolerance}mm.")
+
+    return found_connections[0]
 
 
 class TestConnectivityGraph:
@@ -1359,3 +1384,54 @@ class TestSolverEndToEnd:
             solution = solver.solve(prob)
         # TODO: Ideally, we would sanity check that the solution object is
         # at least reasonably structured
+
+    def test_ldo_regulator_voltages(self, kicad_test_projects):
+        """
+        Tests the LDO regulator functionality by checking voltage differences
+        at specific points in the 'ldo' test project.
+        """
+        project = kicad_test_projects["ldo"]
+        prob = kicad.load_kicad_project(project.pro_path)
+        sol = solver.solve(prob)
+
+        test_cases = [
+            {
+                "p": (147.575, 101.785),
+                "n": (152.525, 103.055),
+                "expected_voltage": 3.3,
+            },
+            {
+                "p": (141.3, 101.2),
+                "n": (41.3, 101.2375),
+                "expected_voltage": 2.4,
+            },
+            {
+                "p": (141.3, 104.2),
+                "n": (41.3, 104.1625),
+                "expected_voltage": -2.4,
+            },
+            {
+                "p": (257.3, 99.8375),
+                "n": (157, 99.8),
+                "expected_voltage": 2.4,
+            },
+            {
+                "p": (157, 102.8),
+                "n": (257.3, 102.7625),
+                "expected_voltage": 2.4,
+            },
+        ]
+
+        for i, case in enumerate(test_cases):
+            conn_p = _find_connection_at_point(prob, case["p"], "F.Cu")
+            conn_n = _find_connection_at_point(prob, case["n"], "F.Cu")
+
+            voltage_p = find_vertex_value(sol, conn_p)
+            voltage_n = find_vertex_value(sol, conn_n)
+            
+            measured_voltage_diff = voltage_p - voltage_n
+            
+            # Using an absolute tolerance of 50mV for voltage comparisons.
+            # This can be adjusted based on expected precision.
+            assert measured_voltage_diff == \
+                    pytest.approx(case["expected_voltage"], abs=0.05)
