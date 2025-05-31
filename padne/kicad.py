@@ -17,7 +17,7 @@ import tempfile
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Iterator
+from typing import Any, Mapping, Optional, Iterator, List
 
 from . import problem, units
 
@@ -247,6 +247,20 @@ class ConsumerSpec:
 
 
 @dataclass(frozen=True)
+class RegulatorSpec:
+    """
+    Specifies a voltage regulator, connected to multiple pins for its terminals.
+    """
+    voltage: float
+    gain: float
+    resistance: float
+    endpoints_p: List[Endpoint]  # Positive voltage output/sense pins
+    endpoints_n: List[Endpoint]  # Negative voltage output/sense pins
+    endpoints_f: List[Endpoint]  # Input power "from" pins
+    endpoints_t: List[Endpoint]  # Input power "to" pins
+
+
+@dataclass(frozen=True)
 class ViaSpec:
     """
     Specifies a via in the PCB.
@@ -375,6 +389,7 @@ class Directives:
     # TODO: Add default value for 1oz copper
     lumpeds: list[LumpedSpec]
     consumers: list[ConsumerSpec]
+    regulators: list[RegulatorSpec]
 
 
 def parse_endpoint(token: str) -> Endpoint:
@@ -449,9 +464,57 @@ def parse_consumer_spec_directive(directive: Directive) -> ConsumerSpec:
     )
 
 
+def _parse_endpoints_param(param_str: Optional[str]) -> list[Endpoint]:
+    """Helper to parse a comma-separated string of endpoints."""
+    if not param_str:
+        return []
+    return [parse_endpoint(ep_str.strip()) for ep_str in param_str.split(',') if ep_str.strip()]
+
+
+def parse_regulator_spec_directive(directive: Directive) -> RegulatorSpec:
+    """
+    Parse a REGULATOR directive into a RegulatorSpec object.
+    Example: !padne REGULATOR v=5V gain=1.0 r=0.001 p=U1.1,U1.2 n=U1.3 f=U1.4 t=U1.5
+    """
+    voltage = units.Value.parse(directive.params["v"]).value
+    
+    gain = float(directive.params.get("gain", "1.0"))
+    resistance = units.Value.parse(directive.params.get("r", "0.001")).value
+
+    endpoints_p = _parse_endpoints_param(directive.params.get("p"))
+    endpoints_n = _parse_endpoints_param(directive.params.get("n"))
+    endpoints_f = _parse_endpoints_param(directive.params.get("f"))
+    endpoints_t = _parse_endpoints_param(directive.params.get("t"))
+
+    # Basic validation: at least one P and N pin should be defined for output.
+    # And at least one F and T pin for input.
+    # This is a soft check; the solver might handle disconnected regulators,
+    # but it's unusual for a user to define them this way.
+    if not endpoints_p:
+        warnings.warn(f"REGULATOR directive has no 'p' (positive output) pins: {directive.params}")
+    if not endpoints_n:
+        warnings.warn(f"REGULATOR directive has no 'n' (negative output) pins: {directive.params}")
+    if not endpoints_f:
+        warnings.warn(f"REGULATOR directive has no 'f' (power input 'from') pins: {directive.params}")
+    if not endpoints_t:
+        warnings.warn(f"REGULATOR directive has no 't' (power input 'to') pins: {directive.params}")
+
+
+    return RegulatorSpec(
+        voltage=voltage,
+        gain=gain,
+        resistance=resistance,
+        endpoints_p=endpoints_p,
+        endpoints_n=endpoints_n,
+        endpoints_f=endpoints_f,
+        endpoints_t=endpoints_t
+    )
+
+
 def process_directives(directives: list[Directive]) -> Directives:
     lumpeds = []
     consumers = []
+    regulators = []
 
     for directive in directives:
         match directive.name:
@@ -461,10 +524,13 @@ def process_directives(directives: list[Directive]) -> Directives:
             case "CONSUMER":
                 consumer = parse_consumer_spec_directive(directive)
                 consumers.append(consumer)
+            case "REGULATOR":
+                regulator = parse_regulator_spec_directive(directive)
+                regulators.append(regulator)
             case _:
                 warnings.warn(f"Unknown directive: {directive.name}")
 
-    return Directives(lumpeds=lumpeds, consumers=consumers)
+    return Directives(lumpeds=lumpeds, consumers=consumers, regulators=regulators)
 
 
 def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
@@ -942,6 +1008,85 @@ def create_consumer_from_spec(board: pcbnew.BOARD,
     )
 
 
+def create_regulator_from_spec(board: pcbnew.BOARD,
+                               spec: RegulatorSpec,
+                               layer_dict: dict[str, problem.Layer]) -> problem.Network:
+    """
+    Create a problem.Network object from a RegulatorSpec.
+    This involves creating an ideal VoltageRegulator element and connecting its
+    terminals to the specified PCB pads via small resistors.
+    """
+    elements: list[problem.BaseLumped] = []
+    connections: list[problem.Connection] = []
+
+    # Internal nodes for the ideal regulator
+    node_vp_internal = problem.NodeID()  # Positive output voltage terminal
+    node_vn_internal = problem.NodeID()  # Negative output voltage terminal (reference)
+    node_f_internal = problem.NodeID()   # Power input "from" terminal
+    node_t_internal = problem.NodeID()   # Power input "to" terminal (return)
+
+    # Create the ideal voltage regulator element
+    regulator_element = problem.VoltageRegulator(
+        v_p=node_vp_internal,
+        v_n=node_vn_internal,
+        s_f=node_f_internal,
+        s_t=node_t_internal,
+        voltage=spec.voltage,
+        gain=spec.gain
+    )
+    elements.append(regulator_element)
+
+    # Connect positive output/sense pins (p)
+    for ep in spec.endpoints_p:
+        layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+        layer = layer_dict[layer_name]
+        conn = problem.Connection(layer=layer, point=point)
+        connections.append(conn)
+        elements.append(problem.Resistor(
+            a=node_vp_internal,
+            b=conn.node_id,
+            resistance=spec.resistance
+        ))
+
+    # Connect negative output/sense pins (n)
+    for ep in spec.endpoints_n:
+        layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+        layer = layer_dict[layer_name]
+        conn = problem.Connection(layer=layer, point=point)
+        connections.append(conn)
+        elements.append(problem.Resistor(
+            a=node_vn_internal,
+            b=conn.node_id,
+            resistance=spec.resistance
+        ))
+
+    # Connect power input "from" pins (f)
+    for ep in spec.endpoints_f:
+        layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+        layer = layer_dict[layer_name]
+        conn = problem.Connection(layer=layer, point=point)
+        connections.append(conn)
+        elements.append(problem.Resistor(
+            a=node_f_internal,
+            b=conn.node_id,
+            resistance=spec.resistance
+        ))
+
+    # Connect power input "to" pins (t)
+    for ep in spec.endpoints_t:
+        layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+        layer = layer_dict[layer_name]
+        conn = problem.Connection(layer=layer, point=point)
+        connections.append(conn)
+        elements.append(problem.Resistor(
+            a=node_t_internal,
+            b=conn.node_id,
+            resistance=spec.resistance
+        ))
+    
+    return problem.Network(elements=elements, connections=connections)
+
+
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
@@ -971,8 +1116,8 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     
     layer_dict = construct_layer_dict(plotted_layers, stackup)
     
-    # Convert LumpedSpec objects to Lumped objects
-    log.info("Creating lumped elements")
+    # Convert Spec objects to Network objects
+    log.info("Creating networks from specifications")
     networks = []
     for lumped_spec in directives.lumpeds:
         network = create_lumped_element_from_spec(board, lumped_spec, layer_dict)
@@ -980,6 +1125,10 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
 
     for consumer_spec in directives.consumers:
         network = create_consumer_from_spec(board, consumer_spec, layer_dict)
+        networks.append(network)
+
+    for regulator_spec in directives.regulators:
+        network = create_regulator_from_spec(board, regulator_spec, layer_dict)
         networks.append(network)
 
     log.info("Processing vias and through hole pads")
