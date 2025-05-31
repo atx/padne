@@ -5,6 +5,8 @@ import math
 import numpy as np
 import scipy.sparse
 import warnings
+from dataclasses import dataclass
+from typing import Optional, Any
 
 from padne import solver, problem, mesh, kicad
 
@@ -194,6 +196,48 @@ def _find_connection_at_point(prob: problem.Problem,
         raise ValueError(f"Connection at {coords} on layer '{layer_name}' not found within tolerance {tolerance}mm.")
 
     return found_connections[0]
+
+
+@dataclass
+class ExpectedVoltage:
+    p_coords: tuple[float, float]
+    n_coords: tuple[float, float]
+    expected_voltage: float
+    abs_tolerance: float
+    p_layer: str = "F.Cu"
+    n_layer: str = "F.Cu"
+    description: Optional[str] = None
+
+    def validate(self, prob: problem.Problem, sol: solver.Solution, test_case_id: Optional[Any] = None):
+        """
+        Validates that the voltage difference between p and n points in the solution
+        matches the expected_voltage within the given absolute tolerance.
+
+        Args:
+            prob: The problem.Problem object.
+            sol: The solver.Solution object.
+            test_case_id: An optional identifier for the test case, used in failure messages.
+        """
+        if self.description:
+            desc_prefix = f"Test case '{self.description}'"
+        elif test_case_id is not None:
+            desc_prefix = f"Test case {test_case_id}"
+        else:
+            desc_prefix = "Voltage check"
+
+        conn_p = _find_connection_at_point(prob, self.p_coords, self.p_layer)
+        conn_n = _find_connection_at_point(prob, self.n_coords, self.n_layer)
+
+        voltage_p = find_vertex_value(sol, conn_p)
+        voltage_n = find_vertex_value(sol, conn_n)
+        
+        measured_voltage_diff = voltage_p - voltage_n
+        
+        assert measured_voltage_diff == pytest.approx(self.expected_voltage, abs=self.abs_tolerance), \
+            (f"Voltage check '{desc_prefix}' failed: "
+             f"Expected V({self.p_coords} on '{self.p_layer}') - V({self.n_coords} on '{self.n_layer}') "
+             f"~= {self.expected_voltage:.3f}V, but got {measured_voltage_diff:.3f}V. "
+             f"(Vp={voltage_p:.3f}V, Vn={voltage_n:.3f}V)")
 
 
 class TestConnectivityGraph:
@@ -1335,47 +1379,42 @@ class TestSolverEndToEnd:
 
         assert solution is not None, "Solver failed to produce a solution"
 
-        # Find the connection objects for each test point
-        # For this specific test, we know the test points are at these specific coordinates
         expected_coords = {
             "TP1": (180, 150), "TP2": (100, 150), "TP3": (120, 150), "TP4": (140, 150),
             "TP5": (180, 50), "TP6": (100, 50), "TP7": (120, 50), "TP8": (140, 50),
         }
-
-        # Find connections that match these coordinates
-        tp_connections = {}
         
-        for network in prob.networks:
-            for conn in network.connections:
-                # Find which test point this connection corresponds to
-                for tp_name, coords in expected_coords.items():
-                    if abs(conn.point.x - coords[0]) < 1e-3 and abs(conn.point.y - coords[1]) < 1e-3:
-                        tp_connections[tp_name] = conn
-                        break
-        
-        # Ensure we found all test points
-        assert len(tp_connections) == 8, f"Did not find all test points. Found: {list(tp_connections.keys())}"
-
-        # Get voltages at each test point
-        tp_voltages = {name: find_vertex_value(solution, conn) for name, conn in tp_connections.items()}
-
-        # Perform assertions
-        # Voltage drop across individual 1A paths (TP2-TP6, TP3-TP7, TP4-TP8)
-        # Assuming current flows from TP{2,3,4} towards TP1, and returns via TP5 towards TP{6,7,8}
-        # The voltage at TP{2,3,4} should be higher than TP{6,7,8} respectively.
-        # The resistance of the path segment is 0.24 Ohm (from project description).
-        # V_drop = I * R = 1A * 0.24 Ohm = 0.24V
+        # The original test asserts: tp_voltages["TP6"] - tp_voltages["TP2"] == expected_drop
+        # This means V(TP6) is expected to be higher than V(TP2).
+        # So, p_coords = TP6, n_coords = TP2 for a positive expected_voltage.
         expected_individual_drop = 0.24
-        assert tp_voltages["TP6"] - tp_voltages["TP2"] == pytest.approx(expected_individual_drop, abs=0.01)
-        assert tp_voltages["TP7"] - tp_voltages["TP3"] == pytest.approx(expected_individual_drop, abs=0.01)
-        assert tp_voltages["TP8"] - tp_voltages["TP4"] == pytest.approx(expected_individual_drop, abs=0.01)
+        expected_shared_drop = 3 * 0.24 # V(TP1) - V(TP5)
 
-        # Voltage drop across the shared 3A path (TP1-TP5)
-        # Current flows from TP1 towards TP5. V(TP1) should be higher than V(TP5).
-        # V_drop = I_total * R = 3A * 0.24 Ohm = 0.72V
-        expected_shared_drop = 3 * 0.24
-        assert tp_voltages["TP1"] - tp_voltages["TP5"] == pytest.approx(expected_shared_drop, abs=0.02), \
-            f"Voltage drop TP1-TP5: {tp_voltages['TP1'] - tp_voltages['TP5']:.3f}V vs expected {expected_shared_drop:.3f}V"
+        voltage_checks = [
+            ExpectedVoltage(
+                p_coords=expected_coords["TP6"], n_coords=expected_coords["TP2"],
+                expected_voltage=expected_individual_drop, abs_tolerance=0.01,
+                description="TP6-TP2 drop (1A path)"
+            ),
+            ExpectedVoltage(
+                p_coords=expected_coords["TP7"], n_coords=expected_coords["TP3"],
+                expected_voltage=expected_individual_drop, abs_tolerance=0.01,
+                description="TP7-TP3 drop (1A path)"
+            ),
+            ExpectedVoltage(
+                p_coords=expected_coords["TP8"], n_coords=expected_coords["TP4"],
+                expected_voltage=expected_individual_drop, abs_tolerance=0.01,
+                description="TP8-TP4 drop (1A path)"
+            ),
+            ExpectedVoltage(
+                p_coords=expected_coords["TP1"], n_coords=expected_coords["TP5"],
+                expected_voltage=expected_shared_drop, abs_tolerance=0.02,
+                description="TP1-TP5 drop (3A shared path)"
+            ),
+        ]
+
+        for i, ev_check in enumerate(voltage_checks):
+            ev_check.validate(prob, solution, test_case_id=i)
 
     def test_unterminated_current_loop_warning(self, kicad_test_projects):
         project = kicad_test_projects["unterminated_current_loop"]
@@ -1394,44 +1433,28 @@ class TestSolverEndToEnd:
         prob = kicad.load_kicad_project(project.pro_path)
         sol = solver.solve(prob)
 
-        test_cases = [
-            {
-                "p": (147.575, 101.785),
-                "n": (152.525, 103.055),
-                "expected_voltage": 3.3,
-            },
-            {
-                "p": (141.3, 101.2),
-                "n": (41.3, 101.2375),
-                "expected_voltage": 2.4,
-            },
-            {
-                "p": (141.3, 104.2),
-                "n": (41.3, 104.1625),
-                "expected_voltage": -2.4,
-            },
-            {
-                "p": (257.3, 99.8375),
-                "n": (157, 99.8),
-                "expected_voltage": 2.4,
-            },
-            {
-                "p": (157, 102.8),
-                "n": (257.3, 102.7625),
-                "expected_voltage": 2.4,
-            },
+        voltage_checks = [
+            ExpectedVoltage(
+                p_coords=(147.575, 101.785), n_coords=(152.525, 103.055),
+                expected_voltage=3.3, abs_tolerance=0.05, description="LDO Output 3.3V"
+            ),
+            ExpectedVoltage(
+                p_coords=(141.3, 101.2), n_coords=(41.3, 101.2375),
+                expected_voltage=2.4, abs_tolerance=0.05, description="LDO Input Positive Rail Example"
+            ),
+            ExpectedVoltage(
+                p_coords=(141.3, 104.2), n_coords=(41.3, 104.1625),
+                expected_voltage=-2.4, abs_tolerance=0.05, description="LDO Input Negative Rail Example"
+            ),
+            ExpectedVoltage(
+                p_coords=(257.3, 99.8375), n_coords=(157, 99.8),
+                expected_voltage=2.4, abs_tolerance=0.05, description="LDO Related Check 1"
+            ),
+            ExpectedVoltage(
+                p_coords=(157, 102.8), n_coords=(257.3, 102.7625),
+                expected_voltage=2.4, abs_tolerance=0.05, description="LDO Related Check 2"
+            ),
         ]
 
-        for i, case in enumerate(test_cases):
-            conn_p = _find_connection_at_point(prob, case["p"], "F.Cu")
-            conn_n = _find_connection_at_point(prob, case["n"], "F.Cu")
-
-            voltage_p = find_vertex_value(sol, conn_p)
-            voltage_n = find_vertex_value(sol, conn_n)
-            
-            measured_voltage_diff = voltage_p - voltage_n
-            
-            # Using an absolute tolerance of 50mV for voltage comparisons.
-            # This can be adjusted based on expected precision.
-            assert measured_voltage_diff == \
-                    pytest.approx(case["expected_voltage"], abs=0.05)
+        for i, ev_check in enumerate(voltage_checks):
+            ev_check.validate(prob, sol, test_case_id=i)
