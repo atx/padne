@@ -111,6 +111,12 @@ excludes = [
     'gi.repository.GLib',
     'gi.repository.Gio',
     'gi.repository.GObject',
+    # Some other random stuff that is not needed
+    'IPython',
+    'jedi',
+    'parso',
+    'pygments',
+    'pytest',
 ]
 
 binaries_exclude = [
@@ -166,7 +172,7 @@ exe = EXE(
     name='padne',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,
     upx=False,  # UPX can corrupt Qt libraries
     upx_exclude=[],
     runtime_tmpdir=None,
