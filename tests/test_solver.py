@@ -247,7 +247,8 @@ class TestConnectivityGraph:
         project = kicad_test_projects["simple_geometry"]
         prob = kicad.load_kicad_project(project.pro_path)
 
-        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        strtrees = solver.construct_strtrees_from_layers(prob.layers)
+        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
         assert len(cg.nodes) == 2
         connected = cg.compute_connected_nodes()
         assert len(connected) == 2
@@ -259,7 +260,8 @@ class TestConnectivityGraph:
         project = kicad_test_projects["different_layer_and_net_same_xy"]
         prob = kicad.load_kicad_project(project.pro_path)
 
-        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        strtrees = solver.construct_strtrees_from_layers(prob.layers)
+        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
         assert len(cg.nodes) == 3
         connected = cg.compute_connected_nodes()
         assert len(connected) == 2
@@ -268,7 +270,8 @@ class TestConnectivityGraph:
         project = kicad_test_projects["disconnected_components"]
         prob = kicad.load_kicad_project(project.pro_path)
 
-        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        strtrees = solver.construct_strtrees_from_layers(prob.layers)
+        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
         assert len(cg.nodes) == 11
         connected = cg.compute_connected_nodes()
         assert len(connected) == 5
@@ -292,7 +295,8 @@ class TestSolverMeshLayer:
         mesher = mesh.Mesher()
         
         # Create connectivity graph and find connected layer-mesh pairs
-        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        strtrees = solver.construct_strtrees_from_layers(prob.layers)
+        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
         
         # Call the function under test with the required argument
@@ -335,7 +339,8 @@ class TestSolverMeshLayer:
         mesher = mesh.Mesher()
         
         # Create connectivity graph and find connected layer-mesh pairs
-        cg = solver.ConnectivityGraph.create_from_problem(prob)
+        strtrees = solver.construct_strtrees_from_layers(prob.layers)
+        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
         
         # Test that collect_seed_points extracts the right points

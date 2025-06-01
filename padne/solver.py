@@ -40,6 +40,26 @@ class Solution:
     layer_solutions: list[LayerSolution]
 
 
+def construct_strtrees_from_layers(layers: list[problem.Layer]) -> list[shapely.strtree.STRtree]:
+    """
+    Construct STRtrees for each layer in the problem.
+    
+    Args:
+        layers: List of layers to construct STRtrees for
+        
+    Returns:
+        List of STRtrees, one for each layer
+    """
+    strtrees = []
+    for layer in layers:
+        # We need to break up the layer Multipolygons into the individual components
+        # for the STRTree construction.
+        geoms = [geom for geom in layer.shape.geoms]
+        strtree = shapely.strtree.STRtree(geoms)
+        strtrees.append(strtree)
+    return strtrees
+
+
 @dataclass
 class ConnectivityGraph:
     nodes: list["Node"] = field(default_factory=list)
@@ -52,18 +72,10 @@ class ConnectivityGraph:
         neighbors: set["ConnectivityGraph.Node"] = field(default_factory=set)
 
     @classmethod
-    def create_from_problem(cls, problem: problem.Problem) -> "ConnectivityGraph":
-        # TODO: This should be refactored and split into multiple functions
-        # First, construct an STRTree for every layer
-        strtrees = []
-        for layer in problem.layers:
-            # We need to break up the layer Multipolygons into the individual components
-            # for the STRTree construction.
-            geoms = [geom for geom in layer.shape.geoms]
-            strtree = shapely.strtree.STRtree(geoms)
-            strtrees.append(strtree)
-
-        # Next, we construct Node objects for ever layer geometry in the layers
+    def create_from_problem(cls,
+                            problem: problem.Problem,
+                            strtrees: list[shapely.strtree.STRtree]) -> "ConnectivityGraph":
+        # First, we construct Node objects for ever layer geometry in the layers
         # that is, a list nodes_by_layers[layer_i][geom_i] gives us the
         # Node that coresponds to the layer_i-th layers geom_i-th geometry
         # object.
@@ -518,21 +530,41 @@ def produce_layer_solutions(layers: list[problem.Layer],
 
 
 def filter_networks_in_dead_regions(prob: problem.Problem,
-                                    connected_layer_mesh_pairs: set[tuple[int, int]]) -> list[problem.Network]:
+                                    connected_layer_mesh_pairs: set[tuple[int, int]],
+                                    strtrees: list[shapely.strtree.STRtree]
+                                    ) -> list[problem.Network]:
     filtered_networks = []
     for network in prob.networks:
         has_a_dead_terminal = False
 
         for conn in network.connections:
-            layer_idx = prob.layers.index(conn.layer)
+            layer_i = prob.layers.index(conn.layer)
+            strtree = strtrees[layer_i]
 
-            for geom_i, geom in enumerate(conn.layer.shape.geoms):
-                if not geom.intersects(conn.point):
+            candidates = strtree.query(conn.point)
+            for geom_i in candidates:
+                if (layer_i, geom_i) in connected_layer_mesh_pairs:
+                    # Would have no effect on whether the network
+                    # has a dead terminal or not, do not even bother checking
                     continue
 
-                if (layer_idx, geom_i) not in connected_layer_mesh_pairs:
-                    has_a_dead_terminal = True
-                    break
+                if not conn.layer.shape.geoms[geom_i].intersects(conn.point):
+                    continue
+
+                # Okay, at this point:
+                # * We know that the connection is on (layer_i, geom_i)
+                # * We know that the (layer_i, geom_i) pair got eliminated by
+                # the connectivity graph check.
+                # This means we eliminate the entire network. In practice,
+                # it should not happen that a network has some dead
+                # terminals and some live terminals (that would mean ConnectivityGraph
+                # is broken). So it is enough to just find the first dead terminal
+                # and bail.
+                has_a_dead_terminal = True
+                break
+
+            if has_a_dead_terminal:
+                break
 
         if not has_a_dead_terminal:
             filtered_networks.append(network)
@@ -578,7 +610,8 @@ def solve(prob: problem.Problem) -> Solution:
     # We also keep track of which layer each mesh belongs to.
     # This will be needed later when we construct the final solution object.
     log.info("Meshing...")
-    connectivity_graph = ConnectivityGraph.create_from_problem(prob)
+    strtrees = construct_strtrees_from_layers(prob.layers)
+    connectivity_graph = ConnectivityGraph.create_from_problem(prob, strtrees)
     connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
     meshes, mesh_index_to_layer_index = \
         generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs)
@@ -593,7 +626,7 @@ def solve(prob: problem.Problem) -> Solution:
     # Now we need to filter out the lumped element networks that are not connected
     # to any of the meshes that we are driving with a source.
     filtered_networks = filter_networks_in_dead_regions(
-        prob, connected_layer_mesh_pairs
+        prob, connected_layer_mesh_pairs, strtrees
     )
     log.info(f"Filtered networks: {len(filtered_networks)}/{len(prob.networks)}")
     # Next, we construct the _internal_ system of equations for each of the
