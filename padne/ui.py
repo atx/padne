@@ -111,7 +111,7 @@ void main() {
 """
 
 
-COLOR_MAP = colormaps.VIRIDIS
+COLOR_MAP = colormaps.PLASMA
 
 
 class BaseTool(abc.ABC):
