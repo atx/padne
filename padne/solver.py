@@ -40,7 +40,8 @@ class Solution:
     layer_solutions: list[LayerSolution]
 
 
-def construct_strtrees_from_layers(layers: list[problem.Layer]) -> list[shapely.strtree.STRtree]:
+def construct_strtrees_from_layers(layers: list[problem.Layer]
+                                   ) -> list[shapely.strtree.STRtree]:
     """
     Construct STRtrees for each layer in the problem.
     
@@ -226,7 +227,8 @@ class VertexIndexer:
         return vindex
 
 
-def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph) -> set[tuple[int, int]]:
+def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
+                                      ) -> set[tuple[int, int]]:
     connected_nodes = connectivity_graph.compute_connected_nodes()
 
     layer_mesh_pairs = set()
@@ -240,7 +242,8 @@ def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph) -> 
 
 def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
-                                connected_layer_mesh_pairs: set[tuple[int, int]]) -> list[list[mesh.Mesh], list[int]]:
+                                connected_layer_mesh_pairs: set[tuple[int, int]]
+                                ) -> list[list[mesh.Mesh], list[int]]:
     meshes: list[mesh.Mesh] = []
     mesh_index_to_layer_index: list[int] = []
 
@@ -284,7 +287,8 @@ class NodeIndexer:
                            prob: problem.Problem,
                            meshes: list[mesh.Mesh],
                            mesh_index_to_layer_index: list[int],
-                           vindex: VertexIndexer) -> tuple[dict[int, scipy.spatial.KDTree], dict]:
+                           vindex: VertexIndexer
+                           ) -> tuple[dict[int, scipy.spatial.KDTree], dict]:
         """
         Construct a kdtree for each layer in the problem.
         """
@@ -489,13 +493,13 @@ def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
                                    conductances: list[float],
                                    vindex: VertexIndexer,
                                    L: scipy.sparse.lil_matrix) -> None:
-    for i_mesh, (msh, conductance) in enumerate(zip(meshes, conductances)):
+    for mesh_i, (msh, conductance) in enumerate(zip(meshes, conductances)):
         L_msh = conductance * laplace_operator(msh)
 
         # Glue them together into the global matrix
         for i, j, v in zip(L_msh.row, L_msh.col, L_msh.data):
-            global_i = vindex.mesh_vertex_index_to_global_index[(i_mesh, i)]
-            global_j = vindex.mesh_vertex_index_to_global_index[(i_mesh, j)]
+            global_i = vindex.mesh_vertex_index_to_global_index[(mesh_i, i)]
+            global_j = vindex.mesh_vertex_index_to_global_index[(mesh_i, j)]
             # TODO: Is there any possibility that the COO matrix contains duplicates?
             L[global_i, global_j] += v
 
@@ -506,18 +510,18 @@ def produce_layer_solutions(layers: list[problem.Layer],
                             mesh_index_to_layer_index: list[int],
                             v: np.array) -> list[LayerSolution]:
     layer_solutions = []
-    for i_layer, layer in enumerate(layers):
+    for layer_i, layer in enumerate(layers):
         layer_meshes = []
         layer_values = []
-        for i_mesh, msh in enumerate(meshes):
-            if mesh_index_to_layer_index[i_mesh] != i_layer:
+        for mesh_i, msh in enumerate(meshes):
+            if mesh_index_to_layer_index[mesh_i] != layer_i:
                 continue
 
             # Initialize an empty ZeroForm on this Mesh
             vertex_values = mesh.ZeroForm(msh)
             # and fill it with values from the global value array (solution of the system)
-            for i_vertex, vertex in enumerate(msh.vertices):
-                global_index = vindex.mesh_vertex_index_to_global_index[(i_mesh, i_vertex)]
+            for vertex_i, vertex in enumerate(msh.vertices):
+                global_index = vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
                 vertex_values[vertex] = v[global_index]
 
             # Append to the layer values

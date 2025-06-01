@@ -468,7 +468,11 @@ def _parse_endpoints_param(param_str: Optional[str]) -> list[Endpoint]:
     """Helper to parse a comma-separated string of endpoints."""
     if not param_str:
         return []
-    return [parse_endpoint(ep_str.strip()) for ep_str in param_str.split(',') if ep_str.strip()]
+    return [
+        parse_endpoint(ep_str.strip())
+        for ep_str in param_str.split(',')
+        if ep_str.strip()
+    ]
 
 
 def parse_regulator_spec_directive(directive: Directive) -> RegulatorSpec:
@@ -498,7 +502,6 @@ def parse_regulator_spec_directive(directive: Directive) -> RegulatorSpec:
         warnings.warn(f"REGULATOR directive has no 'f' (power input 'from') pins: {directive.params}")
     if not endpoints_t:
         warnings.warn(f"REGULATOR directive has no 't' (power input 'to') pins: {directive.params}")
-
 
     return RegulatorSpec(
         voltage=voltage,
@@ -682,7 +685,8 @@ def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
     return gerber_layers
 
 
-def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile) -> shapely.geometry.MultiPolygon:
+def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile
+                        ) -> shapely.geometry.MultiPolygon:
     # We have to call all of this manually, since we need to manually configure the
     # amount of segments in our arcs
     rvmc = gerber_data._get_rvmc()
@@ -698,7 +702,9 @@ def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile) -> shapely.
     return result.shape
 
 
-def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[PlottedGerberLayer]:
+def extract_layers_from_gerbers(board,
+                                gerber_layers: dict[int, Path]
+                                ) -> list[PlottedGerberLayer]:
     """
     Extract geometry from Gerber files and create PlottedGerberLayer objects.
     
@@ -747,7 +753,9 @@ def extract_layers_from_gerbers(board, gerber_layers: dict[int, Path]) -> list[P
 
 
 def find_pad_and_footprint(board: pcbnew.BOARD,
-                           designator: str, pad: str) -> tuple[pcbnew.FOOTPRINT, pcbnew.PAD]:
+                           designator: str,
+                           pad: str
+                           ) -> tuple[pcbnew.FOOTPRINT, pcbnew.PAD]:
     """
     Find a pad and its associated footprint on the PCB.
     """
@@ -766,7 +774,10 @@ def find_pad_and_footprint(board: pcbnew.BOARD,
     raise ValueError(f"Component {designator} not found in the PCB")
 
 
-def find_pad_location(board, designator: str, pad: str) -> tuple[str, shapely.geometry.Point]:
+def find_pad_location(board,
+                      designator: str,
+                      pad: str
+                      ) -> tuple[str, shapely.geometry.Point]:
     """
     Find the physical location of a pad on the PCB.
     
@@ -922,7 +933,8 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
 
 def create_lumped_element_from_spec(board: pcbnew.BOARD,
                                     spec: LumpedSpec,
-                                    layer_dict: dict[str, problem.Layer]) -> problem.Network:
+                                    layer_dict: dict[str, problem.Layer]
+                                    ) -> problem.Network:
     a_layer_name, a_point = find_pad_location(
         board, spec.endpoint_a.designator, spec.endpoint_a.pad
     )
