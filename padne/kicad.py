@@ -4,6 +4,7 @@ import warnings
 # is not yet cooked enough for us
 warnings.simplefilter("ignore", DeprecationWarning)
 
+import collections
 import enum
 import math
 import logging
@@ -15,9 +16,9 @@ import shapely
 import shapely.affinity
 import tempfile
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Iterator, List
+from typing import Any, Mapping, Optional, Iterator, List, ClassVar
 
 from . import problem, units
 
@@ -216,23 +217,158 @@ class Endpoint:
     pad: str
 
 
+def _parse_endpoints_param(param_str: Optional[str]) -> list[Endpoint]:
+    """Helper to parse a comma-separated string of endpoints."""
+    if not param_str:
+        return []
+    return [
+        parse_endpoint(ep_str.strip())
+        for ep_str in param_str.split(',')
+        if ep_str.strip()
+    ]
+
+
 @dataclass(frozen=True)
-class LumpedSpec:
+class BaseLumpedSpec:
     """
-    Specifies a single lumped element directly connected to a pad on the PCB.
+    Represents a base class that specifies a _single_ lumped element
+    being wired to a bunch of pads on the PCB.
     """
 
-    class Type(enum.Enum):
-        VOLTAGE = "VOLTAGE"
-        CURRENT = "CURRENT"
-        RESISTANCE = "RESISTANCE"
+    endpoints: dict[str, list[Endpoint]] = \
+        field(default_factory=lambda: collections.defaultdict(list))
 
-    endpoint_a: Endpoint
-    endpoint_b: Endpoint
+    values: dict[str, float] = field(default_factory=dict)
 
-    # Use the unified lumped type from the problem module.
-    type: "LumpedSpec.Type"
-    value: float
+    coupling: float = 0.001
+
+    # To be overridden by subclasses
+    endpoint_names: ClassVar[list[str]] = []
+    value_names: ClassVar[dict[str, str]] = []
+    lumped_type: ClassVar[type] = None
+
+    @classmethod
+    def from_directive(cls, directive: Directive) -> 'BaseLumpedSpec':
+        """
+        Parse a directive into a BaseLumpedSpec object.
+        
+        Args:
+            directive: The directive to parse
+            
+        Returns:
+            A BaseLumpedSpec object with parsed endpoints and values
+        """
+        spec = cls()
+        
+        for name in cls.endpoint_names:
+            if name not in directive.params:
+                raise ValueError(f"Missing endpoint parameter: {name} for {directive.name}")
+            spec.endpoints[name].extend(
+                _parse_endpoints_param(directive.params[name])
+            )
+        
+        for name in cls.value_names.keys():
+            if name not in directive.params:
+                raise ValueError(f"Missing value parameter: {name} for {directive.name}")
+            spec.values[name] = units.Value.parse(directive.params[name]).value
+        
+        return spec
+
+    def construct(self,
+                  board: pcbnew.BOARD,
+                  layer_dict: dict[str, problem.Layer]
+                  ) -> problem.BaseLumped:
+        """
+        Constructs a problem.BaseLumped element from the current specification.
+        This method should be implemented in subclasses to create the specific
+        type of lumped element.
+        """
+        # First, we construct the NodeID object that are connected to the endpoints
+        # of the internal lumped element we are going to create
+        internal_nodes = {
+            name: problem.NodeID()
+            for name in self.endpoint_names
+        }
+
+        # Next, we walk through the endpoint lists for every endpoint name
+        connections = []
+        elements = []
+        for name, endpoints in self.endpoints.items():
+            if not endpoints:
+                raise ValueError(f"No endpoints specified for {name} in {self.__class__.__name__}")
+            layer_and_point = [
+                find_pad_location(board, ep.designator, ep.pad)
+                for ep in endpoints
+            ]
+
+            if len(endpoints) == 1:
+                layer_name, point = layer_and_point[0]
+                layer = layer_dict[layer_name]
+                conn = problem.Connection(
+                    layer=layer,
+                    point=point,
+                    node_id=internal_nodes[name]
+                )
+                connections.append(conn)
+            else:
+                # If there are multiple endpoints, we create a "star"
+                # shaped resistor network leading from the endpoints to the
+                # internal node
+                for layer_name, point in layer_and_point:
+                    layer = layer_dict[layer_name]
+                    resistor = problem.Resistor(
+                        a=problem.NodeID(),
+                        b=internal_nodes[name],
+                        resistance=self.coupling,
+                    )
+                    conn = problem.Connection(
+                        layer=layer,
+                        point=point,
+                        node_id=resistor.a,
+                    )
+                    elements.append(resistor)
+                    connections.append(conn)
+
+        # Now we can create the internal lumped element
+        if not self.lumped_type:
+            raise NotImplementedError("lumped_type must be defined in subclasses")
+        kwargs = internal_nodes.copy()
+        kwargs.update({
+            arg_name: self.values[name]
+            for name, arg_name in self.value_names.items()
+        })
+        internal_lumped = self.lumped_type(**kwargs)
+
+        elements.append(internal_lumped)
+
+        # Finally, we create the Network object
+        return problem.Network(
+            connections=connections,
+            elements=elements,
+        )
+
+
+class ResistorSpec(BaseLumpedSpec):
+
+    endpoint_names = ["a", "b"]
+    value_names = {"r": "resistance"}
+    lumped_type = problem.Resistor
+
+
+class VoltageSourceSpec(BaseLumpedSpec):
+
+    endpoint_names = ["p", "n"]
+    value_names = {"v": "voltage"}
+    lumped_type = problem.VoltageSource
+
+    # TODO: Implement a custom construct method that does not introduce
+    # extra series resistance
+
+
+class CurrentSourceSpec(BaseLumpedSpec):
+    endpoint_names = ["f", "t"]
+    value_names = {"i": "current"}
+    lumped_type = problem.CurrentSource
 
 
 @dataclass(frozen=True)
@@ -385,9 +521,7 @@ class Directives:
     """
     Accumulates different directive types that can be present in the schematic.
     """
-    # Surface resistivity
-    # TODO: Add default value for 1oz copper
-    lumpeds: list[LumpedSpec]
+    lumped_specs: list[BaseLumpedSpec]
     consumers: list[ConsumerSpec]
     regulators: list[RegulatorSpec]
 
@@ -401,50 +535,6 @@ def parse_endpoint(token: str) -> Endpoint:
     if len(parts) != 2:
         raise ValueError(f"Invalid endpoint format: {token}")
     return Endpoint(designator=parts[0], pad=parts[1])
-
-
-def parse_lumped_spec_directive(directive: Directive) -> LumpedSpec:
-    try:
-        type_enum = LumpedSpec.Type(directive.name)
-    except ValueError:
-        raise ValueError(f"Unknown directive type: {directive.name}")
-
-    # TODO: I do not quite like this point here
-    # realistically, we should have something that has less friction when
-    # translating from an abstract directive into a lumped element
-    # into a problem element
-    # This is leaking abstraction since the parameter names here
-    # are technically not the same as the ones in the problem elements
-    # however, we are eventually going to want to support having, say,
-    # parameter variations etc
-
-    match type_enum:
-        case LumpedSpec.Type.VOLTAGE:
-            value_name = "v"
-            a_name = "p"
-            b_name = "n"
-        case LumpedSpec.Type.CURRENT:
-            value_name = "i"
-            a_name = "f"
-            b_name = "t"
-        case LumpedSpec.Type.RESISTANCE:
-            value_name = "r"
-            a_name = "a"
-            b_name = "b"
-        case _:
-            raise ValueError(f"Unknown directive type: {directive.name}")
-
-    # TODO: Check that the unit string is valid
-    value = units.Value.parse(directive.params[value_name])
-    ep_a = parse_endpoint(directive.params[a_name])
-    ep_b = parse_endpoint(directive.params[b_name])
-
-    return LumpedSpec(
-        endpoint_a=ep_a,
-        endpoint_b=ep_b,
-        type=type_enum,
-        value=value.value
-    )
 
 
 def parse_consumer_spec_directive(directive: Directive) -> ConsumerSpec:
@@ -462,17 +552,6 @@ def parse_consumer_spec_directive(directive: Directive) -> ConsumerSpec:
         endpoints_f=endpoints_f,
         endpoints_t=endpoints_t
     )
-
-
-def _parse_endpoints_param(param_str: Optional[str]) -> list[Endpoint]:
-    """Helper to parse a comma-separated string of endpoints."""
-    if not param_str:
-        return []
-    return [
-        parse_endpoint(ep_str.strip())
-        for ep_str in param_str.split(',')
-        if ep_str.strip()
-    ]
 
 
 def parse_regulator_spec_directive(directive: Directive) -> RegulatorSpec:
@@ -515,15 +594,20 @@ def parse_regulator_spec_directive(directive: Directive) -> RegulatorSpec:
 
 
 def process_directives(directives: list[Directive]) -> Directives:
-    lumpeds = []
+    directive_name_to_spec_type = {
+        "VOLTAGE": VoltageSourceSpec,
+        "CURRENT": CurrentSourceSpec,
+        "RESISTANCE": ResistorSpec,
+    }
+    lumped_specs = []
     consumers = []
     regulators = []
 
     for directive in directives:
         match directive.name:
             case "VOLTAGE" | "CURRENT" | "RESISTANCE":
-                lumped = parse_lumped_spec_directive(directive)
-                lumpeds.append(lumped)
+                lumped_spec = directive_name_to_spec_type[directive.name].from_directive(directive)
+                lumped_specs.append(lumped_spec)
             case "CONSUMER":
                 consumer = parse_consumer_spec_directive(directive)
                 consumers.append(consumer)
@@ -533,7 +617,8 @@ def process_directives(directives: list[Directive]) -> Directives:
             case _:
                 warnings.warn(f"Unknown directive: {directive.name}")
 
-    return Directives(lumpeds=lumpeds, consumers=consumers, regulators=regulators)
+    return Directives(
+        lumped_specs=lumped_specs, consumers=consumers, regulators=regulators)
 
 
 def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
@@ -931,54 +1016,6 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
     return layer_dict
 
 
-def create_lumped_element_from_spec(board: pcbnew.BOARD,
-                                    spec: LumpedSpec,
-                                    layer_dict: dict[str, problem.Layer]
-                                    ) -> problem.Network:
-    a_layer_name, a_point = find_pad_location(
-        board, spec.endpoint_a.designator, spec.endpoint_a.pad
-    )
-    b_layer_name, b_point = find_pad_location(
-        board, spec.endpoint_b.designator, spec.endpoint_b.pad
-    )
-
-    a_layer = layer_dict[a_layer_name]
-    b_layer = layer_dict[b_layer_name]
-
-    conn_a = problem.Connection(layer=a_layer, point=a_point)
-    conn_b = problem.Connection(layer=b_layer, point=b_point)
-
-    # Create the specific lumped element subclass instance
-    match spec.type:
-        case LumpedSpec.Type.RESISTANCE:
-            lumped_element = problem.Resistor(
-                a=conn_a.node_id,
-                b=conn_b.node_id,
-                resistance=spec.value
-            )
-        case LumpedSpec.Type.VOLTAGE:
-            # Assuming endpoint_a is positive (p) and endpoint_b is negative (n)
-            lumped_element = problem.VoltageSource(
-                p=conn_a.node_id,
-                n=conn_b.node_id,
-                voltage=spec.value
-            )
-        case LumpedSpec.Type.CURRENT:
-            # Assuming current flows from endpoint_a (f) to endpoint_b (t)
-            lumped_element = problem.CurrentSource(
-                f=conn_a.node_id,
-                t=conn_b.node_id,
-                current=spec.value
-            )
-        case _:
-            raise ValueError(f"Unhandled lumped element type: {spec.type}")
-
-    return problem.Network(
-        connections=[conn_a, conn_b],
-        elements=[lumped_element]
-    )
-
-
 def create_consumer_from_spec(board: pcbnew.BOARD,
                               spec: ConsumerSpec,
                               layer_dict: dict[str, problem.Layer]) -> problem.Network:
@@ -1131,8 +1168,9 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Convert Spec objects to Network objects
     log.info("Creating networks from specifications")
     networks = []
-    for lumped_spec in directives.lumpeds:
-        network = create_lumped_element_from_spec(board, lumped_spec, layer_dict)
+
+    for lumped_spec in directives.lumped_specs:
+        network = lumped_spec.construct(board, layer_dict)
         networks.append(network)
 
     for consumer_spec in directives.consumers:

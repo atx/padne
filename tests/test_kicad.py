@@ -281,41 +281,38 @@ class TestDirectiveParse:
             kicad.extract_directives_from_eeschema(project.sch_path)
         )
         # Expecting exactly two directives based on our simple_geometry project
-        assert len(directives.lumpeds) == 2, f"Expected 2 lumped elements, got {len(directives)}"
-
-        print(directives.lumpeds[0].type.__class__)
-        print(directives.lumpeds)
+        assert len(directives.lumped_specs) == 2, f"Expected 2 lumped elements, got {len(directives.lumped_specs)}"
         
         # Parse each directive, then assign by type
         voltage_spec = next(
-            spec for spec in directives.lumpeds
-            if spec.type == kicad.LumpedSpec.Type.VOLTAGE
+            spec for spec in directives.lumped_specs
+            if isinstance(spec, kicad.VoltageSourceSpec)
         )
         resistor_spec = next(
-            spec for spec in directives.lumpeds
-            if spec.type == kicad.LumpedSpec.Type.RESISTANCE
+            spec for spec in directives.lumped_specs
+            if isinstance(spec, kicad.ResistorSpec)
         )
         
         # Validate the voltage directive
-        assert voltage_spec.value == 1.0, "Voltage value should be 1.0"
-        assert voltage_spec.endpoint_a.designator == "R2", \
+        assert voltage_spec.values["v"] == 1.0, "Voltage value should be 1.0"
+        assert voltage_spec.endpoints["p"][0].designator == "R2", \
             "Voltage directive endpoint A designator should be R2"
-        assert voltage_spec.endpoint_a.pad == "1", \
+        assert voltage_spec.endpoints["p"][0].pad == "1", \
             "Voltage directive endpoint A pad should be 1"
-        assert voltage_spec.endpoint_b.designator == "R2", \
+        assert voltage_spec.endpoints["n"][0].designator == "R2", \
             "Voltage directive endpoint B designator should be R2"
-        assert voltage_spec.endpoint_b.pad == "2", \
+        assert voltage_spec.endpoints["n"][0].pad == "2", \
             "Voltage directive endpoint B pad should be 2"
         
         # Validate the resistor directive
-        assert resistor_spec.value == 0.01
-        assert resistor_spec.endpoint_a.designator == "R3", \
+        assert resistor_spec.values["r"] == 0.01
+        assert resistor_spec.endpoints["a"][0].designator == "R3", \
             "Resistor directive endpoint A designator should be R3"
-        assert resistor_spec.endpoint_a.pad == "1", \
+        assert resistor_spec.endpoints["a"][0].pad == "1", \
             "Resistor directive endpoint A pad should be 1"
-        assert resistor_spec.endpoint_b.designator == "R3", \
+        assert resistor_spec.endpoints["b"][0].designator == "R3", \
             "Resistor directive endpoint B designator should be R3"
-        assert resistor_spec.endpoint_b.pad == "2", \
+        assert resistor_spec.endpoints["b"][0].pad == "2", \
             "Resistor directive endpoint B pad should be 2"
 
 
