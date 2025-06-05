@@ -456,15 +456,15 @@ def stamp_network_into_system(network: problem.Network,
                 L[i_v, i_v_n] = -1
                 L[i_v_p, i_v] = 1
                 L[i_v_n, i_v] = -1
-                r[i_v] = voltage
+                r[i_v] += voltage
 
                 # Now, we need to take bearings. The variable at the index i_v
                 # is the _current_ flowing from the output of the regulator.
                 # What we need to do is cause that current to be mirrored
                 # at the input of the regulator
                 # (i_s_f, i_s_t) pair.
-                L[i_s_f, i_v] = gain
-                L[i_s_t, i_v] = -gain
+                L[i_s_f, i_v] += gain
+                L[i_s_t, i_v] += -gain
 
             case _:
                 raise NotImplementedError(f"Unsupported node type {element}")

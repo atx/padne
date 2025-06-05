@@ -246,7 +246,6 @@ class BaseLumpedSpec:
     endpoint_names: ClassVar[dict[str, str]] = {}
     value_names: ClassVar[dict[str, str]] = {}
     lumped_type: ClassVar[type] = None
-    force_coupling: ClassVar[bool] = False
 
     @classmethod
     def from_directive(cls, directive: Directive) -> 'BaseLumpedSpec':
@@ -305,7 +304,7 @@ class BaseLumpedSpec:
                 for ep in endpoints_list
             ]
 
-            if not self.force_coupling and len(endpoints_list) == 1:
+            if len(endpoints_list) == 1:
                 layer_name, point = layer_and_point[0]
                 layer = layer_dict[layer_name]
                 conn = problem.Connection(
@@ -388,11 +387,6 @@ class RegulatorSpec(BaseLumpedSpec):
         "gain": "gain",
     }
     lumped_type: ClassVar[type] = problem.VoltageRegulator
-    # For reasons unknown, not forcing coupling yields weird results
-    # See the test_ldo_regulator_voltages when messing with this
-    # TODO: Figure out why and fix this, coupling should not be needed
-    # for VoltageRegulator to work
-    force_coupling = True
 
 
 @dataclass(frozen=True)
