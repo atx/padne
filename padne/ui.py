@@ -587,6 +587,8 @@ class MeshViewer(QOpenGLWidget):
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
     keyPressedInMesh = Signal(mesh.Point, int, Qt.KeyboardModifiers)
+    # Signal for mouse position and voltage probing
+    mousePositionChanged = Signal(mesh.Point, object)  # object can be float or None
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1048,6 +1050,11 @@ class MeshViewer(QOpenGLWidget):
             self.screenDragged.emit(dx, dy, event)
             
             self.last_mouse_screen_pos = event.position()
+        
+        # Always emit mouse position for status bar updates
+        world_point = self._screen_to_world(event.position())
+        voltage = self._getNearestValue(world_point.x, world_point.y)
+        self.mousePositionChanged.emit(world_point, voltage)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse release events."""
@@ -1357,9 +1364,30 @@ class MainWindow(QMainWindow):
         self.app_toolbar = AppToolBar(self.tool_manager, self.mesh_viewer, self)
         self.addToolBar(Qt.TopToolBarArea, self.app_toolbar)
         
-        # Add permanent widget for current layer
+        # Add status bar widgets with fixed widths
         self.layer_status_label = QLabel("Layer: -")
+        self.layer_status_label.setMinimumWidth(120)
+        
+        self.x_position_label = QLabel("X: -")
+        self.x_position_label.setMinimumWidth(80)
+        
+        self.y_position_label = QLabel("Y: -")
+        self.y_position_label.setMinimumWidth(80)
+        
+        self.voltage_label = QLabel("V: ?")
+        self.voltage_label.setMinimumWidth(80)
+        
+        # Add a small spacer at the beginning
+        spacer_label = QLabel("  ")  # Small margin
+        self.statusBar().addWidget(spacer_label)
+        
         self.statusBar().addWidget(self.layer_status_label)
+        self.statusBar().addWidget(QLabel(" | "))  # Separator
+        self.statusBar().addWidget(self.x_position_label)
+        self.statusBar().addWidget(QLabel(" | "))  # Separator
+        self.statusBar().addWidget(self.y_position_label)
+        self.statusBar().addWidget(QLabel(" | "))  # Separator
+        self.statusBar().addWidget(self.voltage_label)
         
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
@@ -1373,6 +1401,9 @@ class MainWindow(QMainWindow):
         self.mesh_viewer.screenDragged.connect(self.tool_manager.handle_screen_drag)
         self.mesh_viewer.keyPressedInMesh.connect(self.tool_manager.handle_key_press_in_mesh)
         
+        # Connect mouse position updates
+        self.mesh_viewer.mousePositionChanged.connect(self.updateMousePosition)
+        
         self.projectLoaded.emit(solution)
 
     # Removed loadProject method
@@ -1381,6 +1412,19 @@ class MainWindow(QMainWindow):
         """Update the window title to show the current layer."""
         self.setWindowTitle(f"padne: {self.project_file_name} - {layer_name}")
         self.layer_status_label.setText(f"Layer: {layer_name}")
+    
+    @Slot(mesh.Point, object)
+    def updateMousePosition(self, world_point: mesh.Point, voltage):
+        """Update status bar with mouse position and voltage."""
+        self.x_position_label.setText(f"X: {world_point.x:.3f}")
+        self.y_position_label.setText(f"Y: {world_point.y:.3f}")
+        
+        if voltage is not None:
+            voltage_str = units.Value(voltage, "V").pretty_format()
+            self.voltage_label.setText(f"V: {voltage_str}")
+        else:
+            self.voltage_label.setText("V: ?")
+    
 
 
 def configure_opengl():
