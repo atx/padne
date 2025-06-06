@@ -1357,6 +1357,10 @@ class MainWindow(QMainWindow):
         self.app_toolbar = AppToolBar(self.tool_manager, self.mesh_viewer, self)
         self.addToolBar(Qt.TopToolBarArea, self.app_toolbar)
         
+        # Add permanent widget for current layer
+        self.layer_status_label = QLabel("Layer: -")
+        self.statusBar().addWidget(self.layer_status_label)
+        
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         self.projectLoaded.connect(self.mesh_viewer.setSolution)
@@ -1376,6 +1380,7 @@ class MainWindow(QMainWindow):
     def updateCurrentLayer(self, layer_name):
         """Update the window title to show the current layer."""
         self.setWindowTitle(f"padne: {self.project_file_name} - {layer_name}")
+        self.layer_status_label.setText(f"Layer: {layer_name}")
 
 
 def configure_opengl():
