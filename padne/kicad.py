@@ -364,8 +364,78 @@ class VoltageSourceSpec(BaseLumpedSpec):
     value_names = {"v": "voltage"}
     lumped_type = problem.VoltageSource
 
-    # TODO: Implement a custom construct method that does not introduce
-    # extra series resistance
+    def construct(self,
+                  board: pcbnew.BOARD,
+                  layer_dict: dict[str, problem.Layer]
+                  ) -> problem.Network:
+        """
+        Custom construct method for voltage sources that properly handles
+        multiple endpoints without introducing coupling resistance.
+
+        Strategy:
+        1. Create main voltage source between first positive and first negative endpoints
+        2. Create 0V voltage sources to connect additional endpoints to the first ones
+        """
+        connections = []
+        elements = []
+
+        # Get endpoint lists
+        p_endpoints = self.endpoints["p"]
+        n_endpoints = self.endpoints["n"]
+
+        if not p_endpoints:
+            raise ValueError("No positive endpoints specified for voltage source")
+        if not n_endpoints:
+            raise ValueError("No negative endpoints specified for voltage source")
+
+        # Create connections for all endpoints
+        p_connections = []
+        n_connections = []
+
+        for ep in p_endpoints:
+            layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+            layer = layer_dict[layer_name]
+            conn = problem.Connection(layer=layer, point=point)
+            connections.append(conn)
+            p_connections.append(conn)
+
+        for ep in n_endpoints:
+            layer_name, point = find_pad_location(board, ep.designator, ep.pad)
+            layer = layer_dict[layer_name]
+            conn = problem.Connection(layer=layer, point=point)
+            connections.append(conn)
+            n_connections.append(conn)
+
+        # Create main voltage source between first positive and first negative
+        main_voltage_source = problem.VoltageSource(
+            p=p_connections[0].node_id,
+            n=n_connections[0].node_id,
+            voltage=self.values["v"]
+        )
+        elements.append(main_voltage_source)
+
+        # Create 0V voltage sources to connect additional positive terminals to first positive
+        for i in range(1, len(p_connections)):
+            zero_v_source = problem.VoltageSource(
+                p=p_connections[i].node_id,
+                n=p_connections[0].node_id,
+                voltage=0.0
+            )
+            elements.append(zero_v_source)
+
+        # Create 0V voltage sources to connect additional negative terminals to first negative
+        for i in range(1, len(n_connections)):
+            zero_v_source = problem.VoltageSource(
+                p=n_connections[i].node_id,
+                n=n_connections[0].node_id,
+                voltage=0.0
+            )
+            elements.append(zero_v_source)
+
+        return problem.Network(
+            connections=connections,
+            elements=elements
+        )
 
 
 class CurrentSourceSpec(BaseLumpedSpec):

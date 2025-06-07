@@ -1463,3 +1463,21 @@ class TestSolverEndToEnd:
 
         for i, ev_check in enumerate(voltage_checks):
             ev_check.validate(prob, sol, test_case_id=i)
+
+    def test_voltage_source_multipad_degeneration(self, kicad_test_projects):
+        project = kicad_test_projects["voltage_source_multipad_degeneration"]
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob)
+
+        assert solution is not None, "Solver failed to produce a solution"
+
+        # Verify that voltage between (131.51, 101.375) and (131.51, 103.025) is 1V within 1mV
+        voltage_check = ExpectedVoltage(
+            p_coords=(131.51, 101.375),
+            n_coords=(131.51, 103.025),
+            expected_voltage=1.0,
+            abs_tolerance=0.001,  # 1mV precision
+            description="Voltage source multipad degeneration test"
+        )
+
+        voltage_check.validate(prob, solution)
