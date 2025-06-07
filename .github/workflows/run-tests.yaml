@@ -1,4 +1,4 @@
-name: Build and Test
+name: Run Tests
 
 on: [push, pull_request]
 permissions:
@@ -7,30 +7,14 @@ permissions:
 
 jobs:
   build_and_test:
-    name: "Build & Test"
+    name: "Run Tests"
     runs-on: ubuntu-24.04
     steps:
     - name: Check out repository
       uses: actions/checkout@v4
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y python3-full python3-dev python3-pip libcgal-dev git libegl1 libegl1-mesa-dev
-
-    - name: Add KiCad PPA and install KiCad
-      run: |
-        sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends kicad
-
-    - name: Install pygerber from git
-      run: |
-        pip3 install --break-system-packages --user git+https://github.com/Argmaster/pygerber
-
-    - name: Build C++ part of the repository
-      run: |
-        pip3 install --break-system-packages --user -e .[test] -v
+    - name: Setup Padne
+      uses: ./.github/actions/setup-padne
 
     - name: Run tests with pytest and generate report
       run: |
