@@ -1410,6 +1410,9 @@ class MainWindow(QMainWindow):
         self.voltage_label = QLabel("V: ?")
         self.voltage_label.setMinimumWidth(80)
         
+        self.delta_label = QLabel("Δ: ?")
+        self.delta_label.setMinimumWidth(80)
+        
         # Add a small spacer at the beginning
         spacer_label = QLabel("  ")  # Small margin
         self.statusBar().addWidget(spacer_label)
@@ -1421,6 +1424,8 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.y_position_label)
         self.statusBar().addWidget(QLabel(" | "))  # Separator
         self.statusBar().addWidget(self.voltage_label)
+        self.statusBar().addWidget(QLabel(" | "))  # Separator
+        self.statusBar().addWidget(self.delta_label)
         
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
@@ -1455,8 +1460,14 @@ class MainWindow(QMainWindow):
         if voltage is not None:
             voltage_str = units.Value(voltage, "V").pretty_format(3)
             self.voltage_label.setText(f"V: {voltage_str}")
+            
+            # Calculate delta from the minimum value of the color scale
+            delta_value = voltage - self.mesh_viewer.min_value
+            delta_str = units.Value(delta_value, "V").pretty_format(3)
+            self.delta_label.setText(f"Δ: {delta_str}")
         else:
             self.voltage_label.setText("V: ?")
+            self.delta_label.setText("Δ: ?")
     
 
 
