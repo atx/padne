@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import sys
 import OpenGL.GL as gl
+import time
 
 from typing import Optional
 from dataclasses import dataclass, field
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 import shapely.geometry
+from scipy.spatial import cKDTree
 
 from . import mesh, solver, units, colormaps
 
@@ -112,6 +114,58 @@ void main() {
 
 
 COLOR_MAP = colormaps.PLASMA
+
+
+@dataclass
+class LayerSpatialIndex:
+    """Spatial index for fast vertex value lookups within a layer."""
+    vertex_tree: Optional[cKDTree]
+    vertex_values: list[float]
+    layer_shape: shapely.geometry.MultiPolygon
+    
+    @classmethod
+    def from_layer_data(cls, layer: solver.problem.Layer, layer_solution: solver.LayerSolution):
+        """Build spatial index from layer solution data."""
+        if not layer_solution.meshes:
+            # Empty layer
+            return cls(None, [], layer.shape)
+        
+        # Collect all vertices and their values
+        all_vertices = []
+        all_values = []
+        
+        for msh, values in zip(layer_solution.meshes, layer_solution.values):
+            for vertex in msh.vertices:
+                all_vertices.append([vertex.p.x, vertex.p.y])
+                all_values.append(values[vertex])
+        
+        if not all_vertices:
+            return cls(None, [], layer.shape)
+        
+        # Build KD-tree
+        vertex_array = np.array(all_vertices)
+        tree = cKDTree(vertex_array)
+        
+        return cls(tree, all_values, layer.shape)
+    
+    def query_nearest(self, x: float, y: float) -> Optional[float]:
+        """Find nearest vertex value to given coordinates."""
+        if not self.vertex_tree:
+            return None
+        
+        # Check if point is within layer geometry
+        point = shapely.geometry.Point(x, y)
+        if not self.layer_shape.contains(point):
+            return None
+        
+        # Query nearest vertex
+        distance, index = self.vertex_tree.query([x, y])
+        
+        # Return value if distance is reasonable
+        if distance < float('inf'):
+            return self.vertex_values[index]
+        
+        return None
 
 
 class BaseTool(abc.ABC):
@@ -597,11 +651,15 @@ class MeshViewer(QOpenGLWidget):
         self.rendered_meshes: dict[str, list] = {}
         self.rendered_connection_points: dict[str, RenderedPoints] = {}
         self.connection_points_visible: bool = True
+        
+        # Spatial indices for fast vertex value lookups
+        self.layer_spatial_indices: dict[str, LayerSpatialIndex] = {}
 
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
         self.last_mouse_screen_pos: Optional[QtCore.QPointF] = None
+        self.last_mouse_position_change_ts = time.monotonic()
         self.setMouseTracking(True)
         
         # Set focus policy to receive keyboard events
@@ -618,10 +676,24 @@ class MeshViewer(QOpenGLWidget):
         
         self.edges_visible = True
 
+    def _buildSpatialIndices(self):
+        """Build spatial indices for all layers in the current solution."""
+        if not self.solution:
+            return
+        
+        self.layer_spatial_indices.clear()
+        
+        for layer, layer_solution in zip(self.solution.problem.layers, self.solution.layer_solutions):
+            spatial_index = LayerSpatialIndex.from_layer_data(layer, layer_solution)
+            self.layer_spatial_indices[layer.name] = spatial_index
+            log.debug(f"Built spatial index for layer '{layer.name}' with {len(spatial_index.vertex_values)} vertices")
+
     def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
         """
         Find the value at the vertex closest to the specified world coordinates,
         only if the world coordinates are within the layer's defined geometries.
+        
+        Uses spatial indexing for fast O(log n) lookups.
         
         Args:
             world_x: X-coordinate in world space
@@ -635,60 +707,13 @@ class MeshViewer(QOpenGLWidget):
             return None
 
         current_layer_name = self.visible_layers[self.current_layer_index]
-
-        # Find the corresponding problem.Layer for the point-in-polygon check
-        problem_layer_for_check: Optional[solver.problem.Layer] = None
-        layer_index_for_solution = -1
-
-        for idx, p_layer in enumerate(self.solution.problem.layers):
-            if p_layer.name == current_layer_name:
-                problem_layer_for_check = p_layer
-                # Store index for consistent LayerSolution access
-                layer_index_for_solution = idx
-                break
         
-        if not problem_layer_for_check:
-            log.debug(f"Layer {current_layer_name} not found in problem definition.")
-            return None
-
-        # Perform point-in-polygon check using Shapely
-        shapely_point = shapely.geometry.Point(world_x, world_y)
+        # Use spatial index
+        if current_layer_name in self.layer_spatial_indices:
+            spatial_index = self.layer_spatial_indices[current_layer_name]
+            return spatial_index.query_nearest(world_x, world_y)
         
-        if not problem_layer_for_check.shape.contains(shapely_point):
-            # Click is outside the defined MultiPolygon for this layer
-            log.debug(f"Point ({world_x}, {world_y}) is outside defined shape for layer {current_layer_name}.")
-            return None
-
-        # If the point is inside, proceed to find the nearest vertex value
-        target_point = mesh.Point(world_x, world_y)
-        
-        closest_distance = float('inf')
-        closest_value = None
-        
-        # Access the LayerSolution using the stored index
-        if layer_index_for_solution == -1 or layer_index_for_solution >= len(self.solution.layer_solutions):
-            log.warning(f"Could not find matching LayerSolution for {current_layer_name} using index {layer_index_for_solution}.")
-            return None
-            
-        layer_solution = self.solution.layer_solutions[layer_index_for_solution]
-        
-        # Check each mesh in the current layer's solution
-        for mesh_index, msh in enumerate(layer_solution.meshes):
-            values = layer_solution.values[mesh_index]
-            
-            for vertex in msh.vertices:
-                distance = vertex.p.distance(target_point)
-                
-                if distance < closest_distance:
-                    closest_distance = distance
-                    closest_value = values[vertex]
-        
-        if closest_value is not None:
-            log.debug(f"Nearest value for point ({world_x}, {world_y}) in layer {current_layer_name} is {closest_value}.")
-        else:
-            log.debug(f"Point ({world_x}, {world_y}) was inside geometry for layer {current_layer_name}, but no nearest vertex value found.")
-            
-        return closest_value
+        return None
 
     def autoscaleValue(self):
         """
@@ -787,6 +812,9 @@ class MeshViewer(QOpenGLWidget):
 
         self.autoscaleValue()
         self.autoscaleXY()
+
+        # Build spatial indices for fast voltage lookups
+        self._buildSpatialIndices()
 
         if self.mesh_shader is not None:
             self.setupMeshData()
@@ -1050,11 +1078,16 @@ class MeshViewer(QOpenGLWidget):
             self.screenDragged.emit(dx, dy, event)
             
             self.last_mouse_screen_pos = event.position()
+
+        if time.monotonic() - self.last_mouse_position_change_ts < 0.1:
+            # Avoid too frequent updates
+            return
         
         # Always emit mouse position for status bar updates
         world_point = self._screen_to_world(event.position())
         voltage = self._getNearestValue(world_point.x, world_point.y)
         self.mousePositionChanged.emit(world_point, voltage)
+        self.last_mouse_position_change_ts = time.monotonic()
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse release events."""
