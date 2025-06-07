@@ -26,6 +26,13 @@ from scipy.spatial import cKDTree
 
 from . import mesh, solver, units, colormaps
 
+# In this file, there are some cursed naming conventions due to the fact
+# that we are mixing Python and Qt together.
+# Ad hoc rules:
+# * objects that inherit from QObject should use Qt naming conventions for methods
+#   * member variables should use snake_case anyway
+# * other object should normally follow PEP 8
+
 
 log = logging.getLogger(__name__)
 
@@ -219,7 +226,7 @@ class PanTool(BaseTool):
 
     def on_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
         if event.buttons() & Qt.LeftButton:
-            self.mesh_viewer.pan_view_by_screen_delta(dx, dy)
+            self.mesh_viewer.panViewByScreenDelta(dx, dy)
 
 
 class SetMinValueTool(PanTool):
@@ -238,13 +245,13 @@ class SetMinValueTool(PanTool):
 
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
-            self.mesh_viewer.set_min_value_from_world_point(world_point)
+            self.mesh_viewer.setMinValueFromWorldPoint(world_point)
             # Optional: Switch back to Pan tool after action
             # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
 
     def on_shortcut_press(self, world_point: mesh.Point):
         log.debug(f"SetMinValueTool: Shortcut pressed at {world_point}")
-        self.mesh_viewer.set_min_value_from_world_point(world_point)
+        self.mesh_viewer.setMinValueFromWorldPoint(world_point)
 
 
 class SetMaxValueTool(PanTool):
@@ -262,13 +269,13 @@ class SetMaxValueTool(PanTool):
 
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
-            self.mesh_viewer.set_max_value_from_world_point(world_point)
+            self.mesh_viewer.setMaxValueFromWorldPoint(world_point)
             # Optional: Switch back to Pan tool after action
             # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
 
     def on_shortcut_press(self, world_point: mesh.Point):
         log.debug(f"SetMaxValueTool: Shortcut pressed at {world_point}")
-        self.mesh_viewer.set_max_value_from_world_point(world_point)
+        self.mesh_viewer.setMaxValueFromWorldPoint(world_point)
 
 
 class ToolManager(QtCore.QObject):
@@ -339,9 +346,9 @@ class AppToolBar(QToolBar):
         super().__init__("Main Toolbar", parent)
         self.tool_manager = tool_manager
         self.mesh_viewer = mesh_viewer
-        self._setup_actions()
+        self._setupActions()
 
-    def _setup_actions(self):
+    def _setupActions(self):
         tool_action_group = QActionGroup(self)
         tool_action_group.setExclusive(True)
 
@@ -384,7 +391,7 @@ class AppToolBar(QToolBar):
         show_edges_action_in_menu.setChecked(True)  # Default to visible
         
         # Connect to MeshViewer's slot
-        show_edges_action_in_menu.triggered.connect(self.mesh_viewer.set_edges_visible)
+        show_edges_action_in_menu.triggered.connect(self.mesh_viewer.setEdgesVisible)
         
         # Add the action to the menu
         view_menu.addAction(show_edges_action_in_menu)
@@ -395,7 +402,7 @@ class AppToolBar(QToolBar):
         show_connection_points_action.setToolTip("Toggle visibility of connection points")
         show_connection_points_action.setCheckable(True)
         show_connection_points_action.setChecked(True) # Default to visible
-        show_connection_points_action.triggered.connect(self.mesh_viewer.set_connection_points_visible)
+        show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
         view_menu.addAction(show_connection_points_action)
 
 
@@ -947,7 +954,7 @@ class MeshViewer(QOpenGLWidget):
         # Combine matrices: projection * translation
         return np.dot(proj_matrix, trans_matrix)
 
-    def _render_mesh_triangles(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+    def _renderMeshTriangles(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
         """Renders the triangles of the meshes for the current layer."""
         with self.mesh_shader.use():
             # Set the MVP uniform
@@ -970,7 +977,7 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_triangles()
 
-    def _render_mesh_edges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+    def _renderMeshEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
         """Renders the edges of the meshes for the current layer."""
         if not self.edges_visible or not self.edge_shader:
             return
@@ -986,7 +993,7 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_edges()
 
-    def _render_connection_points(self, mvp: np.ndarray, rendered_points_obj: Optional[RenderedPoints]):
+    def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: Optional[RenderedPoints]):
         """Renders the connection points for the current layer."""
         if not self.connection_points_visible or not self.points_shader:
             return
@@ -1024,16 +1031,16 @@ class MeshViewer(QOpenGLWidget):
             return
             
         current_layer_mesh_list = self.rendered_meshes[current_layer_name]
-        self._render_mesh_triangles(mvp, current_layer_mesh_list)
-        self._render_mesh_edges(mvp, current_layer_mesh_list)
+        self._renderMeshTriangles(mvp, current_layer_mesh_list)
+        self._renderMeshEdges(mvp, current_layer_mesh_list)
 
         # Use .get() for safer access, as a layer might not have connection points
         rendered_points_obj = self.rendered_connection_points.get(current_layer_name)
-        self._render_connection_points(mvp, rendered_points_obj)
+        self._renderConnectionPoints(mvp, rendered_points_obj)
         
         gl.glBindVertexArray(0)
 
-    def _screen_to_world(self, screen_pos: QtCore.QPointF) -> mesh.Point:
+    def _screenToWorld(self, screen_pos: QtCore.QPointF) -> mesh.Point:
         if self.width() <= 0 or self.height() <= 0:
             log.warning("MeshViewer not sized, cannot convert screen to world coordinates.")
             return mesh.Point(0.0, 0.0)
@@ -1065,7 +1072,7 @@ class MeshViewer(QOpenGLWidget):
 
         # Emit meshClicked signal regardless of button for potential right-click tools etc.
         # The tool itself can check event.button()
-        world_point = self._screen_to_world(event.position())
+        world_point = self._screenToWorld(event.position())
         self.meshClicked.emit(world_point, event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent):
@@ -1084,7 +1091,7 @@ class MeshViewer(QOpenGLWidget):
             return
         
         # Always emit mouse position for status bar updates
-        world_point = self._screen_to_world(event.position())
+        world_point = self._screenToWorld(event.position())
         voltage = self._getNearestValue(world_point.x, world_point.y)
         self.mousePositionChanged.emit(world_point, voltage)
         self.last_mouse_position_change_ts = time.monotonic()
@@ -1096,7 +1103,7 @@ class MeshViewer(QOpenGLWidget):
             # Clear drag state
             self.last_mouse_screen_pos = None
 
-    def pan_view_by_screen_delta(self, dx_screen: float, dy_screen: float):
+    def panViewByScreenDelta(self, dx_screen: float, dy_screen: float):
         """
         Pans the view based on a screen delta.
         
@@ -1121,7 +1128,7 @@ class MeshViewer(QOpenGLWidget):
         self.offset_y += dy_world
         self.update()
 
-    def set_min_value_from_world_point(self, world_point: mesh.Point):
+    def setMinValueFromWorldPoint(self, world_point: mesh.Point):
         """
         Sets the minimum value of the color scale from a world point.
         If the selected value is greater than the current maximum, both min and max
@@ -1143,7 +1150,7 @@ class MeshViewer(QOpenGLWidget):
         self.valueRangeChanged.emit(self.min_value, self.max_value)
         self.update()
 
-    def set_max_value_from_world_point(self, world_point: mesh.Point):
+    def setMaxValueFromWorldPoint(self, world_point: mesh.Point):
         """
         Sets the maximum value of the color scale from a world point.
         If the selected value is less than the current minimum, both min and max
@@ -1179,9 +1186,9 @@ class MeshViewer(QOpenGLWidget):
         # Get current mouse position in widget coordinates
         screen_pos = self.mapFromGlobal(QtGui.QCursor.pos())
         # Check if mouse is within widget bounds; if not, world_point might be less meaningful
-        # but _screen_to_world should still compute a value.
+        # but _screenToWorld should still compute a value.
         # Alternatively, could use center of view if mouse is outside. For now, use cursor.
-        world_point = self._screen_to_world(screen_pos)
+        world_point = self._screenToWorld(screen_pos)
         
         # Emit signal for ToolManager to handle general shortcuts
         self.keyPressedInMesh.emit(world_point, event.key(), event.modifiers())
@@ -1212,14 +1219,14 @@ class MeshViewer(QOpenGLWidget):
         self.update()
 
     @Slot(bool)
-    def set_edges_visible(self, visible: bool):
+    def setEdgesVisible(self, visible: bool):
         """Slot to set the visibility of mesh edges."""
         self.edges_visible = visible
         log.debug(f"Mesh edges visibility set to: {self.edges_visible}")
         self.update()
 
     @Slot(bool)
-    def set_connection_points_visible(self, visible: bool):
+    def setConnectionPointsVisible(self, visible: bool):
         """Slot to set the visibility of connection points."""
         self.connection_points_visible = visible
         log.debug(f"Connection points visibility set to: {self.connection_points_visible}")
