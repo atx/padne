@@ -75,13 +75,21 @@ class TestPadFinder:
         # Load the KiCad board from the PCB file
         board = pcbnew.LoadBoard(str(project.pcb_path))
         
-        # Try to find the pad R2.1
-        layer_name, point = kicad.find_pad_location(board, "R3", "1")
+        # Create PadIndex and load SMD pads
+        pad_index = kicad.PadIndex()
+        pad_index.load_smd_pads(board)
+        
+        # Try to find the pad R3.1
+        endpoint = kicad.Endpoint(designator="R3", pad="1")
+        layer_points = pad_index.find_by_endpoint(endpoint)
+        
+        assert len(layer_points) == 1, "Expected exactly one LayerPoint for R3.1"
+        layer_point = layer_points[0]
 
-        assert layer_name == "F.Cu", "Pad should be on the F.Cu layer"
+        assert layer_point.layer == "F.Cu", "Pad should be on the F.Cu layer"
 
-        assert abs(point.x - 129) < 1e-3, "Pad X coordinate should be 129"
-        assert abs(point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
+        assert abs(layer_point.point.x - 129) < 1e-3, "Pad X coordinate should be 129"
+        assert abs(layer_point.point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
 
 
 class TestViaSpecs:
@@ -442,23 +450,28 @@ class TestLoadKicadProject:
         assert voltage_source_element.voltage == 1.0
         # Check that it's connected to component R2, pads 1 and 2
         board = pcbnew.LoadBoard(str(project.pcb_path))
-        r2_1_point = kicad.find_pad_location(board, "R2", "1")[1]
-        r2_2_point = kicad.find_pad_location(board, "R2", "2")[1]
+
+        # Create PadIndex and load SMD pads
+        pad_index = kicad.PadIndex()
+        pad_index.load_smd_pads(board)
+
+        r2_1_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "1"))[0].point
+        r2_2_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "2"))[0].point
 
         # Find the connections corresponding to the voltage source terminals
         conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
         conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
-        
-        assert (conn_p.point.x == r2_1_point.x and 
+
+        assert (conn_p.point.x == r2_1_point.x and
                 conn_p.point.y == r2_1_point.y)
-        assert (conn_n.point.x == r2_2_point.x and 
+        assert (conn_n.point.x == r2_2_point.x and
                 conn_n.point.y == r2_2_point.y)
-        
+
         # Check resistor properties
         assert resistor_element.resistance == 0.01
         # Check that it's connected to component R3, pads 1 and 2
-        r3_1_point = kicad.find_pad_location(board, "R3", "1")[1]
-        r3_2_point = kicad.find_pad_location(board, "R3", "2")[1]
+        r3_1_point = pad_index.find_by_endpoint(kicad.Endpoint("R3", "1"))[0].point
+        r3_2_point = pad_index.find_by_endpoint(kicad.Endpoint("R3", "2"))[0].point
 
         # Find the connections corresponding to the resistor terminals
         conn_a = next(c for c in resistor_connections if c.node_id == resistor_element.a)

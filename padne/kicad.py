@@ -217,6 +217,93 @@ class Endpoint:
     pad: str
 
 
+@dataclass(frozen=True)
+class LayerPoint:
+    layer: str
+    point: shapely.geometry.Point
+
+
+@dataclass
+class PadIndex:
+    """
+    This class effectively serves as a mapper from Endpoint to a bunch of LayerPoints
+    that can then be used to construct a problem.Connection object.
+    """
+    mapping: dict[Endpoint, list[LayerPoint]] = field(default_factory=dict)
+
+    def find_by_endpoint(self, ep: Endpoint) -> list[LayerPoint]:
+        return self.mapping[ep]
+
+    def load_smd_pads(self, board: pcbnew.BOARD) -> None:
+        """
+        Load all SMD pads from the given PCB board into the mapping.
+        """
+        for footprint in board.GetFootprints():
+            designator = footprint.GetReference()
+            
+            for pad_obj in footprint.Pads():
+                # Only process SMD pads
+                if pad_obj.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+                    continue
+                    
+                pad_name = pad_obj.GetName()
+                endpoint = Endpoint(designator=designator, pad=pad_name)
+                
+                # Get pad position and convert from nm to mm
+                position = pad_obj.GetPosition()
+                x_mm = nm_to_mm(position.x)
+                y_mm = nm_to_mm(position.y)
+                
+                # Get the layer for SMD pads
+                layer_id = pad_obj.GetLayer()
+                
+                # Handle flipped footprints
+                if footprint.IsFlipped():
+                    match layer_id:
+                        case pcbnew.F_Cu:
+                            layer_id = pcbnew.B_Cu
+                        case pcbnew.B_Cu:
+                            layer_id = pcbnew.F_Cu
+                        case _:
+                            raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
+                    footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
+                    y_mm = 2 * footprint_pos_y - y_mm
+                
+                layer_name = board.GetLayerName(layer_id)
+                point = shapely.geometry.Point(x_mm, y_mm)
+                layer_point = LayerPoint(layer=layer_name, point=point)
+                
+                # Add to mapping (initialize list if endpoint doesn't exist)
+                if endpoint not in self.mapping:
+                    self.mapping[endpoint] = []
+                self.mapping[endpoint].append(layer_point)
+
+    def insert_via_specs(self, via_specs: list["ViaSpec"]) -> None:
+        """
+        Insert via specifications into the mapping.
+        """
+        # TODO: Do note that this method is a temporary solution.
+        # Eventually, we are going to implement via hole punching and
+        # this is going to become obsolete.
+
+        for via_spec in via_specs:
+            # Only process vias that have an endpoint (THT pads)
+            if via_spec.endpoint is None:
+                continue
+                
+            # Use the first layer as the connection point (temporary solution)
+            if not via_spec.layer_names:
+                continue
+                
+            first_layer = via_spec.layer_names[0]
+            layer_point = LayerPoint(layer=first_layer, point=via_spec.point)
+            
+            # Add to mapping (initialize list if endpoint doesn't exist)
+            if via_spec.endpoint not in self.mapping:
+                self.mapping[via_spec.endpoint] = []
+            self.mapping[via_spec.endpoint].append(layer_point)
+
+
 def _parse_endpoints_param(param_str: Optional[str]) -> list[Endpoint]:
     """Helper to parse a comma-separated string of endpoints."""
     if not param_str:
@@ -275,7 +362,7 @@ class BaseLumpedSpec:
         return spec
 
     def construct(self,
-                  board: pcbnew.BOARD,
+                  pad_index: PadIndex,
                   layer_dict: dict[str, problem.Layer]
                   ) -> problem.BaseLumped:
         """
@@ -299,17 +386,18 @@ class BaseLumpedSpec:
 
             internal_arg_name = self.endpoint_names[directive_param_name]
 
-            layer_and_point = [
-                find_pad_location(board, ep.designator, ep.pad)
+            layerpoints = [
+                lp
                 for ep in endpoints_list
+                for lp in pad_index.find_by_endpoint(ep)
             ]
 
-            if len(endpoints_list) == 1:
-                layer_name, point = layer_and_point[0]
-                layer = layer_dict[layer_name]
+            if len(layerpoints) == 1:
+                lp = layerpoints[0]
+                layer = layer_dict[lp.layer]
                 conn = problem.Connection(
                     layer=layer,
-                    point=point,
+                    point=lp.point,
                     node_id=internal_nodes[internal_arg_name]
                 )
                 connections.append(conn)
@@ -317,8 +405,8 @@ class BaseLumpedSpec:
                 # If there are multiple endpoints, we create a "star"
                 # shaped resistor network leading from the endpoints to the
                 # internal node
-                for layer_name, point in layer_and_point:
-                    layer = layer_dict[layer_name]
+                for lp in layerpoints:
+                    layer = layer_dict[lp.layer]
                     resistor = problem.Resistor(
                         a=problem.NodeID(),
                         b=internal_nodes[internal_arg_name],
@@ -326,7 +414,7 @@ class BaseLumpedSpec:
                     )
                     conn = problem.Connection(
                         layer=layer,
-                        point=point,
+                        point=lp.point,
                         node_id=resistor.a,
                     )
                     elements.append(resistor)
@@ -365,7 +453,7 @@ class VoltageSourceSpec(BaseLumpedSpec):
     lumped_type = problem.VoltageSource
 
     def construct(self,
-                  board: pcbnew.BOARD,
+                  pad_index: PadIndex,
                   layer_dict: dict[str, problem.Layer]
                   ) -> problem.Network:
         """
@@ -376,7 +464,6 @@ class VoltageSourceSpec(BaseLumpedSpec):
         1. Create main voltage source between first positive and first negative endpoints
         2. Create 0V voltage sources to connect additional endpoints to the first ones
         """
-        connections = []
         elements = []
 
         # Get endpoint lists
@@ -392,19 +479,18 @@ class VoltageSourceSpec(BaseLumpedSpec):
         p_connections = []
         n_connections = []
 
-        for ep in p_endpoints:
-            layer_name, point = find_pad_location(board, ep.designator, ep.pad)
-            layer = layer_dict[layer_name]
-            conn = problem.Connection(layer=layer, point=point)
-            connections.append(conn)
-            p_connections.append(conn)
+        for endpoints, connections in zip([p_endpoints, n_endpoints],
+                                          [p_connections, n_connections]):
+            layerpoints = [
+                lp
+                for ep in endpoints
+                for lp in pad_index.find_by_endpoint(ep)
+            ]
 
-        for ep in n_endpoints:
-            layer_name, point = find_pad_location(board, ep.designator, ep.pad)
-            layer = layer_dict[layer_name]
-            conn = problem.Connection(layer=layer, point=point)
-            connections.append(conn)
-            n_connections.append(conn)
+            for lp in layerpoints:
+                layer = layer_dict[lp.layer]
+                conn = problem.Connection(layer=layer, point=lp.point)
+                connections.append(conn)
 
         # Create main voltage source between first positive and first negative
         main_voltage_source = problem.VoltageSource(
@@ -433,7 +519,7 @@ class VoltageSourceSpec(BaseLumpedSpec):
             elements.append(zero_v_source)
 
         return problem.Network(
-            connections=connections,
+            connections=(p_connections + n_connections),
             elements=elements
         )
 
@@ -833,91 +919,6 @@ def extract_layers_from_gerbers(board,
     return plotted_layers
 
 
-def find_pad_and_footprint(board: pcbnew.BOARD,
-                           designator: str,
-                           pad: str
-                           ) -> tuple[pcbnew.FOOTPRINT, pcbnew.PAD]:
-    """
-    Find a pad and its associated footprint on the PCB.
-    """
-    for footprint in board.GetFootprints():
-        if footprint.GetReference() != designator:
-            continue
-
-        # Find the pad with the given number/name
-        for pad_obj in footprint.Pads():
-            if pad_obj.GetName() != pad:
-                continue
-
-            return footprint, pad_obj
-
-        raise ValueError(f"Pad {pad} not found on component {designator}")
-    raise ValueError(f"Component {designator} not found in the PCB")
-
-
-def find_pad_location(board,
-                      designator: str,
-                      pad: str
-                      ) -> tuple[str, shapely.geometry.Point]:
-    """
-    Find the physical location of a pad on the PCB.
-
-    Args:
-        board: KiCad board object
-        designator: Component reference designator (e.g., "R1")
-        pad: Pad number or name (e.g., "1")
-
-    Returns:
-        Tuple of (layer_name, point) where point is the pad's center
-
-    Raises:
-        ValueError: If the component or pad is not found
-    """
-
-    footprint, pad_obj = find_pad_and_footprint(board, designator, pad)
-
-    # Get the pad's position (in KiCad internal units, nanometers)
-    position = pad_obj.GetPosition()
-
-    # Convert from KiCad internal units (nanometers) to mm
-    x_mm = nm_to_mm(position.x)
-    y_mm = nm_to_mm(position.y)
-    point = shapely.geometry.Point(x_mm, y_mm)
-
-    match pad_obj.GetAttribute():
-        case pcbnew.PAD_ATTRIB_SMD:
-            # For SMD pads, get the layer directly
-            layer_id = pad_obj.GetLayer()
-
-            if footprint.IsFlipped():
-                match layer_id:
-                    case pcbnew.F_Cu:
-                        layer_id = pcbnew.B_Cu
-                    case pcbnew.B_Cu:
-                        layer_id = pcbnew.F_Cu
-                    case _:
-                        raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
-                footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
-                y_mm = 2 * footprint_pos_y - y_mm
-                point = shapely.geometry.Point(x_mm, y_mm)
-
-            layer_name = board.GetLayerName(layer_id)
-            return layer_name, point
-
-        case pcbnew.PAD_ATTRIB_PTH:
-            # For through-hole pads, we use the first layer in the layer
-            # set as their location. In practice, this is not quite ideal,
-            # but good enough for now...
-            layer_set = pad_obj.GetLayerSet()
-            # Find first copper layer in the layer set
-            for layer_id in copper_layers(board):
-                if not layer_set.Contains(layer_id):
-                    continue
-                return board.GetLayerName(layer_id), point
-
-            raise ValueError(f"No copper layer found for through-hole pad {pad} on component {designator}")
-
-
 def process_via_spec(via_spec: ViaSpec,
                      layer_dict: dict[str, problem.Layer],
                      stackup: Stackup) -> list[problem.Network]:
@@ -1041,18 +1042,22 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
 
     layer_dict = construct_layer_dict(plotted_layers, stackup)
 
-    # Convert Spec objects to Network objects
-    log.info("Creating networks from specifications")
-    networks = []
+    pad_index = PadIndex()
+    pad_index.load_smd_pads(board)
 
-    for lumped_spec in directives.lumped_specs:
-        network = lumped_spec.construct(board, layer_dict)
-        networks.append(network)
+    # Convert Spec objects to Network objects
+    networks = []
 
     log.info("Processing vias and through hole pads")
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
+    pad_index.insert_via_specs(via_specs)
     for via_spec in via_specs:
         networks.extend(process_via_spec(via_spec, layer_dict, stackup))
+
+    log.info("Creating networks from specifications")
+    for lumped_spec in directives.lumped_specs:
+        network = lumped_spec.construct(pad_index, layer_dict)
+        networks.append(network)
 
     # Get all layers as a list
     # TODO: Sort them using the stackup
