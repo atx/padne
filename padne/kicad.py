@@ -240,23 +240,23 @@ class PadIndex:
         """
         for footprint in board.GetFootprints():
             designator = footprint.GetReference()
-            
+
             for pad_obj in footprint.Pads():
                 # Only process SMD pads
                 if pad_obj.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
                     continue
-                    
+
                 pad_name = pad_obj.GetName()
                 endpoint = Endpoint(designator=designator, pad=pad_name)
-                
+
                 # Get pad position and convert from nm to mm
                 position = pad_obj.GetPosition()
                 x_mm = nm_to_mm(position.x)
                 y_mm = nm_to_mm(position.y)
-                
+
                 # Get the layer for SMD pads
                 layer_id = pad_obj.GetLayer()
-                
+
                 # Handle flipped footprints
                 if footprint.IsFlipped():
                     match layer_id:
@@ -268,11 +268,11 @@ class PadIndex:
                             raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
                     footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
                     y_mm = 2 * footprint_pos_y - y_mm
-                
+
                 layer_name = board.GetLayerName(layer_id)
                 point = shapely.geometry.Point(x_mm, y_mm)
                 layer_point = LayerPoint(layer=layer_name, point=point)
-                
+
                 # Add to mapping (initialize list if endpoint doesn't exist)
                 if endpoint not in self.mapping:
                     self.mapping[endpoint] = []
@@ -290,14 +290,14 @@ class PadIndex:
             # Only process vias that have an endpoint (THT pads)
             if via_spec.endpoint is None:
                 continue
-                
+
             # Use the first layer as the connection point (temporary solution)
             if not via_spec.layer_names:
                 continue
-                
+
             first_layer = via_spec.layer_names[0]
             layer_point = LayerPoint(layer=first_layer, point=via_spec.point)
-            
+
             # Add to mapping (initialize list if endpoint doesn't exist)
             if via_spec.endpoint not in self.mapping:
                 self.mapping[via_spec.endpoint] = []

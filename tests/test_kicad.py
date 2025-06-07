@@ -22,12 +22,12 @@ class TestFixture:
         """Test that all the projects in the test fixture have existing files."""
         # Check that at least one project was found
         assert len(kicad_test_projects) > 0, "No KiCad test projects were found"
-        
+
         # Check that all project files that were identified actually exist
         for project_name, project in kicad_test_projects.items():
             # Check project name is not empty
             assert project.name, f"Project has empty name"
-            
+
             # Check that project files exist if they were found
             assert project.pro_path.exists(), f"Project file does not exist: {project.pro_path}"
             assert project.pcb_path.exists(), f"PCB file does not exist: {project.pcb_path}"
@@ -44,17 +44,17 @@ class TestFixture:
 
 def test_gerber_render_outputs_something(kicad_test_projects):
     """Test that the gerber rendering process outputs valid layer data."""
-    
+
     project = kicad_test_projects["simple_geometry"]
-    
+
     # Skip if the PCB file doesn't exist
     # Render gerbers from the PCB file
     board = pcbnew.LoadBoard(str(project.pcb_path))
     layers = kicad.render_gerbers_from_kicad(board)
-    
+
     # Check that we got some layers back
     assert len(layers) > 0, "No layers were rendered from the PCB file"
-    
+
     # Check that each layer has valid geometry
     for layer in layers:
         assert layer.name, "Layer has no name"
@@ -71,18 +71,18 @@ class TestPadFinder:
         # Get the simple_geometry project's PCB file
         project = kicad_test_projects["simple_geometry"]
         assert project.pcb_path is not None, "simple_geometry project must have a PCB file"
-        
+
         # Load the KiCad board from the PCB file
         board = pcbnew.LoadBoard(str(project.pcb_path))
-        
+
         # Create PadIndex and load SMD pads
         pad_index = kicad.PadIndex()
         pad_index.load_smd_pads(board)
-        
+
         # Try to find the pad R3.1
         endpoint = kicad.Endpoint(designator="R3", pad="1")
         layer_points = pad_index.find_by_endpoint(endpoint)
-        
+
         assert len(layer_points) == 1, "Expected exactly one LayerPoint for R3.1"
         layer_point = layer_points[0]
 
@@ -221,7 +221,7 @@ class TestDirectiveParse:
         """Test parsing a simple directive with key-value pairs."""
         directive_str = "!padne VOLTAGE v=12.0V p=R1.4 n=R13.1"
         directive = kicad.Directive.parse(directive_str)
-        
+
         assert directive.name == "VOLTAGE"
         assert directive.params == {"v": "12.0V", "p": "R1.4", "n": "R13.1"}
 
@@ -229,7 +229,7 @@ class TestDirectiveParse:
         """Test parsing a directive with numeric values."""
         directive_str = "!padne RESISTANCE r=4.7k from=R5.1 to=R5.2"
         directive = kicad.Directive.parse(directive_str)
-        
+
         assert directive.name == "RESISTANCE"
         assert directive.params == {"r": "4.7k", "from": "R5.1", "to": "R5.2"}
 
@@ -237,7 +237,7 @@ class TestDirectiveParse:
         """Test parsing a directive with special characters in values."""
         directive_str = "!padne CURRENT i=500mA source=U1.OUT+ sink=GND.1"
         directive = kicad.Directive.parse(directive_str)
-        
+
         assert directive.name == "CURRENT"
         assert directive.params == {"i": "500mA", "source": "U1.OUT+", "sink": "GND.1"}
 
@@ -245,7 +245,7 @@ class TestDirectiveParse:
         """Test parsing a directive with no parameters."""
         directive_str = "!padne DEBUG"
         directive = kicad.Directive.parse(directive_str)
-        
+
         assert directive.name == "DEBUG"
         assert directive.params == {}
 
@@ -253,12 +253,12 @@ class TestDirectiveParse:
         """Test parsing a directive with duplicate keys (last one should win)."""
         directive_str = "!padne TEST key=value1 key=value2"
         directive = kicad.Directive.parse(directive_str)
-        
+
         assert directive.name == "TEST"
         assert directive.params == {"key": "value2"}
 
     # Error case tests
-    
+
     def test_missing_padne_prefix(self):
         """Test that a ValueError is raised when the !padne prefix is missing."""
         with pytest.raises(ValueError, match="Directive must start with '!padne'"):
@@ -283,14 +283,14 @@ class TestDirectiveParse:
         # Get the simple_geometry project's schematic file
         project = kicad_test_projects["simple_geometry"]
         assert project.sch_path.exists(), "Schematic file of simple_geometry project does not exist"
-        
+
         # Extract the raw directive strings from the schematic file
         directives = kicad.process_directives(
             kicad.extract_directives_from_eeschema(project.sch_path)
         )
         # Expecting exactly two directives based on our simple_geometry project
         assert len(directives.lumped_specs) == 2, f"Expected 2 lumped elements, got {len(directives.lumped_specs)}"
-        
+
         # Parse each directive, then assign by type
         voltage_spec = next(
             spec for spec in directives.lumped_specs
@@ -300,7 +300,7 @@ class TestDirectiveParse:
             spec for spec in directives.lumped_specs
             if isinstance(spec, kicad.ResistorSpec)
         )
-        
+
         # Validate the voltage directive
         assert voltage_spec.values["v"] == 1.0, "Voltage value should be 1.0"
         assert voltage_spec.endpoints["p"][0].designator == "R2", \
@@ -311,7 +311,7 @@ class TestDirectiveParse:
             "Voltage directive endpoint B designator should be R2"
         assert voltage_spec.endpoints["n"][0].pad == "2", \
             "Voltage directive endpoint B pad should be 2"
-        
+
         # Validate the resistor directive
         assert resistor_spec.values["r"] == 0.01
         assert resistor_spec.endpoints["a"][0].designator == "R3", \
@@ -380,7 +380,7 @@ class TestLoadKicadProject:
         """Test that the function loads a project successfully."""
         project = kicad_test_projects["simple_geometry"]
         result = kicad.load_kicad_project(project.pro_path)
-        
+
         # Check that we got a Problem object back
         assert isinstance(result, problem.Problem)
         # Should have at least one layer (F.Cu)
@@ -397,7 +397,7 @@ class TestLoadKicadProject:
         """Test that the loaded layers have expected properties."""
         project = kicad_test_projects["simple_geometry"]
         result = kicad.load_kicad_project(project.pro_path)
-        
+
         # Check the F.Cu layer specifically
         f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
         assert f_cu_layer is not None
@@ -409,7 +409,7 @@ class TestLoadKicadProject:
         project = kicad_test_projects["simple_geometry"]
 
         result = kicad.load_kicad_project(project.pro_path)
-        
+
         # F.Cu layer should have the custom resistivity
         f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
         assert 1900 < f_cu_layer.conductance < 2300
@@ -418,7 +418,7 @@ class TestLoadKicadProject:
         """Test that lumped elements are loaded correctly."""
         project = kicad_test_projects["simple_geometry"]
         result = kicad.load_kicad_project(project.pro_path)
-        
+
         # Find the voltage source and resistor by searching through networks
         voltage_source_element = None
         voltage_source_connections = []
@@ -433,7 +433,7 @@ class TestLoadKicadProject:
                     break
             if voltage_source_element:
                 break
-        
+
         for network in result.networks:
             for element in network.elements:
                 if isinstance(element, problem.Resistor):
@@ -476,22 +476,22 @@ class TestLoadKicadProject:
         # Find the connections corresponding to the resistor terminals
         conn_a = next(c for c in resistor_connections if c.node_id == resistor_element.a)
         conn_b = next(c for c in resistor_connections if c.node_id == resistor_element.b)
-        
-        assert (conn_a.point.x == r3_1_point.x and 
+
+        assert (conn_a.point.x == r3_1_point.x and
                 conn_a.point.y == r3_1_point.y)
-        assert (conn_b.point.x == r3_2_point.x and 
+        assert (conn_b.point.x == r3_2_point.x and
                 conn_b.point.y == r3_2_point.y)
-                
+
     @for_all_kicad_projects
     def test_lumped_points_inside_layers(self, project):
         """
-        Test that for all test projects, the start and end points of lumped elements 
+        Test that for all test projects, the start and end points of lumped elements
         are located inside their respective layer shapes.
         """
-        
+
         # Load the KiCad project
         kicad_problem = kicad.load_kicad_project(project.pro_path)
-            
+
         # For each lumped element network, verify that its connection points are inside the layers
         for i, network in enumerate(kicad_problem.networks):
             for j, connection in enumerate(network.connections):
@@ -512,7 +512,7 @@ class TestLoadKicadProject:
         """
         # Load the KiCad project
         kicad_problem = kicad.load_kicad_project(project.pro_path)
-            
+
         # For each layer, verify that its shape is a MultiPolygon
         for i, layer in enumerate(kicad_problem.layers):
             assert layer.shape.geom_type == "MultiPolygon", (
@@ -523,10 +523,10 @@ class TestLoadKicadProject:
     def test_flipped_pads_work(self, kicad_test_projects):
         """Test that flipped pads are handled correctly."""
         project = kicad_test_projects["simple_via"]
-        
+
         # Load the project
         result = kicad.load_kicad_project(project.pro_path)
-        
+
         # Find the voltage source lumped element by searching networks
         voltage_source_element = None
         voltage_source_connections = []
@@ -538,14 +538,14 @@ class TestLoadKicadProject:
                     break
             if voltage_source_element:
                 break
-        
+
         # Check that we found a voltage source
         assert voltage_source_element is not None, "No voltage source found in the simple_via project"
 
         # Find the connections corresponding to the voltage source terminals
         conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
         conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
-        
+
         # Check that one endpoint is on F.Cu at position (122, 100)
         # and the other is on B.Cu at (142, 100)
         if conn_p.layer.name == "F.Cu":
@@ -561,29 +561,29 @@ class TestLoadKicadProject:
         b_cu_point = b_cu_conn.point
         f_cu_layer = f_cu_conn.layer
         b_cu_layer = b_cu_conn.layer
-        
+
         # Verify F.Cu point is at expected coordinates (122, 100)
         assert abs(f_cu_point.x - 122) < 1e-3, f"F.Cu point X should be 122, got {f_cu_point.x}"
         assert abs(f_cu_point.y - 100) < 1e-3, f"F.Cu point Y should be 100, got {f_cu_point.y}"
-        
+
         # Verify B.Cu point is at expected coordinates (142, 100)
         assert abs(b_cu_point.x - 142) < 1e-3, f"B.Cu point X should be 142, got {b_cu_point.x}"
         assert abs(b_cu_point.y - 100) < 1e-3, f"B.Cu point Y should be 100, got {b_cu_point.y}"
-        
+
         # Verify the layer names
         assert f_cu_layer.name == "F.Cu", f"Expected F.Cu layer, got {f_cu_layer.name}"
         assert b_cu_layer.name == "B.Cu", f"Expected B.Cu layer, got {b_cu_layer.name}"
 
     def test_layer_order(self, kicad_test_projects):
         project = kicad_test_projects["via_tht_4layer"]
-        
+
         # Load the project
         result = kicad.load_kicad_project(project.pro_path)
-        
+
         # Check the layer order
         expected_order = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
         actual_order = [layer.name for layer in result.layers]
-        
+
         assert actual_order == expected_order, (
             f"Layer order mismatch: expected {expected_order}, got {actual_order}"
         )
