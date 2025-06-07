@@ -1,0 +1,66 @@
+name: Build Binary
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC, but only if there are new commits
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: read
+
+jobs:
+  check_commits:
+    name: "Check for new commits"
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch full history to check commits
+
+      - name: Check for commits in last 24 hours
+        id: check
+        run: |
+          # Get the timestamp for 24 hours ago
+          yesterday=$(date -d '24 hours ago' --iso-8601=seconds)
+          
+          # Check if there are any commits on master since yesterday
+          commits=$(git log --since="$yesterday" --oneline | wc -l)
+          
+          if [ "$commits" -gt 0 ]; then
+            echo "Found $commits commits in the last 24 hours"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "No commits in the last 24 hours"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
+  build_binary:
+    name: "Build PyInstaller Binary"
+    runs-on: ubuntu-24.04
+    needs: check_commits
+    if: needs.check_commits.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup Padne dependencies
+        uses: ./.github/actions/setup-padne
+
+      - name: Install PyInstaller
+        run: |
+          pip3 install --break-system-packages --user pyinstaller
+
+      - name: Create binary with PyInstaller
+        run: |
+          pyinstaller --clean --noconfirm padne.spec
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: padne-linux-x64-${{ github.sha }}
+          path: dist/padne
+          retention-days: 30
