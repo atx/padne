@@ -1453,7 +1453,7 @@ class MainWindow(QMainWindow):
         self.y_position_label.setText(f"Y: {world_point.y:.3f}")
         
         if voltage is not None:
-            voltage_str = units.Value(voltage, "V").pretty_format()
+            voltage_str = units.Value(voltage, "V").pretty_format(3)
             self.voltage_label.setText(f"V: {voltage_str}")
         else:
             self.voltage_label.setText("V: ?")
