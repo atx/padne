@@ -129,49 +129,49 @@ class LayerSpatialIndex:
     vertex_tree: Optional[cKDTree]
     vertex_values: list[float]
     layer_shape: shapely.geometry.MultiPolygon
-    
+
     @classmethod
     def from_layer_data(cls, layer: solver.problem.Layer, layer_solution: solver.LayerSolution):
         """Build spatial index from layer solution data."""
         if not layer_solution.meshes:
             # Empty layer
             return cls(None, [], layer.shape)
-        
+
         # Collect all vertices and their values
         all_vertices = []
         all_values = []
-        
+
         for msh, values in zip(layer_solution.meshes, layer_solution.values):
             for vertex in msh.vertices:
                 all_vertices.append([vertex.p.x, vertex.p.y])
                 all_values.append(values[vertex])
-        
+
         if not all_vertices:
             return cls(None, [], layer.shape)
-        
+
         # Build KD-tree
         vertex_array = np.array(all_vertices)
         tree = cKDTree(vertex_array)
-        
+
         return cls(tree, all_values, layer.shape)
-    
+
     def query_nearest(self, x: float, y: float) -> Optional[float]:
         """Find nearest vertex value to given coordinates."""
         if not self.vertex_tree:
             return None
-        
+
         # Check if point is within layer geometry
         point = shapely.geometry.Point(x, y)
         if not self.layer_shape.contains(point):
             return None
-        
+
         # Query nearest vertex
         distance, index = self.vertex_tree.query([x, y])
-        
+
         # Return value if distance is reasonable
         if distance < float('inf'):
             return self.vertex_values[index]
-        
+
         return None
 
 
@@ -282,13 +282,13 @@ class ToolManager(QtCore.QObject):
     def __init__(self, mesh_viewer: 'MeshViewer', parent=None):
         super().__init__(parent)
         self.mesh_viewer = mesh_viewer
-        
+
         self.available_tools: list[BaseTool] = [
             PanTool(self.mesh_viewer, self),
             SetMinValueTool(self.mesh_viewer, self),
             SetMaxValueTool(self.mesh_viewer, self)
         ]
-        
+
         self.active_tool: Optional[BaseTool] = None
         if self.available_tools:
             # Activate the first tool by default, but don't call on_activate yet
@@ -306,7 +306,7 @@ class ToolManager(QtCore.QObject):
             self.active_tool.on_deactivate()
 
         self.active_tool = tool_to_activate
-        
+
         if self.active_tool:
             log.debug(f"Activating Tool: {self.active_tool.name}")
             self.active_tool.on_activate()
@@ -357,11 +357,11 @@ class AppToolBar(QToolBar):
             action.setStatusTip(tool_instance.status_tip)
             action.setToolTip(tool_instance.status_tip)
             action.setCheckable(True)
-            
+
             action.triggered.connect(
                 lambda checked, t=tool_instance: self.tool_manager.activate_tool(t)
             )
-            
+
             self.addAction(action)
             tool_action_group.addAction(action)
 
@@ -389,13 +389,13 @@ class AppToolBar(QToolBar):
         show_edges_action_in_menu.setToolTip("Toggle visibility of mesh edges")
         show_edges_action_in_menu.setCheckable(True)
         show_edges_action_in_menu.setChecked(True)  # Default to visible
-        
+
         # Connect to MeshViewer's slot
         show_edges_action_in_menu.triggered.connect(self.mesh_viewer.setEdgesVisible)
-        
+
         # Add the action to the menu
         view_menu.addAction(show_edges_action_in_menu)
-        
+
         # Create "Show Connection Points" action for the menu
         show_connection_points_action = QAction("Show Connection Points", self)
         show_connection_points_action.setStatusTip("Toggle visibility of connection points")
@@ -408,7 +408,7 @@ class AppToolBar(QToolBar):
 
         # Set the menu for the QToolButton
         view_menu_button.setMenu(view_menu)
-        
+
         # Add the QToolButton to the toolbar
         self.addWidget(view_menu_button)
 
@@ -445,7 +445,7 @@ class AppToolBar(QToolBar):
             )
             self.layers_menu.addAction(action)
             self.layer_action_group.addAction(action)
-        
+
         # Ensure the currently active layer in mesh_viewer is checked
         if self.mesh_viewer.visible_layers and self.mesh_viewer.current_layer_index < len(self.mesh_viewer.visible_layers):
             active_layer_name = self.mesh_viewer.visible_layers[self.mesh_viewer.current_layer_index]
@@ -515,7 +515,7 @@ class RenderedMesh:
                     edge_colors.extend([0.9, 0.9, 0.9])
 
         # VAO for triangles
-        
+
         vao_triangles = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao_triangles)
 
@@ -650,7 +650,7 @@ class MeshViewer(QOpenGLWidget):
     keyPressedInMesh = Signal(mesh.Point, int, Qt.KeyboardModifiers)
     # Signal for mouse position and voltage probing
     mousePositionChanged = Signal(mesh.Point, object)  # object can be float or None
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.solution: None | solver.Solution = None
@@ -658,7 +658,7 @@ class MeshViewer(QOpenGLWidget):
         self.rendered_meshes: dict[str, list] = {}
         self.rendered_connection_points: dict[str, RenderedPoints] = {}
         self.connection_points_visible: bool = True
-        
+
         # Spatial indices for fast vertex value lookups
         self.layer_spatial_indices: dict[str, LayerSpatialIndex] = {}
 
@@ -669,28 +669,28 @@ class MeshViewer(QOpenGLWidget):
         self.last_mouse_screen_pos: Optional[QtCore.QPointF] = None
         self.last_mouse_position_change_ts = time.monotonic()
         self.setMouseTracking(True)
-        
+
         # Set focus policy to receive keyboard events
         self.setFocusPolicy(Qt.StrongFocus)
-        
+
         # Layer management
         self.current_layer_index = 0
         self.visible_layers = []  # Will hold names of layers in order
-        
+
         # OpenGL objects
         self.mesh_shader = None
         self.edge_shader = None
         self.points_shader = None
-        
+
         self.edges_visible = True
 
     def _buildSpatialIndices(self):
         """Build spatial indices for all layers in the current solution."""
         if not self.solution:
             return
-        
+
         self.layer_spatial_indices.clear()
-        
+
         for layer, layer_solution in zip(self.solution.problem.layers, self.solution.layer_solutions):
             spatial_index = LayerSpatialIndex.from_layer_data(layer, layer_solution)
             self.layer_spatial_indices[layer.name] = spatial_index
@@ -700,13 +700,13 @@ class MeshViewer(QOpenGLWidget):
         """
         Find the value at the vertex closest to the specified world coordinates,
         only if the world coordinates are within the layer's defined geometries.
-        
+
         Uses spatial indexing for fast O(log n) lookups.
-        
+
         Args:
             world_x: X-coordinate in world space
             world_y: Y-coordinate in world space
-            
+
         Returns:
             The value at the nearest vertex, or None if no vertices are found
             or if the point is outside the layer's geometries.
@@ -715,12 +715,12 @@ class MeshViewer(QOpenGLWidget):
             return None
 
         current_layer_name = self.visible_layers[self.current_layer_index]
-        
+
         # Use spatial index
         if current_layer_name in self.layer_spatial_indices:
             spatial_index = self.layer_spatial_indices[current_layer_name]
             return spatial_index.query_nearest(world_x, world_y)
-        
+
         return None
 
     def autoscaleValue(self):
@@ -730,11 +730,11 @@ class MeshViewer(QOpenGLWidget):
         """
         if not self.solution or not self.solution.layer_solutions:
             return  # Nothing to scale if no solution is loaded
-        
+
         # Initialize min and max values
         self.min_value = float('inf')
         self.max_value = float('-inf')
-        
+
         # Go through all layer solutions to find min/max values
         for layer_solution in self.solution.layer_solutions:
             # Each layer solution has multiple meshes and their corresponding values
@@ -744,12 +744,12 @@ class MeshViewer(QOpenGLWidget):
                     value = values[vertex]
                     self.min_value = min(self.min_value, value)
                     self.max_value = max(self.max_value, value)
-        
+
         # If no values were found or if all values are the same
         if self.min_value == float('inf') or self.min_value == self.max_value:
             self.min_value = 0.0
             self.max_value = 1.0
-        
+
         # Emit signal to notify about the new value range
         self.valueRangeChanged.emit(self.min_value, self.max_value)
 
@@ -760,11 +760,11 @@ class MeshViewer(QOpenGLWidget):
         """
         if not self.solution or not self.solution.layer_solutions:
             return  # Nothing to scale if no solution is loaded
-        
+
         # Find the bounds of all meshes across all layers
         min_x, min_y = float('inf'), float('inf')
         max_x, max_y = float('-inf'), float('-inf')
-        
+
         for layer_solution in self.solution.layer_solutions:
             # Iterate through all meshes in the layer solution
             for msh in layer_solution.meshes:
@@ -774,11 +774,11 @@ class MeshViewer(QOpenGLWidget):
                     min_y = min(min_y, y)
                     max_x = max(max_x, x)
                     max_y = max(max_y, y)
-        
+
         # Check if we found any vertices
         if min_x == float('inf'):
             return  # No vertices found
-        
+
         # Calculate center point and dimensions
         center_x = (max_x + min_x) / 2
         center_y = (max_y + min_y) / 2
@@ -788,7 +788,7 @@ class MeshViewer(QOpenGLWidget):
         if solution_width < 1e-6 or solution_height < 1e-6:
             log.warning("Mesh bounds are suspiciously small, refusing to autoscale.")
             return
-        
+
         # Set view center (negative offset to move view)
         self.offset_x = -center_x
         self.offset_y = -center_y
@@ -814,11 +814,11 @@ class MeshViewer(QOpenGLWidget):
         # Initialize the list of layers from the solution
         self.visible_layers = [layer.name for layer in solution.problem.layers]
         self.current_layer_index = 0
-        
+
         # Emit signal with available layers
         if self.visible_layers:
             self.availableLayersChanged.emit(self.visible_layers)
-        
+
         # Emit signal with initial layer
         if self.visible_layers:
             self.currentLayerChanged.emit(self.visible_layers[self.current_layer_index])
@@ -850,7 +850,7 @@ class MeshViewer(QOpenGLWidget):
         for layer, lsol in zip(self.solution.problem.layers, self.solution.layer_solutions):
             if layer.name not in self.rendered_meshes:
                 self.rendered_meshes[layer.name] = []
-            
+
             for msh, values in zip(lsol.meshes, lsol.values):
                 # Create a RenderedMesh object for each mesh
                 self.rendered_meshes[layer.name].append(
@@ -873,14 +873,14 @@ class MeshViewer(QOpenGLWidget):
                 color = (1.0, 0.0, 0.0)  # Red for networks with a source
             else:
                 color = (0.5, 0.5, 0.5)  # Gray for networks without a source
-            
+
             for connection in network.connections:
                 layer_name = connection.layer.name
                 point_coords = (connection.point.x, connection.point.y)
-                
+
                 if layer_name not in points_by_layer:
                     points_by_layer[layer_name] = []
-                
+
                 # Append a tuple of (coordinates, color)
                 points_by_layer[layer_name].append((point_coords, color))
 
@@ -903,16 +903,16 @@ class MeshViewer(QOpenGLWidget):
         gl.glEnable(gl.GL_LINE_SMOOTH)
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        
+
         # Create and compile shaders
         self.mesh_shader = ShaderProgram.from_source(
             VERTEX_SHADER_MESH, FRAGMENT_SHADER_MESH
         )
-        
+
         self.edge_shader = ShaderProgram.from_source(
             VERTEX_SHADER_EDGES, FRAGMENT_SHADER_EDGES
         )
-        
+
         self.points_shader = ShaderProgram.from_source(
             VERTEX_SHADER_POINTS, FRAGMENT_SHADER_POINTS
         )
@@ -924,7 +924,7 @@ class MeshViewer(QOpenGLWidget):
             colors = np.array([COLOR_MAP(i / 255)[0:3] for i in range(256)],
                               dtype=np.float32)
             gl.glUniform3fv(color_map_uniform, 256, colors)
-        
+
         # If meshes are already set, setup the mesh data
         if self.solution:
             self.setupMeshData()
@@ -934,7 +934,7 @@ class MeshViewer(QOpenGLWidget):
         """Handle window resizing."""
         gl.glViewport(0, 0, width, height)
         print(f"{self.width()} X {self.height()}")
-        
+
         # Perform autoscaling on resize until user manually interacts
         if self.needs_initial_autoscale and width > 0 and height > 0:
             self.autoscaleXY()
@@ -942,7 +942,7 @@ class MeshViewer(QOpenGLWidget):
 
     def _computeMVP(self):
         aspect = self.width() / self.height() if self.height() > 0 else 1.0
-        
+
         # Create a 2D orthographic projection matrix
         ortho_scale = 1.0 / self.scale
         left = -ortho_scale * aspect
@@ -951,7 +951,7 @@ class MeshViewer(QOpenGLWidget):
         top = ortho_scale
         near = -1.0
         far = 1.0
-        
+
         # Define the matrix components with Y-axis flip
         # Change the row for Y projection to add the flip
         proj_matrix = np.array([
@@ -960,7 +960,7 @@ class MeshViewer(QOpenGLWidget):
             [0, 0, -2.0 / (far - near), -(far + near) / (far - near)],
             [0, 0, 0, 1]
         ], dtype=np.float32)
-        
+
         # Create translation matrix
         trans_matrix = np.array([
             [1, 0, 0, self.offset_x],
@@ -968,7 +968,7 @@ class MeshViewer(QOpenGLWidget):
             [0, 0, 1, 0],
             [0, 0, 0, 1]
         ], dtype=np.float32)
-        
+
         # Combine matrices: projection * translation
         return np.dot(proj_matrix, trans_matrix)
 
@@ -1015,7 +1015,7 @@ class MeshViewer(QOpenGLWidget):
         """Renders the connection points for the current layer."""
         if not self.connection_points_visible or not self.points_shader:
             return
-        
+
         if not rendered_points_obj or rendered_points_obj.point_count == 0:
             return
 
@@ -1033,21 +1033,21 @@ class MeshViewer(QOpenGLWidget):
     def paintGL(self):
         """Render the mesh using shaders."""
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-        
+
         if not self.mesh_shader or not self.rendered_meshes or not self.visible_layers:
             log.debug("No shader program or meshes to render")
             return
-        
+
         mvp = self._computeMVP()
-        
+
         # Get current layer name
         current_layer_name = self.visible_layers[self.current_layer_index]
-        
+
         # Ensure current_layer_name exists in rendered_meshes before accessing
         if current_layer_name not in self.rendered_meshes:
             log.warning(f"Current layer {current_layer_name} not found in rendered_meshes.")
             return
-            
+
         current_layer_mesh_list = self.rendered_meshes[current_layer_name]
         self._renderMeshTriangles(mvp, current_layer_mesh_list)
         self._renderMeshEdges(mvp, current_layer_mesh_list)
@@ -1055,7 +1055,7 @@ class MeshViewer(QOpenGLWidget):
         # Use .get() for safer access, as a layer might not have connection points
         rendered_points_obj = self.rendered_connection_points.get(current_layer_name)
         self._renderConnectionPoints(mvp, rendered_points_obj)
-        
+
         gl.glBindVertexArray(0)
 
     def _screenToWorld(self, screen_pos: QtCore.QPointF) -> mesh.Point:
@@ -1065,7 +1065,7 @@ class MeshViewer(QOpenGLWidget):
 
         viewport_x = screen_pos.x()
         viewport_y = screen_pos.y()
-        
+
         # Convert to normalized device coordinates (NDC)
         # Qt screen Y is 0 at top, self.height() at bottom.
         # This calculation results in NDC where Y is -1 at top, 1 at bottom.
@@ -1073,7 +1073,7 @@ class MeshViewer(QOpenGLWidget):
         ndc_y = (2.0 * viewport_y / self.height()) - 1.0
 
         aspect = self.width() / self.height()
-        
+
         # Inverse transformation based on the projection and view matrices
         # These formulas were implicitly used in _getValueFromCursor and worked for picking.
         world_x = (ndc_x * aspect / self.scale) - self.offset_x
@@ -1085,7 +1085,7 @@ class MeshViewer(QOpenGLWidget):
         """Handle mouse press events."""
         if event.buttons() & Qt.LeftButton:  # Typically, tools operate on left click
             self.last_mouse_screen_pos = event.position()
-        
+
         self.setFocus()  # Ensure the widget gets focus when clicked
 
         # Emit meshClicked signal regardless of button for potential right-click tools etc.
@@ -1099,15 +1099,15 @@ class MeshViewer(QOpenGLWidget):
             delta = event.position() - self.last_mouse_screen_pos
             dx = float(delta.x())
             dy = float(delta.y())
-            
+
             self.screenDragged.emit(dx, dy, event)
-            
+
             self.last_mouse_screen_pos = event.position()
 
         if time.monotonic() - self.last_mouse_position_change_ts < 0.1:
             # Avoid too frequent updates
             return
-        
+
         # Always emit mouse position for status bar updates
         world_point = self._screenToWorld(event.position())
         voltage = self._getNearestValue(world_point.x, world_point.y)
@@ -1124,7 +1124,7 @@ class MeshViewer(QOpenGLWidget):
     def panViewByScreenDelta(self, dx_screen: float, dy_screen: float):
         """
         Pans the view based on a screen delta.
-        
+
         Args:
             dx_screen: Change in x screen coordinate.
             dy_screen: Change in y screen coordinate.
@@ -1136,15 +1136,15 @@ class MeshViewer(QOpenGLWidget):
         self.needs_initial_autoscale = False
 
         aspect = self.width() / self.height()
-        
+
         # Convert screen delta to world delta
         # Horizontal movement (adjusted for aspect ratio)
         dx_world = (dx_screen / self.width()) * (2.0 / self.scale) * aspect
-        
+
         # Vertical movement (note: Qt's y axis points down, OpenGL Y-axis was flipped in projection)
         # A positive dy_screen (mouse down) should result in a positive dy_world (content moves down)
         dy_world = (dy_screen / self.height()) * (2.0 / self.scale)
-        
+
         self.offset_x += dx_world
         self.offset_y += dy_world
         self.update()
@@ -1154,7 +1154,7 @@ class MeshViewer(QOpenGLWidget):
         Sets the minimum value of the color scale from a world point.
         If the selected value is greater than the current maximum, both min and max
         are set to the selected value.
-        
+
         Args:
             world_point: The point in world coordinates.
         """
@@ -1162,7 +1162,7 @@ class MeshViewer(QOpenGLWidget):
 
         if value is None:
             return
-        
+
         if value > self.max_value:
             self.min_value = value
             self.max_value = value
@@ -1184,7 +1184,7 @@ class MeshViewer(QOpenGLWidget):
 
         if value is None:
             return
-        
+
         if value < self.min_value:
             self.max_value = value
             self.min_value = value
@@ -1197,14 +1197,14 @@ class MeshViewer(QOpenGLWidget):
         """Handle mouse wheel for zooming."""
         # User manually zoomed - disable automatic scaling
         self.needs_initial_autoscale = False
-        
+
         zoom_factor = 1.2
         if event.angleDelta().y() > 0:
             self.scale *= zoom_factor
         else:
             self.scale /= zoom_factor
         self.update()
-        
+
     def keyPressEvent(self, event: QtGui.QKeyEvent):
         """Handle keyboard events."""
         # Get current mouse position in widget coordinates
@@ -1213,7 +1213,7 @@ class MeshViewer(QOpenGLWidget):
         # but _screenToWorld should still compute a value.
         # Alternatively, could use center of view if mouse is outside. For now, use cursor.
         world_point = self._screenToWorld(screen_pos)
-        
+
         # Emit signal for ToolManager to handle general shortcuts
         self.keyPressedInMesh.emit(world_point, event.key(), event.modifiers())
 
@@ -1221,24 +1221,24 @@ class MeshViewer(QOpenGLWidget):
             self.switchToNextLayer()
         # else: # Allow other key events to be processed if not handled by shortcuts or specific keys
             # super().keyPressEvent(event) # This might not be needed if all keys are handled via signal or specific checks
-        
+
         # If the event was not accepted by any tool via the signal or specific key checks,
         # then call superclass implementation.
         if not event.isAccepted():
             super().keyPressEvent(event)
-            
+
     def switchToNextLayer(self):
         """Switch to the next layer in the cycle."""
         if not self.visible_layers:
             return
-            
+
         # Move to next layer index
         self.current_layer_index = (self.current_layer_index + 1) % len(self.visible_layers)
         current_layer = self.visible_layers[self.current_layer_index]
-        
+
         # Emit signal with the current layer name
         self.currentLayerChanged.emit(current_layer)
-        
+
         # Refresh the display
         self.update()
 
@@ -1269,38 +1269,38 @@ class MeshViewer(QOpenGLWidget):
 
 class ColorScaleWidget(QWidget):
     """Widget that displays a color scale with delta and absolute range."""
-    
+
     # Signal to notify when unit is changed manually
     unitChanged = Signal(str)
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.v_min = 0.0
         self.v_max = 1.0
         self.unit = "V"  # Default unit
-        
+
         self.setMinimumWidth(110)
         self.setMinimumHeight(200)
-        
+
         # New labels
         self.delta_label = None
         self.range_label = None
-        
+
         self.setupUI()
 
     def setupUI(self):
         """Set up the UI components."""
         layout = QVBoxLayout(self)
         layout.setSpacing(2)  # Add a little vertical spacing
-        
+
         # Delta label at the top of the stretch area
         self.delta_label = QLabel(f"Δ = 0 {self.unit}")
         self.delta_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.delta_label)
-        
+
         # This stretch is where we'll paint our gradient
         layout.addStretch(10)
-        
+
         # Range label at the bottom showing absolute min/max values
         self.range_label = QLabel(f"Range: 0 {self.unit} - 0 {self.unit}")
         self.range_label.setAlignment(Qt.AlignCenter)
@@ -1309,7 +1309,7 @@ class ColorScaleWidget(QWidget):
         font.setPointSize(font.pointSize() - 1)
         self.range_label.setFont(font)
         layout.addWidget(self.range_label)
-    
+
     @Slot(float, float)
     def setRange(self, v_min, v_max):
         """Set the minimum and maximum values for the scale."""
@@ -1317,68 +1317,68 @@ class ColorScaleWidget(QWidget):
         self.v_max = v_max
         self.updateLabels()
         self.update()
-    
+
     @Slot(str)
     def setUnit(self, unit):
         """Set the unit for the scale."""
         self.unit = unit
         self.updateLabels()
-    
+
     def updateLabels(self):
         """Update the delta and range labels."""
         delta = self.v_max - self.v_min
         delta_str = units.Value(delta, self.unit).pretty_format()
         min_str = units.Value(self.v_min, self.unit).pretty_format()
         max_str = units.Value(self.v_max, self.unit).pretty_format()
-        
+
         self.delta_label.setText(f"Δ = {delta_str}")
         self.range_label.setText(f"{max_str}\n  ↑\n{min_str}")
-    
+
     def paintEvent(self, event):
         """Paint the color gradient scale."""
         super().paintEvent(event)
-        
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        
+
         # Find the rectangle where we should draw the gradient
         # This should be between the delta_label and range_label
         content_rect = self.rect()
         top_margin = self.delta_label.y() + self.delta_label.height() + 2  # +2 for spacing
         bottom_margin = self.height() - self.range_label.y() + 2  # +2 for spacing
-        
+
         # Calculate the gradient bar rectangle centered horizontally
         bar_width = 20
         gradient_height = content_rect.height() - top_margin - bottom_margin
         # Ensure gradient height is not negative if labels overlap somehow
         gradient_height = max(0, gradient_height)
-        
+
         gradient_rect = QRect(
             content_rect.left() + (content_rect.width() - bar_width) // 2,  # Center horizontally
             top_margin,
             bar_width,
             gradient_height
         )
-        
+
         # Draw gradient bar border only if height is positive
         if gradient_rect.height() == 0:
             return
         painter.setPen(QPen(Qt.black, 1))
         painter.drawRect(gradient_rect)
-        
+
         # Draw the gradient
         for i in range(gradient_rect.height()):
             # Map position to color
             t = 1.0 - (i / gradient_rect.height())
             color = COLOR_MAP(t)
-            
+
             # Convert to QColor
             qcolor = QColor(
                 int(color[0] * 255),
                 int(color[1] * 255),
                 int(color[2] * 255)
             )
-            
+
             painter.setPen(qcolor)
             painter.drawLine(
                 gradient_rect.left() + 1,
@@ -1406,48 +1406,48 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(main_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         # Create the mesh viewer
         self.mesh_viewer = MeshViewer(self)
-        
+
         # Create ToolManager
         self.tool_manager = ToolManager(self.mesh_viewer, self)
 
         # Create color scale widget
         self.color_scale = ColorScaleWidget(self)
         self.color_scale.setFixedWidth(120)
-        
+
         # Add widgets to layout
         main_layout.addWidget(self.mesh_viewer)
         main_layout.addWidget(self.color_scale)
-        
+
         # Set the main widget as central widget
         self.setCentralWidget(main_widget)
 
         # Create and add the AppToolBar
         self.app_toolbar = AppToolBar(self.tool_manager, self.mesh_viewer, self)
         self.addToolBar(Qt.TopToolBarArea, self.app_toolbar)
-        
+
         # Add status bar widgets with fixed widths
         self.layer_status_label = QLabel("Layer: -")
         self.layer_status_label.setMinimumWidth(120)
-        
+
         self.x_position_label = QLabel("X: -")
         self.x_position_label.setMinimumWidth(80)
-        
+
         self.y_position_label = QLabel("Y: -")
         self.y_position_label.setMinimumWidth(80)
-        
+
         self.voltage_label = QLabel("V: ?")
         self.voltage_label.setMinimumWidth(80)
-        
+
         self.delta_label = QLabel("Δ: ?")
         self.delta_label.setMinimumWidth(80)
-        
+
         # Add a small spacer at the beginning
         spacer_label = QLabel("  ")  # Small margin
         self.statusBar().addWidget(spacer_label)
-        
+
         self.statusBar().addWidget(self.layer_status_label)
         self.statusBar().addWidget(QLabel(" | "))  # Separator
         self.statusBar().addWidget(self.x_position_label)
@@ -1457,22 +1457,22 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.voltage_label)
         self.statusBar().addWidget(QLabel(" | "))  # Separator
         self.statusBar().addWidget(self.delta_label)
-        
+
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         self.projectLoaded.connect(self.mesh_viewer.setSolution)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
-        
+
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
         self.mesh_viewer.screenDragged.connect(self.tool_manager.handle_screen_drag)
         self.mesh_viewer.keyPressedInMesh.connect(self.tool_manager.handle_key_press_in_mesh)
-        
+
         # Connect mouse position updates
         self.mesh_viewer.mousePositionChanged.connect(self.updateMousePosition)
-        
+
         self.projectLoaded.emit(solution)
 
     # Removed loadProject method
@@ -1481,17 +1481,17 @@ class MainWindow(QMainWindow):
         """Update the window title to show the current layer."""
         self.setWindowTitle(f"padne: {self.project_file_name} - {layer_name}")
         self.layer_status_label.setText(f"Layer: {layer_name}")
-    
+
     @Slot(mesh.Point, object)
     def updateMousePosition(self, world_point: mesh.Point, voltage):
         """Update status bar with mouse position and voltage."""
         self.x_position_label.setText(f"X: {world_point.x:.3f}")
         self.y_position_label.setText(f"Y: {world_point.y:.3f}")
-        
+
         if voltage is not None:
             voltage_str = units.Value(voltage, "V").pretty_format(3)
             self.voltage_label.setText(f"V: {voltage_str}")
-            
+
             # Calculate delta from the minimum value of the color scale
             delta_value = voltage - self.mesh_viewer.min_value
             delta_str = units.Value(delta_value, "V").pretty_format(3)
@@ -1499,7 +1499,7 @@ class MainWindow(QMainWindow):
         else:
             self.voltage_label.setText("V: ?")
             self.delta_label.setText("Δ: ?")
-    
+
 
 
 def configure_opengl():
@@ -1516,7 +1516,7 @@ def main(solution: solver.Solution, project_name: Optional[str]):
     """Main entry point for the UI application."""
     # Configure OpenGL
     configure_opengl()
-    
+
     # Create and run application
     # Try to get existing instance, or create one if not present.
     # Using sys.argv can be problematic in some contexts (e.g. pytest),
