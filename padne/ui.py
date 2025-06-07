@@ -665,6 +665,7 @@ class MeshViewer(QOpenGLWidget):
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
+        self.needs_initial_autoscale = False
         self.last_mouse_screen_pos: Optional[QtCore.QPointF] = None
         self.last_mouse_position_change_ts = time.monotonic()
         self.setMouseTracking(True)
@@ -781,24 +782,29 @@ class MeshViewer(QOpenGLWidget):
         # Calculate center point and dimensions
         center_x = (max_x + min_x) / 2
         center_y = (max_y + min_y) / 2
-        width = max_x - min_x
-        height = max_y - min_y
+        solution_width = max_x - min_x
+        solution_height = max_y - min_y
+
+        if solution_width < 1e-6 or solution_height < 1e-6:
+            log.warning("Mesh bounds are suspiciously small, refusing to autoscale.")
+            return
         
         # Set view center (negative offset to move view)
         self.offset_x = -center_x
         self.offset_y = -center_y
-        
-        # Set scale to fit everything with a 10% margin
-        # Consider the aspect ratio of the viewport
-        margin_factor = 0.9  # 10% margin
+
+        window_width = self.width()
+        window_height = self.height()
+
+        margin_factor = 0.9
         aspect = self.width() / self.height() if self.height() > 0 else 1.0
-        
-        if width > 0 and height > 0:
-            # Scale based on the larger dimension, accounting for aspect ratio
-            if width * aspect > height:
-                self.scale = margin_factor * 2.0 / width
-            else:
-                self.scale = margin_factor * 2.0 / (height / aspect)
+
+        # Okay, so:
+        # * the y axis is scaled to 1.0
+        # * the x axis is scaled to however much is `aspect`
+        scale_for_height = 2.0 / solution_height
+        scale_for_width = 2.0 * aspect / solution_width
+        self.scale = min(scale_for_height, scale_for_width) * margin_factor
 
     @Slot(solver.Solution)
     def setSolution(self, solution: solver.Solution):
@@ -818,7 +824,13 @@ class MeshViewer(QOpenGLWidget):
             self.currentLayerChanged.emit(self.visible_layers[self.current_layer_index])
 
         self.autoscaleValue()
-        self.autoscaleXY()
+        # We can't just do autoscaleXY here, since we may be in some
+        # semi-initialized state and the widget may not have reached a valid
+        # size yet.
+        # Unfortunately, the resizeGL method gets called repeatedly with
+        # random sizes until it converges to the final size, so we can't
+        # even rely on the first call being reliable.
+        self.needs_initial_autoscale = True
 
         # Build spatial indices for fast voltage lookups
         self._buildSpatialIndices()
@@ -921,6 +933,12 @@ class MeshViewer(QOpenGLWidget):
     def resizeGL(self, width, height):
         """Handle window resizing."""
         gl.glViewport(0, 0, width, height)
+        print(f"{self.width()} X {self.height()}")
+        
+        # Perform autoscaling on resize until user manually interacts
+        if self.needs_initial_autoscale and width > 0 and height > 0:
+            self.autoscaleXY()
+            self.update()
 
     def _computeMVP(self):
         aspect = self.width() / self.height() if self.height() > 0 else 1.0
@@ -1114,6 +1132,9 @@ class MeshViewer(QOpenGLWidget):
         if self.width() <= 0 or self.height() <= 0:
             return
 
+        # User manually panned - disable automatic scaling
+        self.needs_initial_autoscale = False
+
         aspect = self.width() / self.height()
         
         # Convert screen delta to world delta
@@ -1174,6 +1195,9 @@ class MeshViewer(QOpenGLWidget):
 
     def wheelEvent(self, event):
         """Handle mouse wheel for zooming."""
+        # User manually zoomed - disable automatic scaling
+        self.needs_initial_autoscale = False
+        
         zoom_factor = 1.2
         if event.angleDelta().y() > 0:
             self.scale *= zoom_factor
