@@ -151,7 +151,7 @@ def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
     target_point_shapely = conn.point # Connection point is already shapely
 
     layer_sol = sol.layer_solutions[target_layer_idx]
-    
+
     best_dist = float('inf')
     found_value = None
     closest_vertex_point = None # For debugging
@@ -164,7 +164,7 @@ def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
                 best_dist = dist
                 found_value = values[vertex]
                 closest_vertex_point = vertex.p # For debugging
-    
+
     # Ensure a vertex was found reasonably close
     # This tolerance should match or be slightly larger than the one used in the solver's KDTree query
     assert best_dist < 1e-4, \
@@ -191,7 +191,7 @@ def _find_connection_at_point(prob: problem.Problem,
         for conn in network.connections:
             if conn.layer.name == layer_name and conn.point.distance(target_point) < tolerance:
                 found_connections.append(conn)
-    
+
     if not found_connections:
         raise ValueError(f"Connection at {coords} on layer '{layer_name}' not found within tolerance {tolerance}mm.")
 
@@ -230,9 +230,9 @@ class ExpectedVoltage:
 
         voltage_p = find_vertex_value(sol, conn_p)
         voltage_n = find_vertex_value(sol, conn_n)
-        
+
         measured_voltage_diff = voltage_p - voltage_n
-        
+
         assert measured_voltage_diff == pytest.approx(self.expected_voltage, abs=self.abs_tolerance), \
             (f"Voltage check '{desc_prefix}' failed: "
              f"Expected V({self.p_coords} on '{self.p_layer}') - V({self.n_coords} on '{self.n_layer}') "
@@ -287,77 +287,77 @@ class TestSolverMeshLayer:
         """Test that generate_meshes_for_problem correctly meshes layers from the simple_geometry project."""
         # Get the simple_geometry project
         project = kicad_test_projects["simple_geometry"]
-        
+
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
-        
+
         # Create a mesher with default settings
         mesher = mesh.Mesher()
-        
+
         # Create connectivity graph and find connected layer-mesh pairs
         strtrees = solver.construct_strtrees_from_layers(prob.layers)
         cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
-        
+
         # Call the function under test with the required argument
         meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
             prob, mesher, connected_layer_mesh_pairs)
-        
+
         # Check that we got the expected result
         assert isinstance(meshes, list), "generate_meshes_for_problem should return a list of meshes"
-        
+
         # The simple_geometry project should have a specific number of separated copper regions
         # Specifically, it has two meshes (one for each region)
         assert len(meshes) == 2, f"Expected 2 meshes total, got {len(meshes)}"
-        
+
         # Verify the mesh_index_to_layer_index mapping
         assert len(mesh_index_to_layer_index) == len(meshes), "Each mesh should have a corresponding layer index"
-        
+
         # Verify each mesh has the right properties
         for m in meshes:
             assert isinstance(m, mesh.Mesh), "Each item should be a Mesh instance"
             assert len(m.vertices) > 0, "Mesh should have vertices"
             assert len(m.faces) > 0, "Mesh should have faces"
-            
+
             # Check mesh topology is valid
             euler = m.euler_characteristic()
             assert euler == 1, f"Euler characteristic should be 1 for a valid mesh, got {euler}"
-            
+
             # Check that all faces have proper area
             for face in m.faces:
                 assert face.area > 0, "Each face should have positive area"
-    
+
     def test_generate_meshes_with_seed_points(self, kicad_test_projects):
         """Test that generate_meshes_for_problem correctly handles seed points from lumped elements."""
         # Get the simple_geometry project
         project = kicad_test_projects["simple_geometry"]
-        
+
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
-        
+
         # Create a mesher with default settings
         mesher = mesh.Mesher()
-        
+
         # Create connectivity graph and find connected layer-mesh pairs
         strtrees = solver.construct_strtrees_from_layers(prob.layers)
         cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
-        
+
         # Test that collect_seed_points extracts the right points
         for layer in prob.layers:
             seed_points = solver.collect_seed_points(prob, layer)
-            
+
             # Simple_geometry has 2 lumped elements with 4 terminals total
             assert len(seed_points) == 4, f"Expected 4 seed points for layer {layer.name}, got {len(seed_points)}"
-            
+
             # Each point should be a mesh.Point
             for point in seed_points:
                 assert isinstance(point, mesh.Point), "Seed point should be a mesh.Point instance"
-        
+
         # Call generate_meshes_for_problem with the required argument
         meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
             prob, mesher, connected_layer_mesh_pairs)
-        
+
         # For each connection point in the problem, verify there's a mesh vertex very close to its location
         for network in prob.networks:
             for connection in network.connections:
@@ -366,7 +366,7 @@ class TestSolverMeshLayer:
 
                 # Convert connection point (already shapely) to mesh.Point for distance comparison
                 conn_point_mesh = mesh.Point(connection.point.x, connection.point.y)
-                
+
                 # Check if any mesh on the correct layer has a vertex close to this connection point
                 found = False
                 for m in relevant_meshes:
@@ -376,7 +376,7 @@ class TestSolverMeshLayer:
                             break
                     if found:
                         break
-                
+
                 assert found, (
                     f"Connection point {conn_point_mesh} on layer {connection.layer.name} "
                     f"should be represented by a vertex in the mesh"
@@ -514,28 +514,28 @@ class TestSyntheticProblems:
         inner_radius = 1.0
         outer_radius = 9.0
         segments_per_quadrant = 16  # Gives 32 segments for the full circle
-        
+
         # Create the annular shape (ring) using shapely
         inner_circle = shapely.geometry.Point(0, 0).buffer(inner_radius, quad_segs=segments_per_quadrant)
         outer_circle = shapely.geometry.Point(0, 0).buffer(outer_radius, quad_segs=segments_per_quadrant)
         annular_ring = outer_circle.difference(inner_circle)
-        
+
         # Ensure we have a MultiPolygon as expected by the Layer constructor
         if annular_ring.geom_type == "Polygon":
             annular_ring = shapely.geometry.MultiPolygon([annular_ring])
-        
+
         # Create layer for the annulus
         layer = problem.Layer(
             shape=annular_ring,
             name="AnnulusLayer",
             conductance=1.0
         )
-        
+
         # Extract boundary points directly from the polygon
         polygon = annular_ring.geoms[0]  # Get the first (and only) polygon
         outer_boundary_pts = list(polygon.exterior.coords)[:-1]  # Remove duplicate last point
         inner_boundary_pts = list(polygon.interiors[0].coords)[:-1]  # First interior ring
-        
+
         # Convert points to (angle, point) pairs for sorting
         def to_angle_point_pair(point):
             x, y = point
@@ -544,23 +544,23 @@ class TestSyntheticProblems:
             if angle < 0:
                 angle += 2 * math.pi
             return (angle, point)
-        
+
         # Sort inner and outer boundary points by angle
         inner_pts_with_angles = sorted([to_angle_point_pair(pt) for pt in inner_boundary_pts])
         outer_pts_with_angles = sorted([to_angle_point_pair(pt) for pt in outer_boundary_pts])
-        
+
         # Create Connections and store them
         networks = []
         outer_connections = []
         inner_connections = []
-        
+
         # Pair inner and outer points by their sorted order and create Connections
         for (_, inner_pt), (_, outer_pt) in zip(inner_pts_with_angles, outer_pts_with_angles):
             inner_conn = problem.Connection(layer=layer,
                                           point=shapely.geometry.Point(inner_pt))
             outer_conn = problem.Connection(layer=layer,
                                           point=shapely.geometry.Point(outer_pt))
-            
+
             outer_connections.append(outer_conn)
             inner_connections.append(inner_conn)
 
@@ -600,11 +600,11 @@ class TestSyntheticProblems:
         # Create the Problem and solve
         prob_coaxial = problem.Problem(layers=[layer], networks=networks)
         solution = solver.solve(prob_coaxial)
-        
+
         # Verify the solution
         assert solution is not None
         assert len(solution.layer_solutions) == 1
-        
+
         # Analytical solution function for potential in a coaxial structure
         def analytical_solution(x, y):
             r = math.sqrt(x**2 + y**2)
@@ -619,10 +619,10 @@ class TestSyntheticProblems:
         # This check checks that we have implemented the analytical solution correctly
         assert analytical_solution(inner_radius, 0) == 1.0
         assert analytical_solution(outer_radius, 0) == 0.0
-        
+
         # Compare numerical solution with analytical solution
         layer_solution = solution.layer_solutions[0]
-        
+
         # Check voltages at outer connections - should all be approximately the same
         outer_potentials = [find_vertex_value(solution, conn) for conn in outer_connections]
         reference_potential = outer_potentials[0]
@@ -634,30 +634,30 @@ class TestSyntheticProblems:
         for pot in inner_potentials:
             assert pot == pytest.approx(reference_potential + 1.0, abs=0.001), \
                 f"Inner boundary potential inconsistency: {pot} vs reference {reference_potential + 1.0}"
-        
+
         # TODO: I suspect that there is systematic bias here somewhere. In reality,
         # we should be getting better than 0.03V accuracy, but I don't know why we are not.
         # It seems that shifting the outer_radius and inner_radius in the
         # analytical_solution function definition does help and allow us to match the actual result exactly
-        
+
         for mesh_idx, (msh, values) in enumerate(zip(layer_solution.meshes, layer_solution.values)):
             for vertex in msh.vertices:
                 numerical_value = values[vertex] - reference_potential
                 x, y = vertex.p.x, vertex.p.y
                 r = math.sqrt(x**2 + y**2)
-                
+
                 # Skip vertices very close to boundaries where numerical errors might be larger
                 # or where analytical solution might be sensitive
                 boundary_margin = 0.1 # Slightly increased margin
                 if r > outer_radius - boundary_margin or r < inner_radius + boundary_margin:
                     continue
-                    
+
                 analytical_value = analytical_solution(x, y)
                 # Check each point against analytical solution with reasonable tolerance
                 assert numerical_value == pytest.approx(analytical_value, abs=0.03), \
                     f"Error too large at point ({x:.2f}, {y:.2f}), r={r:.2f}: " \
                     f"numerical={numerical_value:.4f}, analytical={analytical_value:.4f}"
-        
+
 
 class TestLaplaceOperator:
 
@@ -696,7 +696,7 @@ class TestLaplaceOperator:
             mesh.Point(0.0, 1.0),  # top left (3)
             mesh.Point(0.5, 0.5),  # center (4)
         ]
-        
+
         # Define the triangles (counter-clockwise order)
         triangles = [
             (0, 1, 4),  # bottom triangle
@@ -704,15 +704,15 @@ class TestLaplaceOperator:
             (2, 3, 4),  # top triangle
             (3, 0, 4),  # left triangle
         ]
-        
+
         # Create the mesh
         test_mesh = mesh.Mesh.from_triangle_soup(points, triangles)
-        
+
         # Call the function under test
         L = solver.laplace_operator(test_mesh)
 
         assert L.shape == (5, 5), "Laplace operator should be a 5x5 matrix"
-        
+
         # Convert to dense matrix for easier testing
         L_dense = L.toarray()
 
@@ -723,17 +723,17 @@ class TestLaplaceOperator:
         # - Each corner vertex connects to two other vertices (center and adjacent corners)
         # - The center vertex connects to all four corners
         # - For right isosceles triangles, the cotangent of the angle is 1.0
-        
+
         # For the center vertex (index 4):
         # It connects to vertices 0, 1, 2, 3 with cotangent weights
         # Each triangle has two 45° angles (cotangent = 1) and one 90° angle (cotangent = 0)
         # So the center vertex gets 4 connections, each with weight 0.5 (average of cotangents)
-        
+
         # For each corner vertex (indices 0-3):
         # It connects to the center and two adjacent corners
         # The connections to adjacent corners have weight 0 (90° angle, cotangent = 0)
         # The connection to center has weight 0.5 (same as above)
-        
+
         # Create the expected matrix (initialized to zeros)
         expected_L = np.zeros((5, 5), dtype=np.float32)
 
@@ -746,7 +746,7 @@ class TestLaplaceOperator:
         expected_L[4, 2] = 1
         expected_L[4, 3] = 1
         expected_L[4, 4] = -4.0  # -sum(0.5 * 4)
-        
+
         # Corner vertices
         # Each corner vertex connects to the center with weight 1.0 (as above)
         # and to two adjacent corners with weight 0.0 (cot 90° = 0)
@@ -754,7 +754,7 @@ class TestLaplaceOperator:
             # Connection to center
             expected_L[i, 4] = 1.0
             expected_L[i, i] = -1.0
-        
+
         # Verify the Laplace operator matches our expectations
         np.testing.assert_allclose(L_dense, expected_L, rtol=1e-5, atol=1e-5,
                                    err_msg="Laplace operator matrix does not match expected values")
@@ -774,7 +774,7 @@ class TestVertexIndexer:
         ]
         triangles_1 = [(0, 1, 2)]
         mesh_1 = mesh.Mesh.from_triangle_soup(points_1, triangles_1)
-        
+
         # Second mesh: square (made of two triangles)
         points_2 = [
             mesh.Point(2.0, 0.0),
@@ -784,33 +784,33 @@ class TestVertexIndexer:
         ]
         triangles_2 = [(0, 1, 2), (0, 2, 3)]
         mesh_2 = mesh.Mesh.from_triangle_soup(points_2, triangles_2)
-        
+
         # Create the VertexIndexer
         index_store = solver.VertexIndexer.create([mesh_1, mesh_2])
-        
+
         # Verify basic properties
         # Total number of vertices across both meshes
         expected_total_vertices = len(mesh_1.vertices) + len(mesh_2.vertices)
         assert len(index_store.global_index_to_vertex_index) == expected_total_vertices
-        
+
         # Verify mapping from mesh/vertex to global index
         # First mesh vertices should have global indices 0, 1, 2
         for vertex_idx in range(len(mesh_1.vertices)):
             global_idx = index_store.mesh_vertex_index_to_global_index[(0, vertex_idx)]
             assert 0 <= global_idx < len(mesh_1.vertices)
-            
+
         # Second mesh vertices should have global indices 3, 4, 5, 6
         for vertex_idx in range(len(mesh_2.vertices)):
             global_idx = index_store.mesh_vertex_index_to_global_index[(1, vertex_idx)]
             assert len(mesh_1.vertices) <= global_idx < expected_total_vertices
-        
+
         # Verify mapping from global index back to mesh/vertex
         for global_idx in range(expected_total_vertices):
             mesh_idx, vertex_idx = index_store.global_index_to_vertex_index[global_idx]
-            
+
             # Check the mapping is consistent
             assert index_store.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] == global_idx
-            
+
             # Check we're referencing the correct mesh
             # Note: this is technically not part of the VertexIndexer API, but
             # it's a good sanity check. Can be removed if needed.
@@ -818,7 +818,7 @@ class TestVertexIndexer:
                 assert mesh_idx == 0
             else:
                 assert mesh_idx == 1
-                
+
             # Verify vertex index is valid for the referenced mesh
             if mesh_idx == 0:
                 assert 0 <= vertex_idx < len(mesh_1.vertices)
@@ -906,7 +906,7 @@ class TestSolverEndToEnd:
         # Load the problem and solve it
         prob = kicad.load_kicad_project(project.pro_path)
         solution = solver.solve(prob)
-        
+
         # Find the current source network and element
         current_source_element = None
         current_source_network = None
@@ -926,11 +926,11 @@ class TestSolverEndToEnd:
             t_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.t)
         except StopIteration:
             pytest.fail(f"Could not find connections for CurrentSource {current_source_element} in network {current_source_network}")
-        
+
         # Get voltages at the connection points
         voltage_from = find_vertex_value(solution, f_conn)
         voltage_to = find_vertex_value(solution, t_conn)
-        
+
         # Check voltage difference is approximately 0.24 V
         voltage_diff = abs(voltage_from - voltage_to)
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
@@ -974,11 +974,11 @@ class TestSolverEndToEnd:
             t_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.t)
         except StopIteration:
             pytest.fail(f"Could not find connections for CurrentSource {current_source_element} in network {current_source_network}")
-        
+
         # Get voltages at the connection points
         voltage_from = find_vertex_value(solution, f_conn)
         voltage_to = find_vertex_value(solution, t_conn)
-        
+
         # Calculate voltage difference between terminals
         voltage_diff = voltage_to - voltage_from
 
@@ -1033,7 +1033,7 @@ class TestSolverEndToEnd:
 
         # Calculate expected voltage drop across the entire trace (200mm)
         total_expected_voltage = expected_voltage_at_position(200.0)
-        
+
         # Compare simulated vs analytical results for overall drop
         assert voltage_diff == pytest.approx(total_expected_voltage, rel=0.1), \
             f"Voltage drop mismatch: simulated={voltage_diff:.3f}V, analytical={total_expected_voltage:.3f}V"
@@ -1157,27 +1157,27 @@ class TestSolverEndToEnd:
         v_source_n = find_vertex_value(full_solution, vsource_n_conn)
         assert v_source_p - v_source_n == pytest.approx(voltage_source_element.voltage, abs=1e-4), \
             "Voltage source constraint not satisfied in full solution"
-        
+
     def test_disconnected_component_gets_dropped(self, kicad_test_projects):
         project = kicad_test_projects["floating_copper"]
-        
+
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
-        
+
         # Call the function under test
         solution = solver.solve(prob)
-        
+
         assert solution is not None
-        
+
         # Verify this has a single layer (this project should only have F.Cu)
         assert len(solution.layer_solutions) == 1
-        
+
         layer_solution = solution.layer_solutions[0]
-        
+
         # Verify it has only one mesh in the layer solution
         # (one connected component with electrical elements, the other should be dropped)
         assert len(layer_solution.meshes) == 2
-        
+
         # Verify the mesh has vertices and values
         assert len(layer_solution.meshes[0].vertices) > 0
         assert len(layer_solution.values[0].values) > 0
@@ -1189,13 +1189,13 @@ class TestSolverEndToEnd:
         """
         # Get the unconnected_via project
         project = kicad_test_projects["unconnected_via"]
-        
+
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
-        
+
         # Solve the problem
         solution = solver.solve(prob)
-        
+
         # Find the voltage source network and element
         voltage_source_element = None
         voltage_source_network = None
@@ -1215,19 +1215,19 @@ class TestSolverEndToEnd:
             n_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n)
         except StopIteration:
             pytest.fail(f"Could not find connections for VoltageSource {voltage_source_element} in network {voltage_source_network}")
-        
+
         # Get reference voltages at the source connection points
         neg_voltage = find_vertex_value(solution, n_conn)
         expected_diff = voltage_source_element.voltage  # Should be 1.0V
-        
+
         # Get the layer and mesh containing the positive connection
         pos_layer_idx = prob.layers.index(p_conn.layer)
         pos_layer_sol = solution.layer_solutions[pos_layer_idx]
-        
+
         # Find the mesh containing the positive connection point
         pos_mesh_idx = None
         pos_conn_point_mesh = mesh.Point(p_conn.point.x, p_conn.point.y)
-        
+
         for i, msh in enumerate(pos_layer_sol.meshes):
             for vertex in msh.vertices:
                 # Use a small tolerance to find the mesh containing the connection point
@@ -1236,20 +1236,20 @@ class TestSolverEndToEnd:
                     break
             if pos_mesh_idx is not None:
                 break
-        
+
         assert pos_mesh_idx is not None, "Could not find mesh containing positive connection point"
-        
+
         # Check that ALL vertices in the positive mesh have consistent voltage
         pos_mesh = pos_layer_sol.meshes[pos_mesh_idx]
         pos_values = pos_layer_sol.values[pos_mesh_idx]
-        
+
         # With the bug: some vertices might have incorrect voltage due to via shorting
         # After fix: all vertices should have same voltage as positive terminal
         for vertex in pos_mesh.vertices:
             vertex_voltage = pos_values[vertex]
             # Verify voltage relative to negative terminal
             voltage_diff = vertex_voltage - neg_voltage
-            
+
             # This assertion will fail if any vertex in the positive mesh
             # has been improperly connected through a "dead" via
             assert voltage_diff == pytest.approx(expected_diff, abs=0.01), \
@@ -1388,7 +1388,7 @@ class TestSolverEndToEnd:
             "TP1": (180, 150), "TP2": (100, 150), "TP3": (120, 150), "TP4": (140, 150),
             "TP5": (180, 50), "TP6": (100, 50), "TP7": (120, 50), "TP8": (140, 50),
         }
-        
+
         # The original test asserts: tp_voltages["TP6"] - tp_voltages["TP2"] == expected_drop
         # This means V(TP6) is expected to be higher than V(TP2).
         # So, p_coords = TP6, n_coords = TP2 for a positive expected_voltage.
