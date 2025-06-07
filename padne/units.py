@@ -65,10 +65,14 @@ class Value:
 
         return cls(value=value, unit=unit)
 
-    def pretty_format(self) -> str:
+    def pretty_format(self, decimal_places: int | None = None) -> str:
         """Pretty format the stored value with SI prefix and unit.
 
         Uses self.value and self.unit.
+
+        Args:
+            decimal_places: Number of decimal places to show. If None, uses smart precision
+                          based on magnitude (1-3 decimal places).
 
         Returns:
             A formatted string with the value, appropriate SI prefix, and unit
@@ -78,6 +82,10 @@ class Value:
             '1.000 μA'
             >>> Value(1500, "V").pretty_format()
             '1.500 kV'
+            >>> Value(23.97, "V").pretty_format(3)
+            '23.970 V'
+            >>> Value(23.97, "V").pretty_format(5)
+            '23.97000 V'
         """
         if self.value == 0:
             return f"0 {self.unit}"
@@ -112,16 +120,20 @@ class Value:
                 exponent -= 3
 
         # Format the value with the appropriate precision
-        # Use fewer decimal places for larger numbers
-        if abs_value >= 100:
-            formatted_value = f"{abs_value:.1f}"
-        elif abs_value >= 10:
-            formatted_value = f"{abs_value:.2f}"
+        if decimal_places is not None:
+            # Use specified decimal places
+            formatted_value = f"{abs_value:.{decimal_places}f}"
         else:
-            formatted_value = f"{abs_value:.3f}"
+            # Use smart precision based on magnitude
+            if abs_value >= 100:
+                formatted_value = f"{abs_value:.1f}"
+            elif abs_value >= 10:
+                formatted_value = f"{abs_value:.2f}"
+            else:
+                formatted_value = f"{abs_value:.3f}"
 
-        # Remove trailing zeros after decimal point
-        if "." in formatted_value:
+        # Remove trailing zeros after decimal point (only for smart precision)
+        if decimal_places is None and "." in formatted_value:
             formatted_value = formatted_value.rstrip("0").rstrip(".")
 
         # Apply the sign from the original value
