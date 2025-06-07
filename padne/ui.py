@@ -933,7 +933,6 @@ class MeshViewer(QOpenGLWidget):
     def resizeGL(self, width, height):
         """Handle window resizing."""
         gl.glViewport(0, 0, width, height)
-        print(f"{self.width()} X {self.height()}")
 
         # Perform autoscaling on resize until user manually interacts
         if self.needs_initial_autoscale and width > 0 and height > 0:
