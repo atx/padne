@@ -553,6 +553,7 @@ class ViaSpec:
     point: shapely.geometry.Point
     drill_diameter: float
     layer_names: list[str]
+    endpoint: Optional[Endpoint] = None
 
     def compute_resistance(self, length: float) -> float:
         # TODO: This is very temporary solution. Will ultimately need to take
@@ -653,11 +654,17 @@ def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
                     continue
                 layer_names.append(board.GetLayerName(layer_id))
 
+            endpoint = Endpoint(
+                designator=footprint.GetReference(),
+                pad=pad.GetName()
+            )
+
             # Create a ViaSpec object for this through-hole pad
             tht_spec = ViaSpec(
                 point=pad_point,
                 drill_diameter=drill_diameter,
-                layer_names=layer_names
+                layer_names=layer_names,
+                endpoint=endpoint
             )
 
             tht_specs.append(tht_spec)
