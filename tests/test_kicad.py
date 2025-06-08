@@ -596,3 +596,42 @@ class TestLoadKicadProject:
         assert actual_order == expected_order, (
             f"Layer order mismatch: expected {expected_order}, got {actual_order}"
         )
+
+    def test_via_hole_punching(self, kicad_test_projects):
+        """Test that holes are punched in layers for THT pads and vias."""
+        project = kicad_test_projects["via_tht_4layer"]
+
+        # Load the project
+        result = kicad.load_kicad_project(project.pro_path)
+
+        # Test points and hole sizes
+        test_cases = [
+            # (x, y, hole_diameter, description)
+            (113.39, 104.25, 1.0, "THT pad hole"),
+            (118.8, 105.9, 0.3, "via hole")
+        ]
+
+        for x, y, hole_diameter, description in test_cases:
+            hole_center = shapely.geometry.Point(x, y)
+
+            # Test 1: Make hole 5% smaller - intersection should be empty (hole is punched)
+            smaller_hole_circle = hole_center.buffer(hole_diameter / 2 * 0.95)
+
+            for layer in result.layers:
+                intersection = layer.shape.intersection(smaller_hole_circle)
+
+                assert intersection.is_empty, (
+                    f"{description} at ({x}, {y}) not properly punched in layer {layer.name}. "
+                    f"Expected empty intersection but found geometry"
+                )
+
+            # Test 2: Make hole 5% larger - intersection should NOT be empty (copper around hole)
+            larger_hole_circle = hole_center.buffer(hole_diameter / 2 * 1.05)
+
+            for layer in result.layers:
+                intersection = layer.shape.intersection(larger_hole_circle)
+
+                assert not intersection.is_empty, (
+                    f"{description} at ({x}, {y}) should have copper around the hole in layer {layer.name}. "
+                    f"Expected non-empty intersection but found empty geometry"
+                )
