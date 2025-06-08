@@ -391,33 +391,49 @@ class TestSyntheticProblems:
         # In addition, add three lumped voltage sources of 1V, that are connected
         # along the shorter sides of the rectangle.
 
-        # 1. Create the rectangle shape
+        # 1. Define rectangle dimensions
         rect_width = 10.0
         rect_height = 1.0
-        rectangle = shapely.geometry.box(0, 0, rect_width, rect_height)
 
-        # 2. Create the Layer
+        # 2. Define connection points
+        points_left = [
+            (0, 0.05 * rect_height),
+            (0, 0.25 * rect_height),
+            (0, 0.50 * rect_height),
+            (0, 0.75 * rect_height),
+            (0, 0.95 * rect_height),
+        ]
+        points_right = [
+            (rect_width, 0.05 * rect_height),
+            (rect_width, 0.25 * rect_height),
+            (rect_width, 0.50 * rect_height),
+            (rect_width, 0.75 * rect_height),
+            (rect_width, 0.95 * rect_height),
+        ]
+
+        # 3. Manually construct rectangle polygon that includes all connection points as boundary vertices
+        # Start from bottom-left, go counterclockwise, including all connection points
+        boundary_coords = (
+            [(0, 0)] +                          # Bottom-left corner
+            sorted(points_left, key=lambda p: p[1]) +  # Left edge points (bottom to top)
+            [(0, rect_height)] +                # Top-left corner
+            [(rect_width, rect_height)] +       # Top-right corner
+            sorted(points_right, key=lambda p: p[1], reverse=True) +  # Right edge points (top to bottom)
+            [(rect_width, 0)] +                 # Bottom-right corner
+            [(0, 0)]                            # Close the polygon
+        )
+        rectangle = shapely.geometry.Polygon(boundary_coords)
+
+        # 4. Create the Layer
         layer = problem.Layer(
             shape=shapely.geometry.MultiPolygon([rectangle]),
             name="TestLayer",
             conductance=1.0  # Conductance value doesn't strongly affect voltage source test
         )
 
-        # 3. Define connection points
-        points_left = [
-            shapely.geometry.Point(0, 0.05 * rect_height),
-            shapely.geometry.Point(0, 0.25 * rect_height),
-            shapely.geometry.Point(0, 0.50 * rect_height),
-            shapely.geometry.Point(0, 0.75 * rect_height),
-            shapely.geometry.Point(0, 0.95 * rect_height),
-        ]
-        points_right = [
-            shapely.geometry.Point(rect_width, 0.05 * rect_height),
-            shapely.geometry.Point(rect_width, 0.25 * rect_height),
-            shapely.geometry.Point(rect_width, 0.50 * rect_height),
-            shapely.geometry.Point(rect_width, 0.75 * rect_height),
-            shapely.geometry.Point(rect_width, 0.95 * rect_height),
-        ]
+        # 5. Convert connection points back to shapely Points for use in connections
+        points_left = [shapely.geometry.Point(x, y) for x, y in points_left]
+        points_right = [shapely.geometry.Point(x, y) for x, y in points_right]
 
         # 4. Create Networks, each containing one Voltage Source and its Connections
         networks = []
