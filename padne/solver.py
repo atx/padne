@@ -1,5 +1,6 @@
 
 
+import collections
 import itertools
 import logging
 import numpy as np
@@ -242,16 +243,37 @@ def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
 
 def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
-                                connected_layer_mesh_pairs: set[tuple[int, int]]
+                                connected_layer_mesh_pairs: set[tuple[int, int]],
+                                strtrees: list[shapely.strtree.STRtree]
                                 ) -> list[list[mesh.Mesh], list[int]]:
     meshes: list[mesh.Mesh] = []
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
+        # TODO: collect_seed_points should just return a list
+        # having per-layer seed points. This is a bit dumb.
+        # But since we do not have many layers, it is not a big bottleneck.
         seed_points_in_layer = [
             shapely.geometry.Point(p.x, p.y)
             for p in collect_seed_points(prob, layer)
         ]
+
+        geom_to_seed_points = collections.defaultdict(list)
+
+        for seed_point in seed_points_in_layer:
+            candidates = strtrees[layer_i].query(seed_point)
+
+            for geom_i in candidates:
+                if (layer_i, geom_i) not in connected_layer_mesh_pairs:
+                    # This geometry is not even connected to any driven
+                    # network, so we can just skip it.
+                    continue
+                if not layer.shape.geoms[geom_i].contains(seed_point):
+                    continue
+
+                # This seed point is inside the geometry, so we stick it in
+                geom_to_seed_points[geom_i].append(seed_point)
+
         for geom_i, geom in enumerate(layer.shape.geoms):
             if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                 # This layer is not connected to any lumped elements, skip it
@@ -270,10 +292,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
             # boundary points in the rings if it detects the case above,
             # but this is not yet implemented.
             # TODO: Add a warning here if we detect the case above
-            seed_points_in_geom = [
-                p for p in seed_points_in_layer
-                if layer.shape.geoms[geom_i].contains(p)
-            ]
+            seed_points_in_geom = geom_to_seed_points[geom_i]
 
             m = mesher.poly_to_mesh(
                 layer.shape.geoms[geom_i],
@@ -628,7 +647,7 @@ def solve(prob: problem.Problem) -> Solution:
     connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
     log.info(f"Meshing the connected components")
     meshes, mesh_index_to_layer_index = \
-        generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs)
+        generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs, strtrees)
 
     # In the next step, we assign a global index to each vertex in every mesh.
     # This is needed since we need to somehow map the vertex indices to the

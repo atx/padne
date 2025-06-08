@@ -301,7 +301,7 @@ class TestSolverMeshLayer:
 
         # Call the function under test with the required argument
         meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
-            prob, mesher, connected_layer_mesh_pairs)
+            prob, mesher, connected_layer_mesh_pairs, strtrees)
 
         # Check that we got the expected result
         assert isinstance(meshes, list), "generate_meshes_for_problem should return a list of meshes"
@@ -356,7 +356,7 @@ class TestSolverMeshLayer:
 
         # Call generate_meshes_for_problem with the required argument
         meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
-            prob, mesher, connected_layer_mesh_pairs)
+            prob, mesher, connected_layer_mesh_pairs, strtrees)
 
         # For each connection point in the problem, verify there's a mesh vertex very close to its location
         for network in prob.networks:
