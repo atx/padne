@@ -139,9 +139,14 @@ class TestViaSpecs:
     def test_simple_via_gets_converted_to_a_resistor(self, kicad_test_projects):
         project = kicad_test_projects["simple_via"]
 
-        # Check for a resistor connecting F.Cu and B.Cu at (132, 100)
+        # Check for multiple resistors connecting F.Cu and B.Cu around via boundary at (132, 100)
         result = kicad.load_kicad_project(project.pro_path)
-        found = False
+        via_center = shapely.geometry.Point(132, 100)
+        drill_diameter = 0.3  # mm
+        expected_radius = drill_diameter / 2
+        tolerance = expected_radius * 0.1  # 10% tolerance
+
+        resistors_found = 0
         for network in result.networks:
             for element in network.elements:
                 if isinstance(element, problem.Resistor):
@@ -152,29 +157,26 @@ class TestViaSpecs:
                     if not conn_a or not conn_b:
                         continue # Should not happen in a valid network
 
-                    # Check if this resistor connects the expected layers at the expected point
-                    cond1 = (
-                        conn_a.layer.name == "F.Cu" and
-                        conn_b.layer.name == "B.Cu" and
-                        abs(conn_a.point.x - 132) < 1e-3 and
-                        abs(conn_a.point.y - 100) < 1e-3 and
-                        abs(conn_b.point.x - 132) < 1e-3 and
-                        abs(conn_b.point.y - 100) < 1e-3
+                    # Check if this resistor connects F.Cu and B.Cu layers
+                    layers_match = (
+                        (conn_a.layer.name == "F.Cu" and conn_b.layer.name == "B.Cu") or
+                        (conn_b.layer.name == "F.Cu" and conn_a.layer.name == "B.Cu")
                     )
-                    cond2 = (
-                        conn_b.layer.name == "F.Cu" and
-                        conn_a.layer.name == "B.Cu" and
-                        abs(conn_b.point.x - 132) < 1e-3 and
-                        abs(conn_b.point.y - 100) < 1e-3 and
-                        abs(conn_a.point.x - 132) < 1e-3 and
-                        abs(conn_a.point.y - 100) < 1e-3
+
+                    # Check if points are on the via boundary (within 10% of expected radius)
+                    dist_a = via_center.distance(conn_a.point)
+                    dist_b = via_center.distance(conn_b.point)
+                    points_on_boundary = (
+                        abs(dist_a - expected_radius) < tolerance and
+                        abs(dist_b - expected_radius) < tolerance
                     )
-                    if cond1 or cond2:
-                        found = True
-                        break
-            if found:
-                break
-        assert found, "No resistor found connecting F.Cu and B.Cu at (132, 100)"
+
+                    if layers_match and points_on_boundary:
+                        resistors_found += 1
+
+        # We should have multiple resistors (boundary ring stitching) instead of just one
+        assert resistors_found > 0, f"No resistors found connecting F.Cu and B.Cu on via boundary at {via_center}"
+        assert resistors_found >= 4, f"Expected at least 4 boundary resistors, found {resistors_found} (quad_segs=4 creates ~16 points)"
 
     def test_4layer_via_gets_converted_to_resistor_stack(self, kicad_test_projects):
         project = kicad_test_projects["via_tht_4layer"]
@@ -182,11 +184,14 @@ class TestViaSpecs:
         # This project contains a via on x=118.8 y=105.9. Check that resistors
         # connecting the layers F.Cu - In1.Cu - In2.Cu - B.Cu have been created
         result = kicad.load_kicad_project(project.pro_path)
-        # The via should be at (118.8, 105.9) and connect F.Cu, In1.Cu, In2.Cu, B.Cu in sequence
-        expected_layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
-        expected_points = [(118.8, 105.9)] * 4
+        via_center = shapely.geometry.Point(118.8, 105.9)
+        drill_diameter = 0.3  # mm (assuming same as simple via)
+        expected_radius = drill_diameter / 2
+        tolerance = expected_radius * 0.1  # 10% tolerance
 
-        # Find all resistors at this location and on these layers
+        expected_layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+
+        # Find all resistors at this via boundary and on these layers
         found_layers = set()
         for network in result.networks:
             for element in network.elements:
@@ -198,11 +203,15 @@ class TestViaSpecs:
                     if not conn_a or not conn_b:
                         continue
 
-                    # Check if both endpoints are at the via location
-                    if (
-                        abs(conn_a.point.x - 118.8) < 1e-3 and abs(conn_a.point.y - 105.9) < 1e-3 and
-                        abs(conn_b.point.x - 118.8) < 1e-3 and abs(conn_b.point.y - 105.9) < 1e-3
-                    ):
+                    # Check if both endpoints are on the via boundary (within 10% of expected radius)
+                    dist_a = via_center.distance(conn_a.point)
+                    dist_b = via_center.distance(conn_b.point)
+                    points_on_boundary = (
+                        abs(dist_a - expected_radius) < tolerance and
+                        abs(dist_b - expected_radius) < tolerance
+                    )
+
+                    if points_on_boundary:
                         # Record the pair of layers this resistor connects
                         found_layers.add(tuple(sorted([conn_a.layer.name, conn_b.layer.name])))
 
@@ -212,7 +221,7 @@ class TestViaSpecs:
             for i in range(len(expected_layers)-1)
         ]
         for pair in expected_pairs:
-            assert pair in found_layers, f"Missing resistor between layers {pair} at (118.8, 105.9)"
+            assert pair in found_layers, f"Missing resistor between layers {pair} at via {via_center}"
 
 
 class TestDirectiveParse:
@@ -495,7 +504,7 @@ class TestLoadKicadProject:
         # For each lumped element network, verify that its connection points are inside the layers
         for i, network in enumerate(kicad_problem.networks):
             for j, connection in enumerate(network.connections):
-                point_inside = connection.layer.shape.contains(connection.point)
+                point_inside = connection.layer.shape.intersects(connection.point)
 
                 assert point_inside, (
                     f"Project {project.name}, network {i}, connection {j} "

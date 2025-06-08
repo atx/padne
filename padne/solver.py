@@ -44,10 +44,10 @@ def construct_strtrees_from_layers(layers: list[problem.Layer]
                                    ) -> list[shapely.strtree.STRtree]:
     """
     Construct STRtrees for each layer in the problem.
-    
+
     Args:
         layers: List of layers to construct STRtrees for
-        
+
     Returns:
         List of STRtrees, one for each layer
     """
@@ -142,11 +142,11 @@ class ConnectivityGraph:
 def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[mesh.Point]:
     """
     Collect all seed points (component pads) that are on this layer.
-    
+
     Args:
         problem: The entire problem containing all lumped elements
         layer: The specific layer to collect seed points for
-        
+
     Returns:
         List of Points to be used as mesh seed points
     """
@@ -189,7 +189,7 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
                 # I do not think this happens all that often, except for maybe
                 # some degenerate cases
                 continue
-            
+
             # Note that we are iterating over everything, so the (k, i) pair gets
             # set in a different iteration
             # The below is equivalent to:
@@ -259,12 +259,21 @@ def generate_meshes_for_problem(prob: problem.Problem,
                 # it and pass it to the UI for rendering
                 continue
             # This layer is connected to at least one lumped element, so we need to mesh it
+
+            # Beware! We are only including seed points that are _on the interior_
+            # of the geometry. This is because otherwise the mesher
+            # may attempt to fill in holes due to a seed point being on the boundary.
+            # The rest of the stack _must_ ensure that any points that it needs
+            # to use as Connection points that lie on the boundary should already
+            # be included in the geometry.
+            # TODO: The proper way to solve this is for the mesher to include
+            # boundary points in the rings if it detects the case above,
+            # but this is not yet implemented.
+            # TODO: Add a warning here if we detect the case above
             seed_points_in_geom = [
                 p for p in seed_points_in_layer
-                if layer.shape.geoms[geom_i].intersects(p)
+                if layer.shape.geoms[geom_i].contains(p)
             ]
-
-            assert seed_points_in_geom, "No seed points in this geometry, this should not happen"
 
             m = mesher.poly_to_mesh(
                 layer.shape.geoms[geom_i],
@@ -597,10 +606,10 @@ def find_best_ground_node_index(prob: problem.Problem, node_indexer: NodeIndexer
 def solve(prob: problem.Problem) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
-    
+
     Args:
         problem: The Problem object containing layers and lumped elements
-        
+
     Returns:
         A Solution object with the computed results
     """
@@ -613,10 +622,11 @@ def solve(prob: problem.Problem) -> Solution:
     # As a first step, we flatten the Layer-Mesh tree to get a flat list of meshes.
     # We also keep track of which layer each mesh belongs to.
     # This will be needed later when we construct the final solution object.
-    log.info("Meshing...")
+    log.info("Constructing connectivity graph and finding connected layers")
     strtrees = construct_strtrees_from_layers(prob.layers)
     connectivity_graph = ConnectivityGraph.create_from_problem(prob, strtrees)
     connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
+    log.info(f"Meshing the connected components")
     meshes, mesh_index_to_layer_index = \
         generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs)
 

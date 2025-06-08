@@ -281,27 +281,30 @@ class PadIndex:
     def insert_via_specs(self, via_specs: list["ViaSpec"]) -> None:
         """
         Insert via specifications into the mapping.
+        Uses all boundary points of the via shape for all layers it connects.
         """
-        # TODO: Do note that this method is a temporary solution.
-        # Eventually, we are going to implement via hole punching and
-        # this is going to become obsolete.
-
         for via_spec in via_specs:
             # Only process vias that have an endpoint (THT pads)
             if via_spec.endpoint is None:
                 continue
 
-            # Use the first layer as the connection point (temporary solution)
             if not via_spec.layer_names:
                 continue
 
-            first_layer = via_spec.layer_names[0]
-            layer_point = LayerPoint(layer=first_layer, point=via_spec.point)
+            # Get all boundary points from the via shape
+            boundary_coords = list(via_spec.shape.exterior.coords)
 
-            # Add to mapping (initialize list if endpoint doesn't exist)
-            if via_spec.endpoint not in self.mapping:
-                self.mapping[via_spec.endpoint] = []
-            self.mapping[via_spec.endpoint].append(layer_point)
+            # For each layer the via connects to
+            for layer_name in via_spec.layer_names:
+                # Do not forget that boundary_cords[0] == boundary_coords[-1]
+                for x, y in boundary_coords[:-1]:
+                    point = shapely.geometry.Point(x, y)
+                    layer_point = LayerPoint(layer=layer_name, point=point)
+
+                    # Add to mapping (initialize list if endpoint doesn't exist)
+                    if via_spec.endpoint not in self.mapping:
+                        self.mapping[via_spec.endpoint] = []
+                    self.mapping[via_spec.endpoint].append(layer_point)
 
 
 def _parse_endpoints_param(param_str: Optional[str]) -> list[Endpoint]:
@@ -554,6 +557,12 @@ class ViaSpec:
     drill_diameter: float
     layer_names: list[str]
     endpoint: Optional[Endpoint] = None
+    shape: shapely.geometry.Polygon = field(init=False)
+
+    def __post_init__(self):
+        radius = self.drill_diameter / 2
+        shape = shapely.geometry.Point(self.point).buffer(radius, quad_segs=4)
+        object.__setattr__(self, 'shape', shape)
 
     def compute_resistance(self, length: float) -> float:
         # TODO: This is very temporary solution. Will ultimately need to take
@@ -949,6 +958,10 @@ def process_via_spec(via_spec: ViaSpec,
 
     resistor_stack = []
 
+    # Get boundary coordinates (excluding duplicate last point)
+    boundary_coords = list(via_spec.shape.exterior.coords)[:-1]
+    num_boundary_points = len(boundary_coords)
+
     for i in range(len(via_layers_in_order) - 1):
         layer_a_name = via_layers_in_order[i]
         layer_b_name = via_layers_in_order[i + 1]
@@ -965,25 +978,84 @@ def process_via_spec(via_spec: ViaSpec,
             for j in range(j_a + 1, j_b + 1)
         )
 
-        resistance = via_spec.compute_resistance(segment_length)
+        # Total via resistance for this segment
+        total_resistance = via_spec.compute_resistance(segment_length)
 
-        conn_a = problem.Connection(layer=layer_a, point=via_spec.point)
-        conn_b = problem.Connection(layer=layer_b, point=via_spec.point)
-        via_resistor = problem.Resistor(
-            a=conn_a.node_id,
-            b=conn_b.node_id,
-            resistance=resistance
-        )
-        # TODO: Eventually, we probably want to integrate the entire stack to
-        # a single Network object
+        # Resistance per boundary resistor (parallel resistors)
+        # Each resistor carries 1/N of the current, so needs N times the resistance
+        distributed_resistance = total_resistance * num_boundary_points
+
+        # Create connections and resistors for each boundary point
+        connections = []
+        elements = []
+
+        for x, y in boundary_coords:
+            point = shapely.geometry.Point(x, y)
+            conn_a = problem.Connection(layer=layer_a, point=point)
+            conn_b = problem.Connection(layer=layer_b, point=point)
+
+            via_resistor = problem.Resistor(
+                a=conn_a.node_id,
+                b=conn_b.node_id,
+                resistance=distributed_resistance
+            )
+
+            connections.extend([conn_a, conn_b])
+            elements.append(via_resistor)
+
         network = problem.Network(
-            connections=[conn_a, conn_b],
-            elements=[via_resistor]
+            connections=connections,
+            elements=elements
         )
 
         resistor_stack.append(network)
 
     return resistor_stack
+
+
+def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
+                    via_specs: list[ViaSpec]) -> list[PlottedGerberLayer]:
+
+    # For efficiency, we furst make union of all holes
+    # and then punch them into the layer in one go
+    holes_by_layer = collections.defaultdict(list)
+    for via_spec in via_specs:
+        for layer_name in via_spec.layer_names:
+            holes_by_layer[layer_name].append(via_spec.shape)
+
+    union_holes_by_layer = {
+        layer_name: shapely.union_all(holes)
+        for layer_name, holes in holes_by_layer.items()
+    }
+
+    punched_layers = []
+    for plotted_layer in plotted_layers:
+        if plotted_layer.name in union_holes_by_layer:
+            # Punch holes in the layer geometry
+            punched_geometry = plotted_layer.geometry.difference(
+                union_holes_by_layer[plotted_layer.name]
+            )
+            if punched_geometry.geom_type == "Polygon":
+                punched_geometry = shapely.geometry.MultiPolygon([punched_geometry])
+            # There are cases where the difference may result in
+            # a GeometryCollection or empty geometry.
+            # I think we are careful enough that it should not happen,
+            # but check just in case
+            assert punched_geometry.geom_type == "MultiPolygon", \
+                f"Expected MultiPolygon after punching holes, got {punched_geometry.geom_type}"
+        else:
+            # No vias present, keep the original geometry
+            punched_geometry = plotted_layer.geometry
+
+        # Create a new PlottedGerberLayer with the punched geometry
+        punched_layer = PlottedGerberLayer(
+            name=plotted_layer.name,
+            layer_id=plotted_layer.layer_id,
+            geometry=punched_geometry
+        )
+        punched_layers.append(punched_layer)
+
+    return punched_layers
 
 
 def verify_stackup_contains_all_layers(stackup: Stackup,
@@ -1057,8 +1129,6 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     if not verify_stackup_contains_all_layers(stackup, plotted_layers):
         raise ValueError("Stackup does not contain all plotted layers")
 
-    layer_dict = construct_layer_dict(plotted_layers, stackup)
-
     pad_index = PadIndex()
     pad_index.load_smd_pads(board)
 
@@ -1068,6 +1138,10 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     log.info("Processing vias and through hole pads")
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
     pad_index.insert_via_specs(via_specs)
+    plotted_layers = punch_via_holes(plotted_layers, via_specs)
+    # Note that we have to create the layer dict _after_ punching the holes,
+    # since otherwise it would contain the original objects!
+    layer_dict = construct_layer_dict(plotted_layers, stackup)
     for via_spec in via_specs:
         networks.extend(process_via_spec(via_spec, layer_dict, stackup))
 
