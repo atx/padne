@@ -491,15 +491,6 @@ class Mesher:
             assert ring.is_closed
             if not ring.is_ccw:
                 ring = shapely.geometry.LinearRing(reversed(ring.coords))
-            # Simplify the ring to remove almost-duplicate points
-            # This is unfortunately a "bug" in pygerber, where drawing
-            # a circle is implemented by drawing an arbitrary degree arc,
-            # which sometimes results to the "starting" and "ending" points
-            # not being exactly the same such as
-            # (-1.0, 0.0) vs  (-1.0, 1.2246467991473532e-16)
-            # Again, it would be nice to fix this in pygerber, but that
-            # is a task for another day...
-            ring = ring.simplify(1e-4)
             # Add the first point
             i_first = len(vertices)
 

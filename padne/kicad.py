@@ -910,6 +910,16 @@ def extract_layers_from_gerbers(board,
         # a flipped y axis. Flip it back.
         geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
 
+        # Simplify the geometry to remove almost-duplicate points
+        # This is unfortunately a "bug" in pygerber, where drawing
+        # a circle is implemented by drawing an arbitrary degree arc,
+        # which sometimes results to the "starting" and "ending" points
+        # not being exactly the same such as
+        # (-1.0, 0.0) vs  (-1.0, 1.2246467991473532e-16)
+        # Again, it would be nice to fix this in pygerber, but that
+        # is a task for another day...
+        geometry = geometry.simplify(tolerance=1e-4, preserve_topology=True)
+
         # If the layer has only a single connected component, convert it to a MultiPolygon
         if geometry.geom_type == "Polygon":
             geometry = shapely.geometry.MultiPolygon([geometry])
