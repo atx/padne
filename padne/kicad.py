@@ -564,16 +564,25 @@ class ViaSpec:
         shape = shapely.geometry.Point(self.point).buffer(radius, quad_segs=4)
         object.__setattr__(self, 'shape', shape)
 
-    def compute_resistance(self, length: float) -> float:
-        # TODO: This is very temporary solution. Will ultimately need to take
-        # into account layer plating thickness etc
-        # Resistance of a 1.6mm long via with 1mm diameter
-        ref_resistance = 0.00027
-        ref_area = math.pi * (0.5) ** 2
-        ref_length = 1.6
+    def compute_resistance(self, length: float, plating_thickness: float, conductivity: float) -> float:
+        """
+        Compute via resistance using hollow cylinder model.
 
-        area = math.pi * (self.drill_diameter / 2) ** 2
-        return ref_resistance * (area / ref_area) * length / ref_length
+        Args:
+            length: Via length in mm
+            plating_thickness: Copper plating thickness in mm
+            conductivity: Copper conductivity in S/mm
+
+        Returns:
+            Resistance in ohms
+        """
+        # Cross-sectional area of hollow cylinder (plated wall thickness)
+        outer_radius = self.drill_diameter / 2 + plating_thickness
+        inner_radius = self.drill_diameter / 2
+        cross_sectional_area = math.pi * (outer_radius**2 - inner_radius**2)
+
+        # Resistance = length / (conductivity * area)
+        return length / (conductivity * cross_sectional_area)
 
 
 def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
@@ -962,6 +971,22 @@ def process_via_spec(via_spec: ViaSpec,
     boundary_coords = list(via_spec.shape.exterior.coords)[:-1]
     num_boundary_points = len(boundary_coords)
 
+    # Find maximum plating thickness from all copper layers in the via spec
+    involved_copper_layers = [
+        stackup.items[stackup.index_by_name(layer_name)]
+        for layer_name in via_spec.layer_names
+    ]
+    plating_thickness = max(
+        layer.thickness for layer in involved_copper_layers
+        if layer.conductivity is not None
+    )
+
+    # Use conductivity from copper layers (should be same for all copper)
+    conductivity = next(
+        layer.conductivity for layer in involved_copper_layers
+        if layer.conductivity is not None
+    )
+
     for i in range(len(via_layers_in_order) - 1):
         layer_a_name = via_layers_in_order[i]
         layer_b_name = via_layers_in_order[i + 1]
@@ -979,7 +1004,7 @@ def process_via_spec(via_spec: ViaSpec,
         )
 
         # Total via resistance for this segment
-        total_resistance = via_spec.compute_resistance(segment_length)
+        total_resistance = via_spec.compute_resistance(segment_length, plating_thickness, conductivity)
 
         # Resistance per boundary resistor (parallel resistors)
         # Each resistor carries 1/N of the current, so needs N times the resistance
