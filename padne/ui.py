@@ -237,7 +237,7 @@ class SetMinValueTool(PanTool):
 
     @property
     def status_tip(self) -> str:
-        return "Set minimum value for color scale from cursor"
+        return "Set minimum value for color scale from cursor (M)"
 
     @property
     def shortcut(self):
@@ -261,7 +261,7 @@ class SetMaxValueTool(PanTool):
 
     @property
     def status_tip(self) -> str:
-        return "Set maximum value for color scale from cursor"
+        return "Set maximum value for color scale from cursor (Shift+M)"
 
     @property
     def shortcut(self):
@@ -385,8 +385,8 @@ class AppToolBar(QToolBar):
 
         # Create "Show Edges" action for the menu
         show_edges_action_in_menu = QAction("Show Edges", self)
-        show_edges_action_in_menu.setStatusTip("Toggle visibility of mesh edges")
-        show_edges_action_in_menu.setToolTip("Toggle visibility of mesh edges")
+        show_edges_action_in_menu.setStatusTip("Toggle visibility of mesh edges (E)")
+        show_edges_action_in_menu.setToolTip("Toggle visibility of mesh edges (E)")
         show_edges_action_in_menu.setCheckable(True)
         show_edges_action_in_menu.setChecked(True)  # Default to visible
 
@@ -398,8 +398,8 @@ class AppToolBar(QToolBar):
 
         # Create "Show Connection Points" action for the menu
         show_connection_points_action = QAction("Show Connection Points", self)
-        show_connection_points_action.setStatusTip("Toggle visibility of connection points")
-        show_connection_points_action.setToolTip("Toggle visibility of connection points")
+        show_connection_points_action.setStatusTip("Toggle visibility of connection points (C)")
+        show_connection_points_action.setToolTip("Toggle visibility of connection points (C)")
         show_connection_points_action.setCheckable(True)
         show_connection_points_action.setChecked(True) # Default to visible
         show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
@@ -418,7 +418,7 @@ class AppToolBar(QToolBar):
         # Create the "Layers" QToolButton
         self.layers_button = QToolButton(self)
         self.layers_button.setText("Layers")
-        self.layers_button.setToolTip("Select active layer")
+        self.layers_button.setToolTip("Select active layer (V/Shift+V)")
         self.layers_button.setPopupMode(QToolButton.InstantPopup)
 
         self.layers_menu = QMenu(self.layers_button)
@@ -1217,7 +1217,12 @@ class MeshViewer(QOpenGLWidget):
         self.keyPressedInMesh.emit(world_point, event.key(), event.modifiers())
 
         if event.key() == Qt.Key_V:
-            self.switchToNextLayer()
+            direction = -1 if event.modifiers() & Qt.ShiftModifier else 1
+            self.switchLayer(direction)
+        elif event.key() == Qt.Key_E:
+            self.setEdgesVisible(not self.edges_visible)
+        elif event.key() == Qt.Key_C:
+            self.setConnectionPointsVisible(not self.connection_points_visible)
         # else: # Allow other key events to be processed if not handled by shortcuts or specific keys
             # super().keyPressEvent(event) # This might not be needed if all keys are handled via signal or specific checks
 
@@ -1226,13 +1231,17 @@ class MeshViewer(QOpenGLWidget):
         if not event.isAccepted():
             super().keyPressEvent(event)
 
-    def switchToNextLayer(self):
-        """Switch to the next layer in the cycle."""
+    def switchLayer(self, direction: int = 1):
+        """Switch to the next or previous layer in the cycle.
+
+        Args:
+            direction: 1 for next layer, -1 for previous layer
+        """
         if not self.visible_layers:
             return
 
-        # Move to next layer index
-        self.current_layer_index = (self.current_layer_index + 1) % len(self.visible_layers)
+        # Move to next/previous layer index
+        self.current_layer_index = (self.current_layer_index + direction) % len(self.visible_layers)
         current_layer = self.visible_layers[self.current_layer_index]
 
         # Emit signal with the current layer name
@@ -1240,6 +1249,14 @@ class MeshViewer(QOpenGLWidget):
 
         # Refresh the display
         self.update()
+
+    def switchToNextLayer(self):
+        """Switch to the next layer in the cycle."""
+        self.switchLayer(1)
+
+    def switchToPreviousLayer(self):
+        """Switch to the previous layer in the cycle."""
+        self.switchLayer(-1)
 
     @Slot(bool)
     def setEdgesVisible(self, visible: bool):
