@@ -370,7 +370,6 @@ class AppToolBar(QToolBar):
                 action.setChecked(True)
                 # self.tool_manager.activate_tool(tool_instance) # Already active by default in ToolManager
 
-        # Add a separator after the tool actions
         self.addSeparator()
 
         # Create the "View" QToolButton
@@ -405,7 +404,6 @@ class AppToolBar(QToolBar):
         show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
         view_menu.addAction(show_connection_points_action)
 
-
         # Set the menu for the QToolButton
         view_menu_button.setMenu(view_menu)
 
@@ -427,6 +425,23 @@ class AppToolBar(QToolBar):
 
         self.layers_button.setMenu(self.layers_menu)
         self.addWidget(self.layers_button)
+
+        # Add a separator after the tool actions
+        self.addSeparator()
+
+        # Add Reset View button
+        fit_view_action = QAction("Reset View", self)
+        fit_view_action.setStatusTip("Reset view to fit all content (F)")
+        fit_view_action.setToolTip("Reset view to fit all content (F)")
+        fit_view_action.triggered.connect(self.mesh_viewer.autoscaleXY)
+        self.addAction(fit_view_action)
+
+        # Add Full Scale button
+        full_scale_action = QAction("Full Scale", self)
+        full_scale_action.setStatusTip("Reset color scale to full range (A)")
+        full_scale_action.setToolTip("Reset color scale to full range (A)")
+        full_scale_action.triggered.connect(self.mesh_viewer.autoscaleValue)
+        self.addAction(full_scale_action)
 
     @Slot(list)
     def updateLayerSelectionMenu(self, layer_names: list[str]):
@@ -752,6 +767,7 @@ class MeshViewer(QOpenGLWidget):
 
         # Emit signal to notify about the new value range
         self.valueRangeChanged.emit(self.min_value, self.max_value)
+        self.update()
 
     def autoscaleXY(self):
         """
@@ -805,6 +821,9 @@ class MeshViewer(QOpenGLWidget):
         scale_for_height = 2.0 / solution_height
         scale_for_width = 2.0 * aspect / solution_width
         self.scale = min(scale_for_height, scale_for_width) * margin_factor
+
+        # Refresh the display
+        self.update()
 
     @Slot(solver.Solution)
     def setSolution(self, solution: solver.Solution):
@@ -1223,6 +1242,10 @@ class MeshViewer(QOpenGLWidget):
             self.setEdgesVisible(not self.edges_visible)
         elif event.key() == Qt.Key_C:
             self.setConnectionPointsVisible(not self.connection_points_visible)
+        elif event.key() == Qt.Key_F:
+            self.autoscaleXY()
+        elif event.key() == Qt.Key_A:
+            self.autoscaleValue()
         # else: # Allow other key events to be processed if not handled by shortcuts or specific keys
             # super().keyPressEvent(event) # This might not be needed if all keys are handled via signal or specific checks
 
