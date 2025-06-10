@@ -1497,3 +1497,22 @@ class TestSolverEndToEnd:
         )
 
         voltage_check.validate(prob, solution)
+
+    def test_multipad_coupling(self, kicad_test_projects):
+        """Test the multipad coupling functionality with custom coupling parameter."""
+        project = kicad_test_projects["multipad_coupling"]
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob)
+
+        assert solution is not None, "Solver failed to produce a solution"
+
+        # Verify that voltage between (131.51, 101.375) and (129, 101.375) is 2V within 1mV
+        voltage_check = ExpectedVoltage(
+            p_coords=(131.51, 101.375),
+            n_coords=(129, 101.375),
+            expected_voltage=2.0,
+            abs_tolerance=0.001,  # 1mV precision
+            description="Multipad coupling test with custom coupling parameter"
+        )
+
+        voltage_check.validate(prob, solution)

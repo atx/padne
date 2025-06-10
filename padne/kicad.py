@@ -318,7 +318,7 @@ def _parse_endpoints_param(param_str: Optional[str]) -> list[Endpoint]:
     ]
 
 
-@dataclass(frozen=True)
+@dataclass
 class BaseLumpedSpec:
     """
     Represents a base class that specifies a _single_ lumped element
@@ -361,6 +361,10 @@ class BaseLumpedSpec:
             if name not in directive.params:
                 raise ValueError(f"Missing value parameter: {name} for {directive.name}")
             spec.values[name] = units.Value.parse(directive.params[name]).value
+
+        # Parse optional coupling parameter
+        if "coupling" in directive.params:
+            spec.coupling = units.Value.parse(directive.params["coupling"]).value
 
         return spec
 
@@ -533,7 +537,7 @@ class CurrentSourceSpec(BaseLumpedSpec):
     lumped_type = problem.CurrentSource
 
 
-@dataclass(frozen=True)
+@dataclass
 class RegulatorSpec(BaseLumpedSpec):
     endpoint_names: ClassVar[dict[str, str]] = {
         "p": "v_p",
