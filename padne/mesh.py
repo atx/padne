@@ -52,11 +52,11 @@ class Point:
         if not isinstance(other, Point):
             raise TypeError("Subtraction is only defined for Points")
         return Vector(self.x - other.x, self.y - other.y)
-        
+
     def to_shapely(self) -> shapely.geometry.Point:
         """
         Convert this Point to a shapely.geometry.Point.
-        
+
         Returns:
             A shapely Point with the same coordinates
         """
@@ -358,19 +358,19 @@ class ZeroForm:
 
     def __add__(self, other: "ZeroForm") -> "ZeroForm":
         """Add two ZeroForms element-wise.
-        
+
         Args:
             other: The ZeroForm to add to this one
-            
+
         Returns:
             A new ZeroForm with the sum of values
-            
+
         Raises:
             ValueError: If the two ZeroForms are on different meshes
         """
         if self.mesh is not other.mesh:
             raise ValueError("Cannot add ZeroForms on different meshes")
-        
+
         result = ZeroForm(self.mesh)
         for vertex in self.mesh.vertices:
             result[vertex] = self[vertex] + other[vertex]
@@ -378,19 +378,19 @@ class ZeroForm:
 
     def __sub__(self, other: "ZeroForm") -> "ZeroForm":
         """Subtract another ZeroForm element-wise.
-        
+
         Args:
             other: The ZeroForm to subtract from this one
-            
+
         Returns:
             A new ZeroForm with the difference of values
-            
+
         Raises:
             ValueError: If the two ZeroForms are on different meshes
         """
         if self.mesh is not other.mesh:
             raise ValueError("Cannot subtract ZeroForms on different meshes")
-        
+
         result = ZeroForm(self.mesh)
         for vertex in self.mesh.vertices:
             result[vertex] = self[vertex] - other[vertex]
@@ -398,10 +398,10 @@ class ZeroForm:
 
     def __mul__(self, scalar: float) -> "ZeroForm":
         """Multiply this ZeroForm by a scalar.
-        
+
         Args:
             scalar: The scalar value to multiply by
-            
+
         Returns:
             A new ZeroForm with scaled values
         """
@@ -412,10 +412,10 @@ class ZeroForm:
 
     def __rmul__(self, scalar: float) -> "ZeroForm":
         """Right multiplication by a scalar.
-        
+
         Args:
             scalar: The scalar value to multiply by
-            
+
         Returns:
             A new ZeroForm with scaled values
         """
@@ -423,19 +423,19 @@ class ZeroForm:
 
     def __truediv__(self, scalar: float) -> "ZeroForm":
         """Divide this ZeroForm by a scalar.
-        
+
         Args:
             scalar: The scalar value to divide by
-            
+
         Returns:
             A new ZeroForm with divided values
-            
+
         Raises:
             ZeroDivisionError: If scalar is zero
         """
         if scalar == 0:
             raise ZeroDivisionError("Cannot divide ZeroForm by zero")
-        
+
         result = ZeroForm(self.mesh)
         for vertex in self.mesh.vertices:
             result[vertex] = self[vertex] / scalar
@@ -443,13 +443,110 @@ class ZeroForm:
 
     def __neg__(self) -> "ZeroForm":
         """Negate all values in this ZeroForm.
-        
+
         Returns:
             A new ZeroForm with negated values
         """
         result = ZeroForm(self.mesh)
         for vertex in self.mesh.vertices:
             result[vertex] = -self[vertex]
+        return result
+
+    def d(self) -> "OneForm":
+        """
+        Compute the exterior derivative (gradient) of this 0-form.
+
+        For a function f on vertices, the exterior derivative df is a 1-form where:
+        (df)[edge] = f(target_vertex) - f(source_vertex)
+
+        Returns:
+            A OneForm representing the gradient of this function
+        """
+        one_form = OneForm(self.mesh)
+
+        # Process each half-edge
+        for hedge in self.mesh.halfedges:
+            # For edge from A to B: df[edge] = f(B) - f(A)
+            target_value = self[hedge.twin.origin]  # Value at target vertex
+            source_value = self[hedge.origin]       # Value at source vertex
+            one_form[hedge] = target_value - source_value
+
+        return one_form
+
+
+@dataclass
+class OneForm:
+    """
+    A discrete 1-form defined on the (h)edges of a mesh.
+    """
+    mesh: Mesh
+    values: dict[HalfEdge, float] = field(
+        default_factory=dict,
+        repr=False,
+    )
+
+    def __getitem__(self, hedge: HalfEdge) -> float:
+        """Get the value of the 1-form on a half-edge."""
+        if hedge not in self.mesh.halfedges:
+            raise KeyError("HalfEdge not in mesh")
+
+        return self.values.get(hedge, 0.0)
+
+    def __setitem__(self, hedge: HalfEdge, value: float) -> None:
+        """Set the value of the 1-form on a half-edge, ensuring antisymmetry."""
+        if hedge not in self.mesh.halfedges:
+            raise KeyError("HalfEdge not in mesh")
+
+        # Set value for hedge and -value for its twin
+        self.values[hedge] = value
+        self.values[hedge.twin] = -value
+
+    def __add__(self, other: "OneForm") -> "OneForm":
+        """Add two OneForm objects element-wise."""
+        if self.mesh is not other.mesh:
+            raise ValueError("Cannot add OneForms on different meshes")
+
+        result = OneForm(self.mesh)
+        for hedge in self.mesh.halfedges:
+            result[hedge] = self[hedge] + other[hedge]
+        return result
+
+    def __sub__(self, other: "OneForm") -> "OneForm":
+        """Subtract another OneForm element-wise."""
+        if self.mesh is not other.mesh:
+            raise ValueError("Cannot subtract OneForms on different meshes")
+
+        result = OneForm(self.mesh)
+        for hedge in self.mesh.halfedges:
+            result[hedge] = self[hedge] - other[hedge]
+        return result
+
+    def __mul__(self, scalar: float) -> "OneForm":
+        """Multiply this OneForm by a scalar."""
+        result = OneForm(self.mesh)
+        for hedge in self.mesh.halfedges:
+            result[hedge] = self[hedge] * scalar
+        return result
+
+    def __rmul__(self, scalar: float) -> "OneForm":
+        """Right multiplication by a scalar."""
+        return self.__mul__(scalar)
+
+    def __truediv__(self, scalar: float) -> "OneForm":
+        """Divide this OneForm by a scalar."""
+        if scalar == 0:
+            raise ZeroDivisionError("Cannot divide OneForm by zero")
+
+        result = OneForm(self.mesh)
+        for hedge in self.mesh.halfedges:
+            result[hedge] = self[hedge] / scalar
+        return result
+
+    def __neg__(self) -> "OneForm":
+        """Negate all values in this OneForm."""
+        result = OneForm(self.mesh)
+        for hedge in self.mesh.halfedges:
+            result[hedge] = -self[hedge]
         return result
 
 
@@ -468,10 +565,10 @@ class Mesher:
                      seed_points: list[Point] = []) -> Mesh:
         """
         Convert a Shapely polygon to a triangular mesh.
-        
+
         Args:
             poly: A Shapely polygon, potentially with holes
-            
+
         Returns:
             A Mesh object representing the triangulated polygon
         """

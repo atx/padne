@@ -4,7 +4,7 @@ import pickle
 import shapely.geometry
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
-        Mesher, ZeroForm
+        Mesher, ZeroForm, OneForm
 
 
 class TestVector:
@@ -17,7 +17,7 @@ class TestVector:
         v1 = Vector(1.0, 2.0)
         v2 = Vector(3.0, 4.0)
         assert v1.dot(v2) == 1.0 * 3.0 + 2.0 * 4.0 == 11.0
-        
+
         # Test with zero vector
         zero_vec = Vector(0.0, 0.0)
         assert v1.dot(zero_vec) == 0.0
@@ -29,7 +29,7 @@ class TestVector:
         assert isinstance(result, Vector)
         assert result.dx == 4.0
         assert result.dy == 6.0
-        
+
         # Test addition with non-vector
         with pytest.raises(TypeError):
             v1 + 5
@@ -40,7 +40,7 @@ class TestVector:
         assert isinstance(result, Vector)
         assert result.dx == 5.0
         assert result.dy == 7.5
-        
+
         # Test right multiplication
         result = 2.5 * v
         assert isinstance(result, Vector)
@@ -60,7 +60,7 @@ class TestVector:
         # Cross product in 2D is scalar
         assert v1 ^ v2 == 1.0
         assert v2 ^ v1 == -1.0
-        
+
         # Parallel vectors have cross product of 0
         v3 = Vector(2.0, 0.0)
         assert v1 ^ v3 == 0.0
@@ -68,7 +68,7 @@ class TestVector:
     def test_vector_magnitude(self):
         v1 = Vector(3.0, 4.0)
         assert abs(v1) == 5.0
-        
+
         v2 = Vector(0.0, 0.0)
         assert abs(v2) == 0.0
 
@@ -83,7 +83,7 @@ class TestPoint:
         p1 = Point(0.0, 0.0)
         p2 = Point(3.0, 4.0)
         assert p1.distance(p2) == 5.0
-        
+
         # Distance to self should be 0
         assert p1.distance(p1) == 0.0
 
@@ -94,29 +94,29 @@ class TestPoint:
         assert isinstance(result, Vector)
         assert result.dx == 3.0
         assert result.dy == 6.0
-        
+
         # Test subtraction with non-point
         with pytest.raises(TypeError):
             p1 - 5
-            
+
     def test_point_to_shapely(self):
         """Test conversion from Point to shapely.geometry.Point."""
         p = Point(3.5, 4.2)
         shapely_point = p.to_shapely()
-        
+
         # Verify the type
         assert isinstance(shapely_point, shapely.geometry.Point)
-        
+
         # Verify the coordinates
         assert shapely_point.x == 3.5
         assert shapely_point.y == 4.2
-        
+
         # Test with integer coordinates
         p2 = Point(0, 0)
         shapely_point2 = p2.to_shapely()
         assert shapely_point2.x == 0
         assert shapely_point2.y == 0
-        
+
         # Test with negative coordinates
         p3 = Point(-1.5, -2.7)
         shapely_point3 = p3.to_shapely()
@@ -130,45 +130,45 @@ class TestMeshStructure:
         p1 = Point(0.0, 0.0)
         p2 = Point(1.0, 0.0)
         p3 = Point(0.0, 1.0)
-        
+
         # Create vertices
         v1 = Vertex(p1)
         v2 = Vertex(p2)
         v3 = Vertex(p3)
-        
+
         # Create half-edges
         e12 = HalfEdge(v1)
         e23 = HalfEdge(v2)
         e31 = HalfEdge(v3)
-        
+
         # Link half-edges
         e12.next = e23
         e23.next = e31
         e31.next = e12
-        
+
         # Create face
         f = Face(e12)
-        
+
         # Set faces for edges
         e12.face = f
         e23.face = f
         e31.face = f
-        
+
         # Set outgoing edges for vertices
         v1.out = e12
         v2.out = e23
         v3.out = e31
-        
+
         # Test structure
         assert f.edge == e12
         assert e12.next == e23
         assert e23.next == e31
         assert e31.next == e12
-        
+
         assert e12.origin == v1
         assert e23.origin == v2
         assert e31.origin == v3
-        
+
         assert e12.face == f
         assert e23.face == f
         assert e31.face == f
@@ -177,7 +177,7 @@ class TestMeshStructure:
         v = Vertex(Point(0.0, 0.0))
         e1 = HalfEdge(v, face=Face())
         e2 = HalfEdge(v, face=Face(is_boundary=True))
-        
+
         assert not e1.is_boundary
         assert e2.is_boundary
 
@@ -187,17 +187,17 @@ class TestMeshStructure:
         v1 = Vertex(Point(0.0, 0.0))
         v2 = Vertex(Point(2.0, 0.0))
         v3 = Vertex(Point(0.0, 2.0))
-        
+
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v2)
         e3 = HalfEdge(v3)
-        
+
         e1.next = e2
         e2.next = e3
         e3.next = e1
-        
+
         f = Face(e1)
-        
+
         # Area should be 2.0 (base * height / 2)
         assert f.area == 2.0
 
@@ -206,19 +206,19 @@ class TestMeshStructure:
         v2 = Vertex(Point(2.0, 0.0))
         v3 = Vertex(Point(2.0, 2.0))
         v4 = Vertex(Point(0.0, 2.0))
-        
+
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v2)
         e3 = HalfEdge(v3)
         e4 = HalfEdge(v4)
-        
+
         e1.next = e2
         e2.next = e3
         e3.next = e4
         e4.next = e1
-        
+
         f = Face(e1)
-        
+
         # Area should be 4.0 (2 * 2)
         assert f.area == 4.0
 
@@ -226,17 +226,17 @@ class TestMeshStructure:
         v1 = Vertex(Point(0.0, 0.0))
         v2 = Vertex(Point(0.0, 2.0))
         v3 = Vertex(Point(2.0, 0.0))
-        
+
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v2)
         e3 = HalfEdge(v3)
-        
+
         e1.next = e2
         e2.next = e3
         e3.next = e1
-        
+
         f = Face(e1)
-        
+
         # Area should still be positive (2.0)
         assert f.area == 2.0
 
@@ -244,17 +244,17 @@ class TestMeshStructure:
         v1 = Vertex(Point(0.0, 0.0))
         v2 = Vertex(Point(1.0, 0.0))
         v3 = Vertex(Point(2.0, 0.0))
-        
+
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v2)
         e3 = HalfEdge(v3)
-        
+
         e1.next = e2
         e2.next = e3
         e3.next = e1
-        
+
         f = Face(e1)
-        
+
         # Area should be 0.0
         assert f.area == 0.0
 
@@ -263,17 +263,17 @@ class TestMeshStructure:
         v1 = Vertex(Point(0.0, 0.0))
         v2 = Vertex(Point(1.0, 0.0))
         v3 = Vertex(Point(0.0, 1.0))
-        
+
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v2)
         e3 = HalfEdge(v3)
-        
+
         e1.next = e2
         e2.next = e3
         e3.next = e1
-        
+
         f = Face(e1)
-        
+
         # Test edges iterator
         edges = list(f.edges)
         assert len(edges) == 3
@@ -286,17 +286,17 @@ class TestMeshStructure:
         v1 = Vertex(Point(0.0, 0.0))
         v2 = Vertex(Point(1.0, 0.0))
         v3 = Vertex(Point(0.0, 1.0))
-        
+
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v2)
         e3 = HalfEdge(v3)
-        
+
         e1.next = e2
         e2.next = e3
         e3.next = e1
-        
+
         f = Face(e1)
-        
+
         # Test vertices iterator
         vertices = list(f.vertices)
         assert len(vertices) == 3
@@ -310,34 +310,34 @@ class TestMeshStructure:
         v1 = Vertex(Point(1.0, 0.0))
         v2 = Vertex(Point(0.0, 1.0))
         v3 = Vertex(Point(-1.0, 0.0))
-        
+
         # Create half-edges
         e_out1 = HalfEdge(v_center)
         e_out2 = HalfEdge(v_center)
         e_out3 = HalfEdge(v_center)
-        
+
         e_in1 = HalfEdge(v1)
         e_in2 = HalfEdge(v2)
         e_in3 = HalfEdge(v3)
-        
+
         # Set twins
         e_out1.twin = e_in1
         e_in1.twin = e_out1
-        
+
         e_out2.twin = e_in2
         e_in2.twin = e_out2
-        
+
         e_out3.twin = e_in3
         e_in3.twin = e_out3
-        
+
         # Connect the edges
         e_in1.next = e_out2
         e_in2.next = e_out3
         e_in3.next = e_out1
-        
+
         # Set the outgoing edge for center vertex
         v_center.out = e_out1
-        
+
         # Test orbit
         orbit_edges = list(v_center.orbit())
         assert len(orbit_edges) == 3
@@ -350,20 +350,20 @@ class TestMeshStructure:
         v1 = Vertex(Point(1.0, 2.0))
         v2 = Vertex(Point(1.0, 2.0))  # Same point, different object
         v3 = Vertex(Point(3.0, 4.0))
-        
+
         # Test hashability
         hash(v1)  # This should not raise an exception
-        
+
         # Test dictionary use
         vertex_dict = {}
         vertex_dict[v1] = "vertex 1"
         vertex_dict[v3] = "vertex 3"
-        
+
         # Verify dictionary behavior
         assert len(vertex_dict) == 2
         assert vertex_dict[v1] == "vertex 1"
         assert vertex_dict[v3] == "vertex 3"
-        
+
         # This depends on equality implementation - if vertices with same point are equal, this will pass
         # Otherwise it would add a new entry
         vertex_dict[v2] = "vertex 2"
@@ -373,24 +373,24 @@ class TestMeshStructure:
         # Create vertices and half-edges
         v1 = Vertex(Point(0.0, 0.0))
         v2 = Vertex(Point(1.0, 0.0))
-        
+
         e1 = HalfEdge(v1)
         e2 = HalfEdge(v1)  # Same origin, different object
         e3 = HalfEdge(v2)
-        
+
         # Test hashability
         hash(e1)  # This should not raise an exception
-        
+
         # Test dictionary use
         edge_dict = {}
         edge_dict[e1] = "edge 1"
         edge_dict[e3] = "edge 3"
-        
+
         # Verify dictionary behavior
         assert len(edge_dict) == 2
         assert edge_dict[e1] == "edge 1"
         assert edge_dict[e3] == "edge 3"
-        
+
         # Add another edge with same origin
         edge_dict[e2] = "edge 2"
         assert len(edge_dict) == 3  # Since e1 and e2 are different objects
@@ -399,15 +399,15 @@ class TestMeshStructure:
         # Create faces
         f1 = Face()
         f2 = Face()
-        
+
         # Test hashability
         hash(f1)  # This should not raise an exception
-        
+
         # Test dictionary use
         face_dict = {}
         face_dict[f1] = "face 1"
         face_dict[f2] = "face 2"
-        
+
         # Verify dictionary behavior
         assert len(face_dict) == 2
         assert face_dict[f1] == "face 1"
@@ -431,7 +431,7 @@ def assert_mesh_topology_okay(mesh):
         boundary_vertices = []
         for edge in boundary.edges:
             boundary_vertices.append(edge.origin)
-        
+
         # Check that no vertex appears twice
         vertex_set = set()
         for vertex in boundary_vertices:
@@ -446,11 +446,11 @@ def assert_mesh_topology_okay(mesh):
     num_edges = len(mesh.halfedges) // 2  # Each edge has 2 half-edges
     num_faces = len(mesh.faces)
     num_boundaries = len(mesh.boundaries)
-    
+
     # Calculate Euler characteristic in two ways
     euler_calc = num_vertices - num_edges + num_faces
     euler_expected = 2 - num_boundaries
-    
+
     assert euler_calc == mesh.euler_characteristic(), "Calculated Euler characteristic doesn't match mesh.euler_characteristic()"
     assert euler_calc == euler_expected, f"Euler's formula violated: V({num_vertices}) - E({num_edges}) + F({num_faces}) = {euler_calc}, expected {euler_expected} (2 - {num_boundaries})"
 
@@ -496,10 +496,10 @@ class TestMesh:
         p1, p2 = Point(0.0, 0.0), Point(1.0, 0.0)
         v1 = mesh.make_vertex(p1)
         v2 = mesh.make_vertex(p2)
-        
+
         e1 = mesh.connect_vertices(v1, v2)
         e2 = mesh.connect_vertices(v1, v2)
-        
+
         assert e1 == e2
         assert len(mesh.halfedges) == 2  # Only one pair of half-edges created
 
@@ -509,10 +509,10 @@ class TestMesh:
         p1, p2 = Point(0.0, 0.0), Point(1.0, 0.0)
         v1 = mesh.make_vertex(p1)
         v2 = mesh.make_vertex(p2)
-        
+
         e1 = mesh.connect_vertices(v1, v2)
         e2 = mesh.connect_vertices(v2, v1)
-        
+
         assert e1.twin == e2
         assert e1 == e2.twin
         assert len(mesh.halfedges) == 2
@@ -521,31 +521,31 @@ class TestMesh:
         """Test creating a single triangle mesh."""
         points = [
             Point(0.0, 0.0),
-            Point(1.0, 0.0), 
+            Point(1.0, 0.0),
             Point(0.0, 1.0)
         ]
         triangles = [(0, 1, 2)]
-        
+
         mesh = Mesh.from_triangle_soup(points, triangles)
-        
+
         # Check basic mesh properties
         assert len(mesh.vertices) == 3
         assert len(mesh.faces) == 1
         assert len(mesh.halfedges) == 6  # 3 edges * 2 half-edges each
         assert len(mesh.boundaries) == 1
-        
+
         # Get the vertices in order they appear in the face
         face = mesh.faces.to_object(0)
         face_verts = list(face.vertices)
-        
+
         # Check the triangle vertices are in CCW order
         v1, v2, v3 = face_verts
         cross = (v2.p - v1.p) ^ (v3.p - v1.p)
         assert cross > 0, "Triangle vertices not in CCW order"
-        
+
         # Walk around the face
         assert len(list(face.edge.walk())) == 3
-        # Walk around the boundary 
+        # Walk around the boundary
         assert len(list(face.edge.twin.walk())) == 3
 
         assert_mesh_topology_okay(mesh)
@@ -556,43 +556,43 @@ class TestMesh:
         # Create a square with two triangles
         points = [
             Point(0.0, 0.0),  # 0
-            Point(1.0, 0.0),  # 1 
+            Point(1.0, 0.0),  # 1
             Point(1.0, 1.0),  # 2
             Point(0.0, 1.0)   # 3
         ]
-        
+
         triangles = [
             (0, 1, 2),  # First triangle
             (0, 2, 3)   # Second triangle
         ]
-        
+
         mesh = Mesh.from_triangle_soup(points, triangles)
-        
+
         # Check registration
         assert len(mesh.vertices) == 4
         assert len(mesh.faces) == 2
         assert len(mesh.boundaries) == 1
-        
+
         # Since some edges are shared, we expect fewer than 12 half-edges
         # Each triangle adds 3 edges (6 half-edges), but they share 1 edge (2 half-edges)
         assert len(mesh.halfedges) == 10
-        
+
         # Check that the faces have the expected vertices
         face_points = []
         for face in mesh.faces:
             face_points.append({vertex.p for vertex in face.vertices})
-        
+
         expected_faces = [
             {points[0], points[1], points[2]},
             {points[0], points[2], points[3]}
         ]
-        
+
         assert all(face in face_points for face in expected_faces)
-        
+
         # Check that all faces have 3 edges
         for face in mesh.faces:
             assert len(list(face.edges)) == 3
-        
+
         # Check boundary
         boundary_edges = [e for e in mesh.halfedges if e.is_boundary]
         assert len(list(boundary_edges[0].walk())) == 4
@@ -604,31 +604,31 @@ class TestMesh:
         """Test creating a square from four triangles around a center point."""
         # Create points for a star-shaped square
         points = [
-            Point(0.0, 0.0),   # 0: Center  
+            Point(0.0, 0.0),   # 0: Center
             Point(0.0, 1.0),   # 1: Top
-            Point(-1.0, 0.0),  # 2: Left 
+            Point(-1.0, 0.0),  # 2: Left
             Point(0.0, -1.0),  # 3: Bottom
             Point(1.0, 0.0)    # 4: Right
         ]
-        
+
         triangles = [
             (0, 4, 1),  # Center, Right, Top
             (0, 1, 2),  # Center, Top, Left
-            (0, 2, 3),  # Center, Left, Bottom 
+            (0, 2, 3),  # Center, Left, Bottom
             (0, 3, 4)   # Center, Bottom, Right
         ]
-        
+
         mesh = Mesh.from_triangle_soup(points, triangles)
-        
+
         # Check basic mesh properties
         assert len(mesh.vertices) == 5
         assert len(mesh.faces) == 4
         assert len(mesh.boundaries) == 1
-        
+
         # Check Euler characteristic
         # V=5, E=8, F=4 => χ=5-8+4=1
         assert mesh.euler_characteristic() == 1
-        
+
         # Check boundary
         boundary_edges = [e for e in mesh.halfedges if e.is_boundary]
         assert len(list(boundary_edges[0].walk())) == 4  # Square boundary has 4 edges
@@ -641,41 +641,41 @@ class TestMesh:
         # Empty mesh
         mesh = Mesh()
         assert mesh.euler_characteristic() == 0
-        
+
         # Single triangle (V=3, E=3, F=1 => 3-3+1 = 1)
         points1 = [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0)]
         triangles1 = [(0, 1, 2)]
         mesh1 = Mesh.from_triangle_soup(points1, triangles1)
         assert mesh1.euler_characteristic() == 1
-        
+
         # Add a second triangle sharing an edge (V=4, E=5, F=2 => 4-5+2 = 1)
         points2 = [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0), Point(1.0, 1.0)]
         triangles2 = [(0, 1, 2), (1, 3, 2)]
         mesh2 = Mesh.from_triangle_soup(points2, triangles2)
         assert mesh2.euler_characteristic() == 1
-    
+
     def test_edge_lookup(self):
         """Test that edge lookup works correctly."""
         mesh = Mesh()
-        
+
         p1 = Point(0.0, 0.0)
         p2 = Point(1.0, 0.0)
         p3 = Point(0.0, 1.0)
-        
+
         v1 = mesh.make_vertex(p1)
         v2 = mesh.make_vertex(p2)
         v3 = mesh.make_vertex(p3)
-        
+
         # Create a triangle with direct edge connections first
         e12 = mesh.connect_vertices(v1, v2)
         e23 = mesh.connect_vertices(v2, v3)
         e31 = mesh.connect_vertices(v3, v1)
-        
+
         # Edge lookup should return the same edges
         assert mesh.connect_vertices(v1, v2) == e12
         assert mesh.connect_vertices(v2, v3) == e23
         assert mesh.connect_vertices(v3, v1) == e31
-        
+
         # Edge lookup should also work in reverse
         assert mesh.connect_vertices(v2, v1).twin == e12
         assert mesh.connect_vertices(v3, v2).twin == e23
@@ -684,19 +684,19 @@ class TestMesh:
     def test_connect_vertices_updates_out(self):
         """Test that connect_vertices updates vertex out references."""
         mesh = Mesh()
-        
+
         p1 = Point(0.0, 0.0)
         p2 = Point(1.0, 0.0)
-        
+
         v1 = mesh.make_vertex(p1)
         v2 = mesh.make_vertex(p2)
-        
+
         # Initially vertices should have no out edge
         assert v1.out is None
         assert v2.out is None
-        
+
         e12 = mesh.connect_vertices(v1, v2)
-        
+
         # After connecting, vertices should have out edges
         # Note: This depends on the implementation details of connect_vertices
         # so we might need to adjust this test if the implementation changes
@@ -712,14 +712,14 @@ class TestMesh:
             Point(0.0, 1.0),  # 2
             Point(0.0, -1.0)  # 3
         ]
-        
+
         # Create triangles that share an edge with the same orientation
         # This would create a non-manifold edge
         triangles = [
             (0, 1, 2),  # First triangle
             (0, 1, 3)   # Second triangle using same edge (0,1)
         ]
-        
+
         # The from_triangle_soup method should handle this correctly
         # Either by creating a valid mesh or raising an error
 
@@ -739,7 +739,7 @@ class TestMesh:
             Point(2.0, 0.0),    # 6: Right spike
             Point(0.0, 2.0)     # 7: Top spike
         ]
-        
+
         # Define triangles for our star-like shape
         triangles = [
             (0, 1, 2),  # Inner square bottom triangle
@@ -749,17 +749,17 @@ class TestMesh:
             (2, 1, 6),  # Right spike
             (3, 2, 7)   # Top spike
         ]
-        
+
         mesh = Mesh.from_triangle_soup(points, triangles)
-        
+
         # Check mesh properties
         assert len(mesh.vertices) == 8
         assert len(mesh.faces) == 6
         assert len(mesh.halfedges) == 13 * 2  # Each edge appears twice
         assert len(mesh.boundaries) == 1
-        
+
         assert mesh.euler_characteristic() == 1
-        
+
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
@@ -775,7 +775,7 @@ class TestMesh:
             Point(3.0, 3.0),   # 6: Inner square top-right
             Point(1.0, 3.0),   # 7: Inner square top-left
         ]
-        
+
         # Define triangles for our shape with hole
         # We need to triangulate around the hole
         triangles = [
@@ -792,17 +792,17 @@ class TestMesh:
             (3, 0, 7),
             (0, 4, 7)
         ]
-        
+
         mesh = Mesh.from_triangle_soup(points, triangles)
-        
+
         # Check mesh properties
         assert len(mesh.vertices) == 8
         assert len(mesh.faces) == 8  # We have 8 triangles now
         assert len(mesh.halfedges) == 16 * 2  # Each edge appears twice
         assert len(mesh.boundaries) == 2  # Outer boundary and hole boundary
-        
+
         assert mesh.euler_characteristic() == 0  # For a surface with one hole, χ = 2-2g-b = 0
-        
+
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
@@ -827,7 +827,7 @@ class TestIndexMap:
         idx1 = index_map.add("one")
         idx2 = index_map.add("two")
         idx3 = index_map.add("three")
-        
+
         assert idx1 == 0
         assert idx2 == 1
         assert idx3 == 2
@@ -838,7 +838,7 @@ class TestIndexMap:
         index_map = IndexMap()
         idx1 = index_map.add("repeated")
         idx2 = index_map.add("repeated")
-        
+
         assert idx1 == idx2
         assert len(index_map) == 1
 
@@ -847,10 +847,10 @@ class TestIndexMap:
         index_map = IndexMap()
         index_map.add("apple")
         index_map.add("banana")
-        
+
         assert index_map.to_index("apple") == 0
         assert index_map.to_index("banana") == 1
-        
+
         with pytest.raises(KeyError):
             # Non-existent object should raise KeyError
             index_map.to_index("orange")
@@ -860,10 +860,10 @@ class TestIndexMap:
         index_map = IndexMap()
         index_map.add("apple")
         index_map.add("banana")
-        
+
         assert index_map.to_object(0) == "apple"
         assert index_map.to_object(1) == "banana"
-        
+
         with pytest.raises(IndexError):
             # Invalid index should raise IndexError
             index_map.to_object(2)
@@ -874,10 +874,10 @@ class TestIndexMap:
         objects = ["one", "two", "three"]
         for obj in objects:
             index_map.add(obj)
-        
+
         items = list(index_map.items())
         assert len(items) == 3
-        
+
         for i, (idx, obj) in enumerate(items):
             assert idx == i
             assert obj == objects[i]
@@ -887,16 +887,16 @@ class TestIndexMap:
         index_map = IndexMap()
         index_map.add("apple")
         index_map.add("banana")
-        
+
         assert "apple" in index_map
         assert "banana" in index_map
         assert "orange" not in index_map
-        
+
         # Test with other types
         index_map = IndexMap()
         index_map.add(1)
         index_map.add((2, 3))
-        
+
         assert 1 in index_map
         assert (2, 3) in index_map
         assert "string" not in index_map
@@ -905,24 +905,24 @@ class TestIndexMap:
     def test_different_object_types(self):
         # Test with various object types
         index_map = IndexMap()
-        
+
         # String
         str_idx = index_map.add("string")
         assert str_idx == 0
-        
+
         # Integer
         int_idx = index_map.add(42)
         assert int_idx == 1
-        
+
         # Tuple (hashable)
         tuple_idx = index_map.add((1, 2, 3))
         assert tuple_idx == 2
-        
+
         # Custom object (Point)
         point = Point(1.0, 2.0)
         point_idx = index_map.add(point)
         assert point_idx == 3
-        
+
         # Verify all objects
         assert index_map.to_object(str_idx) == "string"
         assert index_map.to_object(int_idx) == 42
@@ -959,13 +959,13 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         h2 = mesh2.halfedges.to_object(i)
 
         assert mesh1.vertices.to_index(h1.origin) == mesh2.vertices.to_index(h2.origin)
-        
+
         assert h1.twin is not None and h2.twin is not None
         assert mesh1.halfedges.to_index(h1.twin) == mesh2.halfedges.to_index(h2.twin)
-        
+
         assert h1.next is not None and h2.next is not None
         assert mesh1.halfedges.to_index(h1.next) == mesh2.halfedges.to_index(h2.next)
-        
+
         assert h1.prev is not None and h2.prev is not None
         assert mesh1.halfedges.to_index(h1.prev) == mesh2.halfedges.to_index(h2.prev)
 
@@ -1025,149 +1025,149 @@ class TestZeroForm:
             Point(1.0, 1.0)
         ]
         triangles = [(0, 1, 2), (1, 3, 2)]
-        
+
         return Mesh.from_triangle_soup(points, triangles)
-    
+
     def test_zeroform_initialization(self, simple_mesh):
         """Test basic initialization of a ZeroForm."""
         zf = ZeroForm(simple_mesh)
-        
+
         # Initial values should be zero
         for vertex in simple_mesh.vertices:
             assert zf[vertex] == 0.0
-    
+
     def test_zeroform_set_get(self, simple_mesh):
         """Test setting and getting values in a ZeroForm."""
         zf = ZeroForm(simple_mesh)
-        
+
         # Set some values
         values = {}
         for i, vertex in enumerate(simple_mesh.vertices):
             value = float(i + 1)
             zf[vertex] = value
             values[vertex] = value
-        
+
         # Check values were set correctly
         for vertex in simple_mesh.vertices:
             assert zf[vertex] == values[vertex]
-    
+
     def test_zeroform_invalid_vertex(self, simple_mesh):
         """Test that accessing an invalid vertex raises an error."""
         zf = ZeroForm(simple_mesh)
-        
+
         # Create a vertex that's not in the mesh
         invalid_vertex = Vertex(Point(999.0, 999.0))
-        
+
         with pytest.raises(KeyError):
             zf[invalid_vertex] = 1.0
-            
+
         with pytest.raises(KeyError):
             value = zf[invalid_vertex]
-    
+
     def test_zeroform_addition(self, simple_mesh):
         """Test addition of two ZeroForms."""
         zf1 = ZeroForm(simple_mesh)
         zf2 = ZeroForm(simple_mesh)
-        
+
         # Set different values in the two forms
         for i, vertex in enumerate(simple_mesh.vertices):
             zf1[vertex] = float(i)
             zf2[vertex] = float(i * 2)
-        
+
         # Add them
         result = zf1 + zf2
-        
+
         # Check the result
         for i, vertex in enumerate(simple_mesh.vertices):
             assert result[vertex] == float(i) + float(i * 2)
-    
+
     def test_zeroform_subtraction(self, simple_mesh):
         """Test subtraction of two ZeroForms."""
         zf1 = ZeroForm(simple_mesh)
         zf2 = ZeroForm(simple_mesh)
-        
+
         # Set different values in the two forms
         for i, vertex in enumerate(simple_mesh.vertices):
             zf1[vertex] = float(i * 10)
             zf2[vertex] = float(i * 2)
-        
+
         # Subtract
         result = zf1 - zf2
-        
+
         # Check the result
         for i, vertex in enumerate(simple_mesh.vertices):
             assert result[vertex] == float(i * 10) - float(i * 2) == float(i * 8)
-    
+
     def test_zeroform_scalar_multiplication(self, simple_mesh):
         """Test multiplication of a ZeroForm by a scalar."""
         zf = ZeroForm(simple_mesh)
-        
+
         # Set some values
         for i, vertex in enumerate(simple_mesh.vertices):
             zf[vertex] = float(i)
-        
+
         # Multiply by scalar
         scalar = 3.5
         result = zf * scalar
-        
+
         # Check result
         for i, vertex in enumerate(simple_mesh.vertices):
             assert result[vertex] == float(i) * scalar
-        
+
         # Test right multiplication
         result2 = scalar * zf
         for vertex in simple_mesh.vertices:
             assert result2[vertex] == result[vertex]
-    
+
     def test_zeroform_division(self, simple_mesh):
         """Test division of a ZeroForm by a scalar."""
         zf = ZeroForm(simple_mesh)
-        
+
         # Set some values
         for i, vertex in enumerate(simple_mesh.vertices):
             zf[vertex] = float(i * 10)
-        
+
         # Divide by scalar
         scalar = 2.0
         result = zf / scalar
-        
+
         # Check result
         for i, vertex in enumerate(simple_mesh.vertices):
             assert result[vertex] == float(i * 10) / scalar
-        
+
         # Test division by zero
         with pytest.raises(ZeroDivisionError):
             result = zf / 0.0
-    
+
     def test_zeroform_negation(self, simple_mesh):
         """Test negation of a ZeroForm."""
         zf = ZeroForm(simple_mesh)
-        
+
         # Set some values
         for i, vertex in enumerate(simple_mesh.vertices):
             zf[vertex] = float(i * 10 - 15)  # Include positive and negative values
-        
+
         # Negate
         result = -zf
-        
+
         # Check result
         for i, vertex in enumerate(simple_mesh.vertices):
             assert result[vertex] == -(float(i * 10 - 15))
-    
+
     def test_zeroform_different_meshes(self, simple_mesh):
         """Test operations between ZeroForms on different meshes."""
         # Create another mesh
         points = [Point(0.0, 0.0), Point(2.0, 0.0), Point(0.0, 2.0)]
         triangles = [(0, 1, 2)]
         other_mesh = Mesh.from_triangle_soup(points, triangles)
-        
+
         zf1 = ZeroForm(simple_mesh)
         zf2 = ZeroForm(other_mesh)
-        
+
         # Operations between forms on different meshes should fail
         with pytest.raises(ValueError):
             result = zf1 + zf2
-            
+
         with pytest.raises(ValueError):
             result = zf1 - zf2
 
@@ -1227,17 +1227,17 @@ class TestMesher:
         """Test meshing a simple square polygon."""
         # Create a square
         square = shapely.geometry.box(0, 0, 1, 1)
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(square)
-        
+
         # Verify mesh properties
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert len(mesh.halfedges) > 0
         assert_mesh_minimum_angle(mesh, mesher.minimum_angle)  # Check minimum angle constraint
-        
+
         # A simple square should be triangulated into at least 2 triangles
         assert len(mesh.faces) >= 2
 
@@ -1245,18 +1245,18 @@ class TestMesher:
         """Test meshing a triangle polygon."""
         # Create a triangle
         triangle = shapely.geometry.Polygon([(0, 0), (1, 0), (0, 1)])
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(triangle)
-        
+
         # Verify mesh properties
         assert isinstance(mesh, Mesh)
-        
+
         # A simple triangle might be represented as one face
         # or more depending on quality constraints
         assert len(mesh.faces) >= 1
         assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
-        
+
         # Check that all vertices are within the polygon bounds
         for _, vertex in mesh.vertices.items():
             x, y = vertex.p.x, vertex.p.y
@@ -1271,13 +1271,13 @@ class TestMesher:
         # Create a square with a square hole
         exterior = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
         interior = [(4, 4), (6, 4), (6, 6), (4, 6), (4, 4)]
-        
+
         poly_with_hole = shapely.geometry.Polygon(exterior, [interior])
         assert poly_with_hole.interiors  # Verify that the hole exists
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(poly_with_hole)
-        
+
         # Verify mesh properties
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
@@ -1295,13 +1295,13 @@ class TestMesher:
         exterior = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
         hole1 = [(2, 2), (4, 2), (4, 4), (2, 4), (2, 2)]  # First hole
         hole2 = [(6, 6), (8, 6), (8, 8), (6, 8), (6, 6)]  # Second hole
-        
+
         poly_with_holes = shapely.geometry.Polygon(exterior, [hole1, hole2])
         assert len(poly_with_holes.interiors) == 2  # Verify that both holes exist
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(poly_with_holes)
-        
+
         # Verify mesh properties
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
@@ -1324,10 +1324,10 @@ class TestMesher:
             (0, 0), (10, 0), (10, 10), (0, 10),
             (0, 8), (8, 8), (8, 2), (0, 2), (0, 0)
         ])
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(concave)
-        
+
         # Verify mesh properties
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
@@ -1343,17 +1343,17 @@ class TestMesher:
         """Test that mesh quality constraints are respected."""
         # Create a square
         square = shapely.geometry.box(0, 0, 1, 1)
-        
+
         # Create two meshers with different quality constraints
         low_quality_mesher = Mesher(minimum_angle=5.0, maximum_size=0.1)
         high_quality_mesher = Mesher(minimum_angle=30.0, maximum_size=0.01)
-        
+
         low_quality_mesh = low_quality_mesher.poly_to_mesh(square)
         high_quality_mesh = high_quality_mesher.poly_to_mesh(square)
 
         assert_mesh_minimum_angle(low_quality_mesh, low_quality_mesher.minimum_angle)
         assert_mesh_minimum_angle(high_quality_mesh, high_quality_mesher.minimum_angle)
-        
+
         # The higher quality mesh should have more triangles due to stricter constraints
         assert len(high_quality_mesh.faces) > len(low_quality_mesh.faces)
 
@@ -1361,17 +1361,17 @@ class TestMesher:
         """Test that seed points are correctly incorporated into the mesh."""
         # Create a square
         square = shapely.geometry.box(0, 0, 10, 10)
-        
+
         # Define seed points inside the square
         seed_points = [
             Point(2.5, 2.5),
             Point(7.5, 7.5),
             Point(5.0, 5.0)
         ]
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(square, seed_points)
-        
+
         # Verify that the seed points are included in the mesh vertices
         seed_points_found = 0
         for vertex in mesh.vertices:
@@ -1379,49 +1379,49 @@ class TestMesher:
                 if vertex.p.distance(seed_point) < 1e-6:
                     seed_points_found += 1
                     break
-        
+
         assert seed_points_found == len(seed_points), "Not all seed points were included in the mesh"
 
     def test_seed_points_affect_triangulation(self):
         """Test that adding seed points changes the triangulation."""
         # Create a square
         square = shapely.geometry.box(0, 0, 1, 1)
-        
+
         # Create mesh without seed points
         mesher = Mesher(minimum_angle=20.0, maximum_size=0.1)
         mesh_without_seeds = mesher.poly_to_mesh(square, [])
-        
+
         # Create mesh with a seed point in the middle
         seed_points = [Point(0.23, 0.41)]
         mesh_with_seeds = mesher.poly_to_mesh(square, seed_points)
-        
+
         # The mesh with the seed point should have more vertices
         assert len(mesh_with_seeds.vertices) > len(mesh_without_seeds.vertices)
-        
+
         # Verify that the seed point is included
         seed_found = False
         for vertex in mesh_with_seeds.vertices:
             if vertex.p.distance(seed_points[0]) < 1e-6:
                 seed_found = True
                 break
-        
+
         assert seed_found, "Seed point was not included in the mesh"
 
     def test_seed_points_on_boundary(self):
         """Test behavior with seed points on the polygon boundary."""
         # Create a square
         square = shapely.geometry.box(0, 0, 1, 1)
-        
+
         # Define seed points on the boundary
         boundary_points = [
             Point(0.5, 0.0),  # Bottom edge
             Point(1.0, 0.5),  # Right edge
             Point(0.0, 0.5)   # Left edge
         ]
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(square, boundary_points)
-        
+
         # Check that boundary points are included
         boundary_points_found = 0
         for vertex in mesh.vertices:
@@ -1429,7 +1429,7 @@ class TestMesher:
                 if vertex.p.distance(point) < 1e-6:
                     boundary_points_found += 1
                     break
-        
+
         assert boundary_points_found == len(boundary_points), "Not all boundary seed points were included"
 
     def test_seed_points_with_holes(self):
@@ -1438,7 +1438,7 @@ class TestMesher:
         exterior = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
         interior = [(4, 4), (6, 4), (6, 6), (4, 6), (4, 4)]
         poly_with_hole = shapely.geometry.Polygon(exterior, [interior])
-        
+
         # Define seed points in the valid region (not in the hole)
         seed_points = [
             Point(2, 2),    # Bottom-left quadrant
@@ -1446,10 +1446,10 @@ class TestMesher:
             Point(8, 8),    # Top-right quadrant
             Point(2, 8),    # Top-left quadrant
         ]
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(poly_with_hole, seed_points)
-        
+
         # Check that seed points are included
         seed_points_found = 0
         for vertex in mesh.vertices:
@@ -1457,7 +1457,7 @@ class TestMesher:
                 if abs(vertex.p.x - point.x) < 1e-6 and abs(vertex.p.y - point.y) < 1e-6:
                     seed_points_found += 1
                     break
-        
+
         assert seed_points_found == len(seed_points), "Not all seed points were included in the mesh with hole"
 
     def test_clockwise_polygon(self):
@@ -1470,24 +1470,24 @@ class TestMesher:
             (10, 0),       # Bottom right
             (0, 0)         # Back to bottom left
         ], holes=None)
-        
+
         # Verify the polygon is actually clockwise
         assert not shapely.geometry.LinearRing(clockwise_polygon.exterior.coords).is_ccw
-        
+
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(clockwise_polygon)
-        
+
         # Verify mesh properties
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
-        
+
         # Verify that all mesh triangles are valid
         assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
-        
+
         # Check that vertices are within the original polygon bounds
         for vertex in mesh.vertices:
             x, y = vertex.p.x, vertex.p.y
@@ -1499,10 +1499,10 @@ class TestMesher:
         """Test meshing a very small polygon."""
         # Create a tiny square
         tiny_square = shapely.geometry.box(0, 0, 1e-6, 1e-6)
-        
+
         mesher = Mesher(maximum_size=1e-7)  # Small enough for the tiny square
         mesh = mesher.poly_to_mesh(tiny_square)
-        
+
         # Verify that something was meshed
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
@@ -1549,7 +1549,7 @@ class TestMeshPickling:
 
         assert_meshes_equivalent(original_mesh, unpickled_mesh)
         # Also check Euler characteristic for the unpickled mesh
-        assert unpickled_mesh.euler_characteristic() == 1 
+        assert unpickled_mesh.euler_characteristic() == 1
 
     def test_references_preserved(self):
         """Test that if we pickle multiple objects simultaneously, the Vertex/HalfEdge/Face objects references get preserved"""
@@ -1623,7 +1623,7 @@ class TestMeshPickling:
         """Test that duplicate seed points are handled correctly."""
         # Create a square polygon for testing
         square = shapely.geometry.box(0, 0, 1, 1)
-        
+
         # Create a list of seed points with duplicates
         seed_points = [
             Point(0.25, 0.25),  # First seed point
@@ -1633,16 +1633,16 @@ class TestMeshPickling:
             Point(0.75, 0.75),  # Duplicate of second seed point
             Point(0.25, 0.25),   # Another duplicate of first seed point
         ]
-        
+
         # Create a mesher and generate mesh with duplicate seed points
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(square, seed_points)
-        
+
         # Verify the mesh is valid
         assert isinstance(mesh, Mesh)
         assert_mesh_structure_valid(mesh)
         assert_mesh_topology_okay(mesh)
-        
+
         # Count how many vertices are near our seed points
         for seed_point in [Point(0.25, 0.25), Point(0.75, 0.75)]:
             seed_point_vertices = 0
@@ -1656,13 +1656,13 @@ class TestMeshPickling:
         # This test should construct a large-ish mesh and try to pickle it
         # to ensure that the pickling process does not fail on maximum recursion
         # depth.
-        
+
         # Create a square polygon
         square = shapely.geometry.box(0, 0, 10, 10)
-        
+
         # Use a Mesher to create a reasonably complex mesh
         # A smaller maximum_size will result in more triangles.
-        mesher = Mesher(minimum_angle=20.0, maximum_size=0.1) 
+        mesher = Mesher(minimum_angle=20.0, maximum_size=0.1)
         original_mesh = mesher.poly_to_mesh(square)
 
         # Ensure the mesh is non-trivial
@@ -1674,3 +1674,399 @@ class TestMeshPickling:
         assert_meshes_equivalent(original_mesh, unpickled_mesh)
         # For a simple square, Euler characteristic should be 1
         assert unpickled_mesh.euler_characteristic() == 1
+
+
+class TestOneForm:
+    @pytest.fixture
+    def simple_mesh(self):
+        """Create a simple mesh for testing OneForm operations."""
+        # Create a simple triangular mesh
+        points = [
+            Point(0.0, 0.0),
+            Point(1.0, 0.0),
+            Point(0.0, 1.0),
+            Point(1.0, 1.0)
+        ]
+        triangles = [(0, 1, 2), (1, 3, 2)]
+
+        return Mesh.from_triangle_soup(points, triangles)
+
+    def test_oneform_initialization(self, simple_mesh):
+        """Test basic initialization of a OneForm."""
+        of = OneForm(simple_mesh)
+
+        # Initial values should be zero
+        for hedge in simple_mesh.halfedges:
+            assert of[hedge] == 0.0
+
+    def test_oneform_antisymmetry(self, simple_mesh):
+        """Test that OneForm maintains antisymmetry: form[hedge] == -form[hedge.twin]."""
+        of = OneForm(simple_mesh)
+
+        # Set values and test antisymmetry
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            # Only set values for half the edges to avoid setting both hedge and hedge.twin
+            if i % 2 == 0:
+                value = float(i + 1)
+                of[hedge] = value
+
+                # Verify antisymmetry immediately
+                assert of[hedge] == value
+                assert of[hedge.twin] == -value
+                assert abs(of[hedge] + of[hedge.twin]) < 1e-12
+
+    def test_oneform_set_get(self, simple_mesh):
+        """Test setting and getting values in a OneForm."""
+        of = OneForm(simple_mesh)
+
+        # Collect values we're setting to verify later
+        set_values = {}
+
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            # Only set on canonical hedges to avoid conflicts
+            if i % 2 == 0:
+                value = float(i * 2.5)
+                of[hedge] = value
+                set_values[hedge] = value
+
+        # Verify all set values are correct
+        for hedge, expected_value in set_values.items():
+            assert of[hedge] == expected_value
+            assert of[hedge.twin] == -expected_value
+
+    def test_oneform_invalid_halfedge(self, simple_mesh):
+        """Test that accessing an invalid half-edge raises an error."""
+        of = OneForm(simple_mesh)
+
+        # Create a half-edge that's not in the mesh
+        invalid_vertex = Vertex(Point(999.0, 999.0))
+        invalid_hedge = HalfEdge(invalid_vertex)
+
+        with pytest.raises(KeyError):
+            of[invalid_hedge] = 1.0
+
+        with pytest.raises(KeyError):
+            value = of[invalid_hedge]
+
+    def test_oneform_addition(self, simple_mesh):
+        """Test addition of two OneForms."""
+        of1 = OneForm(simple_mesh)
+        of2 = OneForm(simple_mesh)
+
+        # Set different values in the two forms
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:  # Only set canonical edges
+                of1[hedge] = float(i)
+                of2[hedge] = float(i * 2)
+
+        # Add them
+        result = of1 + of2
+
+        # Check the result maintains antisymmetry and correct values
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                expected = float(i) + float(i * 2)
+                assert result[hedge] == expected
+                assert result[hedge.twin] == -expected
+
+    def test_oneform_subtraction(self, simple_mesh):
+        """Test subtraction of two OneForms."""
+        of1 = OneForm(simple_mesh)
+        of2 = OneForm(simple_mesh)
+
+        # Set different values in the two forms
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                of1[hedge] = float(i * 10)
+                of2[hedge] = float(i * 3)
+
+        # Subtract
+        result = of1 - of2
+
+        # Check the result
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                expected = float(i * 10) - float(i * 3)
+                assert result[hedge] == expected
+                assert result[hedge.twin] == -expected
+
+    def test_oneform_scalar_multiplication(self, simple_mesh):
+        """Test multiplication of a OneForm by a scalar."""
+        of = OneForm(simple_mesh)
+
+        # Set some values
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                of[hedge] = float(i)
+
+        # Multiply by scalar
+        scalar = 3.5
+        result = of * scalar
+
+        # Check result
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                expected = float(i) * scalar
+                assert result[hedge] == expected
+                assert result[hedge.twin] == -expected
+
+        # Test right multiplication
+        result2 = scalar * of
+        for hedge in simple_mesh.halfedges:
+            assert result2[hedge] == result[hedge]
+
+    def test_oneform_division(self, simple_mesh):
+        """Test division of a OneForm by a scalar."""
+        of = OneForm(simple_mesh)
+
+        # Set some values
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                of[hedge] = float(i * 10)
+
+        # Divide by scalar
+        scalar = 2.0
+        result = of / scalar
+
+        # Check result
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                expected = float(i * 10) / scalar
+                assert result[hedge] == expected
+                assert result[hedge.twin] == -expected
+
+        # Test division by zero
+        with pytest.raises(ZeroDivisionError):
+            result = of / 0.0
+
+    def test_oneform_negation(self, simple_mesh):
+        """Test negation of a OneForm."""
+        of = OneForm(simple_mesh)
+
+        # Set some values
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                of[hedge] = float(i * 10 - 15)  # Include positive and negative values
+
+        # Negate
+        result = -of
+
+        # Check result
+        for i, hedge in enumerate(simple_mesh.halfedges):
+            if i % 2 == 0:
+                expected = -(float(i * 10 - 15))
+                assert result[hedge] == expected
+                assert result[hedge.twin] == -expected
+
+    def test_oneform_different_meshes(self, simple_mesh):
+        """Test operations between OneForms on different meshes."""
+        # Create another mesh
+        points = [Point(0.0, 0.0), Point(2.0, 0.0), Point(0.0, 2.0)]
+        triangles = [(0, 1, 2)]
+        other_mesh = Mesh.from_triangle_soup(points, triangles)
+
+        of1 = OneForm(simple_mesh)
+        of2 = OneForm(other_mesh)
+
+        # Operations between forms on different meshes should fail
+        with pytest.raises(ValueError):
+            result = of1 + of2
+
+        with pytest.raises(ValueError):
+            result = of1 - of2
+
+
+class TestExteriorDerivative:
+    @pytest.fixture
+    def triangle_mesh(self):
+        """Create a simple triangle mesh for testing exterior derivative."""
+        points = [
+            Point(0.0, 0.0),  # v0
+            Point(1.0, 0.0),  # v1
+            Point(0.0, 1.0),  # v2
+        ]
+        triangles = [(0, 1, 2)]
+        return Mesh.from_triangle_soup(points, triangles)
+
+    @pytest.fixture
+    def square_mesh(self):
+        """Create a square mesh for testing exterior derivative."""
+        points = [
+            Point(0.0, 0.0),  # v0
+            Point(1.0, 0.0),  # v1
+            Point(0.0, 1.0),  # v2
+            Point(1.0, 1.0),  # v3
+        ]
+        triangles = [(0, 1, 2), (1, 3, 2)]
+        return Mesh.from_triangle_soup(points, triangles)
+
+    def test_exterior_derivative_constant_function(self, triangle_mesh):
+        """Test exterior derivative of a constant function (should be zero)."""
+        zf = ZeroForm(triangle_mesh)
+
+        # Set constant value
+        constant_value = 5.0
+        for vertex in triangle_mesh.vertices:
+            zf[vertex] = constant_value
+
+        # Compute exterior derivative
+        df = zf.d()
+
+        # For constant function, gradient should be zero everywhere
+        for hedge in triangle_mesh.halfedges:
+            assert abs(df[hedge]) < 1e-12
+
+    def test_exterior_derivative_linear_function_x(self, square_mesh):
+        """Test exterior derivative of f(x,y) = x."""
+        zf = ZeroForm(square_mesh)
+
+        # Set f(x,y) = x at each vertex
+        for vertex in square_mesh.vertices:
+            zf[vertex] = vertex.p.x
+
+        # Compute exterior derivative
+        df = zf.d()
+
+        # For f(x,y) = x, we expect df/dx = 1, df/dy = 0
+        # So on horizontal edges (dy=0), df should be ±1 depending on orientation
+        # On vertical edges (dx=0), df should be 0
+
+        tolerance = 1e-12
+        for hedge in square_mesh.halfedges:
+            origin = hedge.origin.p
+            target = hedge.twin.origin.p
+
+            # Calculate the actual difference
+            expected_value = target.x - origin.x
+            actual_value = df[hedge]
+
+            assert abs(actual_value - expected_value) < tolerance
+
+            # Verify antisymmetry
+            assert abs(df[hedge] + df[hedge.twin]) < tolerance
+
+    def test_exterior_derivative_linear_function_y(self, square_mesh):
+        """Test exterior derivative of f(x,y) = y."""
+        zf = ZeroForm(square_mesh)
+
+        # Set f(x,y) = y at each vertex
+        for vertex in square_mesh.vertices:
+            zf[vertex] = vertex.p.y
+
+        # Compute exterior derivative
+        df = zf.d()
+
+        # For f(x,y) = y, we expect df/dx = 0, df/dy = 1
+        tolerance = 1e-12
+        for hedge in square_mesh.halfedges:
+            origin = hedge.origin.p
+            target = hedge.twin.origin.p
+
+            # Calculate the actual difference
+            expected_value = target.y - origin.y
+            actual_value = df[hedge]
+
+            assert abs(actual_value - expected_value) < tolerance
+
+            # Verify antisymmetry
+            assert abs(df[hedge] + df[hedge.twin]) < tolerance
+
+    def test_exterior_derivative_linear_function_xy(self, square_mesh):
+        """Test exterior derivative of f(x,y) = x + 2*y."""
+        zf = ZeroForm(square_mesh)
+
+        # Set f(x,y) = x + 2*y at each vertex
+        for vertex in square_mesh.vertices:
+            zf[vertex] = vertex.p.x + 2.0 * vertex.p.y
+
+        # Compute exterior derivative
+        df = zf.d()
+
+        # For f(x,y) = x + 2*y, gradient is (1, 2)
+        # So df[edge] = (target_x + 2*target_y) - (origin_x + 2*origin_y)
+        #             = (target_x - origin_x) + 2*(target_y - origin_y)
+        tolerance = 1e-12
+        for hedge in square_mesh.halfedges:
+            origin = hedge.origin.p
+            target = hedge.twin.origin.p
+
+            expected_value = (target.x - origin.x) + 2.0 * (target.y - origin.y)
+            actual_value = df[hedge]
+
+            assert abs(actual_value - expected_value) < tolerance
+
+            # Verify antisymmetry
+            assert abs(df[hedge] + df[hedge.twin]) < tolerance
+
+    def test_exterior_derivative_quadratic_function(self, triangle_mesh):
+        """Test exterior derivative of f(x,y) = x² + y²."""
+        zf = ZeroForm(triangle_mesh)
+
+        # Set f(x,y) = x² + y² at each vertex
+        for vertex in triangle_mesh.vertices:
+            x, y = vertex.p.x, vertex.p.y
+            zf[vertex] = x*x + y*y
+
+        # Compute exterior derivative
+        df = zf.d()
+
+        # The discrete gradient should approximate the continuous gradient (2x, 2y)
+        # Verify that antisymmetry is maintained
+        for hedge in triangle_mesh.halfedges:
+            assert abs(df[hedge] + df[hedge.twin]) < 1e-12
+
+    def test_exterior_derivative_antisymmetry_preserved(self, square_mesh):
+        """Test that exterior derivative always preserves antisymmetry."""
+        zf = ZeroForm(square_mesh)
+
+        # Set some arbitrary function values
+        import random
+        random.seed(42)  # For reproducible tests
+        for vertex in square_mesh.vertices:
+            zf[vertex] = random.uniform(-10, 10)
+
+        # Compute exterior derivative
+        df = zf.d()
+
+        # Verify antisymmetry for all edges
+        for hedge in square_mesh.halfedges:
+            assert abs(df[hedge] + df[hedge.twin]) < 1e-12
+
+    def test_exterior_derivative_linearity(self, square_mesh):
+        """Test that exterior derivative is linear: d(af + bg) = a*df + b*dg."""
+        # Create two functions
+        f = ZeroForm(square_mesh)
+        g = ZeroForm(square_mesh)
+
+        # Set f(x,y) = x and g(x,y) = y
+        for vertex in square_mesh.vertices:
+            f[vertex] = vertex.p.x
+            g[vertex] = vertex.p.y
+
+        # Scalars
+        a, b = 3.0, -2.0
+
+        # Compute d(af + bg)
+        combined = a * f + b * g
+        d_combined = combined.d()
+
+        # Compute a*df + b*dg
+        df = f.d()
+        dg = g.d()
+        expected = a * df + b * dg
+
+        # Compare
+        tolerance = 1e-12
+        for hedge in square_mesh.halfedges:
+            assert abs(d_combined[hedge] - expected[hedge]) < tolerance
+
+    def test_exterior_derivative_zero_form(self, triangle_mesh):
+        """Test exterior derivative of zero function."""
+        zf = ZeroForm(triangle_mesh)
+        # Leave all values as zero (default)
+
+        df = zf.d()
+
+        # Derivative of zero should be zero
+        for hedge in triangle_mesh.halfedges:
+            assert abs(df[hedge]) < 1e-12
