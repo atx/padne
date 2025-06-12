@@ -113,6 +113,23 @@ class HalfEdge:
             if edge == self:
                 break
 
+    def cotan(self):
+        """
+        Compute the cotangent weight for this half-edge.
+        """
+        vertex_i = self.origin
+        # Grab the vertex on the other side of the edge
+        vertex_k = self.twin.origin
+        ratio = 0.
+        for other in [self.next.next, self.twin.next.next]:
+            if other.next.face.is_boundary:
+                # Do not include boundary edges
+                continue
+            vi = vertex_i.p - other.origin.p
+            vk = vertex_k.p - other.origin.p
+            ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
+        return ratio
+
 
 @dataclass(eq=False)
 class Face:
