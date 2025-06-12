@@ -174,22 +174,15 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
 
     for i, vertex_i in enumerate(mesh.vertices):
         for edge in vertex_i.orbit():
-            # Grab the vertex on the other side of the edge
-            vertex_k = edge.twin.origin
-            k = mesh.vertices.to_index(vertex_k)
-            ratio = 0.
-            for ed in [edge.next.next, edge.twin.next.next]:
-                if ed.next.face.is_boundary:
-                    # Do not include boundary edges
-                    continue
-                vi = vertex_i.p - ed.origin.p
-                vk = vertex_k.p - ed.origin.p
-                ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
+            ratio = edge.cotan()
 
             if ratio == 0:
                 # I do not think this happens all that often, except for maybe
                 # some degenerate cases
                 continue
+
+            vertex_k = edge.twin.origin
+            k = mesh.vertices.to_index(vertex_k)
 
             # Note that we are iterating over everything, so the (k, i) pair gets
             # set in a different iteration
