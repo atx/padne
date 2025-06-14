@@ -4,7 +4,7 @@ import pickle
 import shapely.geometry
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
-        Mesher, ZeroForm, OneForm
+        Mesher, ZeroForm, OneForm, TwoForm
 
 
 class TestVector:
@@ -2070,3 +2070,307 @@ class TestExteriorDerivative:
         # Derivative of zero should be zero
         for hedge in triangle_mesh.halfedges:
             assert abs(df[hedge]) < 1e-12
+
+
+class TestTwoForm:
+    @pytest.fixture
+    def simple_mesh(self):
+        """Create a simple mesh for testing TwoForm operations."""
+        # Create a simple triangular mesh
+        points = [
+            Point(0.0, 0.0),
+            Point(1.0, 0.0),
+            Point(0.0, 1.0),
+            Point(1.0, 1.0)
+        ]
+        triangles = [(0, 1, 2), (1, 3, 2)]
+
+        return Mesh.from_triangle_soup(points, triangles)
+
+    def test_twoform_initialization(self, simple_mesh):
+        """Test basic initialization of a TwoForm."""
+        tf = TwoForm(simple_mesh)
+
+        # Initial values should be zero
+        for face in simple_mesh.faces:
+            assert tf[face] == 0.0
+
+        # Boundary faces should always return 0.0
+        for boundary in simple_mesh.boundaries:
+            assert tf[boundary] == 0.0
+
+    def test_twoform_set_get(self, simple_mesh):
+        """Test setting and getting values in a TwoForm."""
+        tf = TwoForm(simple_mesh)
+
+        # Set some values on interior faces
+        values = {}
+        for i, face in enumerate(simple_mesh.faces):
+            value = float(i + 1) * 2.5
+            tf[face] = value
+            values[face] = value
+
+        # Check values were set correctly
+        for face in simple_mesh.faces:
+            assert tf[face] == values[face]
+
+        # Boundary faces should always return 0.0 and cannot be set
+        for boundary in simple_mesh.boundaries:
+            assert tf[boundary] == 0.0
+            with pytest.raises(KeyError):
+                tf[boundary] = 5.0
+
+    def test_twoform_invalid_face(self, simple_mesh):
+        """Test that accessing an invalid face raises an error."""
+        tf = TwoForm(simple_mesh)
+
+        # Create a face that's not in the mesh
+        invalid_vertex = Vertex(Point(999.0, 999.0))
+        invalid_hedge = HalfEdge(invalid_vertex)
+        invalid_face = Face(invalid_hedge)
+
+        with pytest.raises(KeyError):
+            tf[invalid_face] = 1.0
+
+        with pytest.raises(KeyError):
+            value = tf[invalid_face]
+
+    def test_twoform_addition(self, simple_mesh):
+        """Test addition of two TwoForms."""
+        tf1 = TwoForm(simple_mesh)
+        tf2 = TwoForm(simple_mesh)
+
+        # Set different values in the two forms
+        for i, face in enumerate(simple_mesh.faces):
+            tf1[face] = float(i)
+            tf2[face] = float(i * 2)
+
+        # Add them
+        result = tf1 + tf2
+
+        # Check the result on interior faces
+        for i, face in enumerate(simple_mesh.faces):
+            assert result[face] == float(i) + float(i * 2)
+
+        # Boundary faces should remain 0.0 after addition
+        for boundary in simple_mesh.boundaries:
+            assert result[boundary] == 0.0
+
+    def test_twoform_subtraction(self, simple_mesh):
+        """Test subtraction of two TwoForms."""
+        tf1 = TwoForm(simple_mesh)
+        tf2 = TwoForm(simple_mesh)
+
+        # Set different values in the two forms
+        for i, face in enumerate(simple_mesh.faces):
+            tf1[face] = float(i * 10)
+            tf2[face] = float(i * 2)
+
+        # Subtract
+        result = tf1 - tf2
+
+        # Check the result on interior faces
+        for i, face in enumerate(simple_mesh.faces):
+            assert result[face] == float(i * 10) - float(i * 2) == float(i * 8)
+
+        # Boundary faces should remain 0.0 after subtraction
+        for boundary in simple_mesh.boundaries:
+            assert result[boundary] == 0.0
+
+    def test_twoform_scalar_multiplication(self, simple_mesh):
+        """Test multiplication of a TwoForm by a scalar."""
+        tf = TwoForm(simple_mesh)
+
+        # Set some values
+        for i, face in enumerate(simple_mesh.faces):
+            tf[face] = float(i)
+
+        # Multiply by scalar
+        scalar = 3.5
+        result = tf * scalar
+
+        # Check result on interior faces
+        for i, face in enumerate(simple_mesh.faces):
+            assert result[face] == float(i) * scalar
+
+        # Boundary faces should remain 0.0 after multiplication
+        for boundary in simple_mesh.boundaries:
+            assert result[boundary] == 0.0
+
+        # Test right multiplication
+        result2 = scalar * tf
+        for face in simple_mesh.faces:
+            assert result2[face] == result[face]
+        for boundary in simple_mesh.boundaries:
+            assert result2[boundary] == 0.0
+
+    def test_twoform_division(self, simple_mesh):
+        """Test division of a TwoForm by a scalar."""
+        tf = TwoForm(simple_mesh)
+
+        # Set some values
+        for i, face in enumerate(simple_mesh.faces):
+            tf[face] = float(i * 10)
+
+        # Divide by scalar
+        scalar = 2.0
+        result = tf / scalar
+
+        # Check result on interior faces
+        for i, face in enumerate(simple_mesh.faces):
+            assert result[face] == float(i * 10) / scalar
+
+        # Boundary faces should remain 0.0 after division
+        for boundary in simple_mesh.boundaries:
+            assert result[boundary] == 0.0
+
+        # Test division by zero
+        with pytest.raises(ZeroDivisionError):
+            result = tf / 0.0
+
+    def test_twoform_negation(self, simple_mesh):
+        """Test negation of a TwoForm."""
+        tf = TwoForm(simple_mesh)
+
+        # Set some values
+        for i, face in enumerate(simple_mesh.faces):
+            tf[face] = float(i * 10 - 15)  # Include positive and negative values
+
+        # Negate
+        result = -tf
+
+        # Check result on interior faces
+        for i, face in enumerate(simple_mesh.faces):
+            assert result[face] == -(float(i * 10 - 15))
+
+        # Boundary faces should remain 0.0 after negation
+        for boundary in simple_mesh.boundaries:
+            assert result[boundary] == 0.0
+
+    def test_twoform_different_meshes(self, simple_mesh):
+        """Test operations between TwoForms on different meshes."""
+        # Create another mesh
+        points = [Point(0.0, 0.0), Point(2.0, 0.0), Point(0.0, 2.0)]
+        triangles = [(0, 1, 2)]
+        other_mesh = Mesh.from_triangle_soup(points, triangles)
+
+        tf1 = TwoForm(simple_mesh)
+        tf2 = TwoForm(other_mesh)
+
+        # Operations between forms on different meshes should fail
+        with pytest.raises(ValueError):
+            result = tf1 + tf2
+
+        with pytest.raises(ValueError):
+            result = tf1 - tf2
+
+    def test_twoform_with_complex_mesh(self):
+        """Test TwoForm with a more complex mesh structure."""
+        # Create a mesh with holes (more complex topology)
+        points = [
+            Point(0.0, 0.0),   # 0: Outer square bottom-left
+            Point(4.0, 0.0),   # 1: Outer square bottom-right
+            Point(4.0, 4.0),   # 2: Outer square top-right
+            Point(0.0, 4.0),   # 3: Outer square top-left
+            Point(1.0, 1.0),   # 4: Inner square bottom-left
+            Point(3.0, 1.0),   # 5: Inner square bottom-right
+            Point(3.0, 3.0),   # 6: Inner square top-right
+            Point(1.0, 3.0),   # 7: Inner square top-left
+        ]
+        triangles = [
+            (0, 1, 4), (1, 5, 4), # Bottom strip
+            (1, 2, 5), (2, 6, 5), # Right strip
+            (2, 3, 6), (3, 7, 6), # Top strip
+            (3, 0, 7), (0, 4, 7)  # Left strip
+        ]
+        complex_mesh = Mesh.from_triangle_soup(points, triangles)
+
+        tf = TwoForm(complex_mesh)
+
+        # Test that we can set values on interior faces only
+        for i, face in enumerate(complex_mesh.faces):
+            tf[face] = float(i * 3)
+
+        # Verify boundary faces cannot be set and always return 0.0
+        for boundary in complex_mesh.boundaries:
+            assert tf[boundary] == 0.0
+            with pytest.raises(KeyError):
+                tf[boundary] = 100.0
+
+        # Test arithmetic operations on complex mesh
+        tf2 = TwoForm(complex_mesh)
+        for face in complex_mesh.faces:
+            tf2[face] = 5.0
+
+        result = tf + tf2
+        assert isinstance(result, TwoForm)
+
+        # Verify arithmetic worked correctly on interior faces
+        for i, face in enumerate(complex_mesh.faces):
+            assert result[face] == float(i * 3) + 5.0
+
+        # Verify boundary faces remain 0.0
+        for boundary in complex_mesh.boundaries:
+            assert result[boundary] == 0.0
+
+    def test_twoform_single_triangle(self):
+        """Test TwoForm with a single triangle mesh."""
+        points = [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0)]
+        triangles = [(0, 1, 2)]
+        triangle_mesh = Mesh.from_triangle_soup(points, triangles)
+
+        tf = TwoForm(triangle_mesh)
+
+        # Should have 1 interior face and 1 boundary
+        assert len(triangle_mesh.faces) == 1
+        assert len(triangle_mesh.boundaries) == 1
+
+        # Test setting values on interior face only
+        interior_face = triangle_mesh.faces.to_object(0)
+        boundary_face = triangle_mesh.boundaries.to_object(0)
+
+        tf[interior_face] = 42.0
+
+        # Boundary face should always return 0.0 and cannot be set
+        assert tf[boundary_face] == 0.0
+        with pytest.raises(KeyError):
+            tf[boundary_face] = -17.0
+
+        assert tf[interior_face] == 42.0
+        assert tf[boundary_face] == 0.0
+
+        # Test arithmetic
+        tf2 = TwoForm(triangle_mesh)
+        tf2[interior_face] = 8.0
+
+        result = tf - tf2
+        assert result[interior_face] == 42.0 - 8.0
+        assert result[boundary_face] == 0.0
+
+    def test_twoform_default_values(self, simple_mesh):
+        """Test that TwoForm returns 0.0 for faces that haven't been set."""
+        tf = TwoForm(simple_mesh)
+
+        # All interior faces should default to 0.0
+        for face in simple_mesh.faces:
+            assert tf[face] == 0.0
+
+        # Boundary faces should always return 0.0
+        for boundary in simple_mesh.boundaries:
+            assert tf[boundary] == 0.0
+
+        # Set one face and verify others remain 0.0
+        first_face = simple_mesh.faces.to_object(0)
+        tf[first_face] = 99.0
+
+        # Check that the set face has the correct value
+        assert tf[first_face] == 99.0
+
+        # Check that other interior faces still default to 0.0
+        for i, face in enumerate(simple_mesh.faces):
+            if i != 0:  # Skip the face we set
+                assert tf[face] == 0.0
+
+        # Boundary faces should still return 0.0
+        for boundary in simple_mesh.boundaries:
+            assert tf[boundary] == 0.0

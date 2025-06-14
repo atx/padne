@@ -567,6 +567,84 @@ class OneForm:
         return result
 
 
+@dataclass
+class TwoForm:
+    """
+    A discrete 2-form defined on the faces of a mesh.
+    """
+    mesh: Mesh
+    values: dict[Face, float] = field(
+        default_factory=dict,
+        repr=False,
+    )
+
+    def __getitem__(self, face: Face) -> float:
+        """Get the value of the 2-form on a face."""
+        if face not in self.mesh.faces and face not in self.mesh.boundaries:
+            raise KeyError("Face not in mesh")
+
+        # Boundary faces always return 0.0
+        if face in self.mesh.boundaries:
+            return 0.0
+
+        return self.values.get(face, 0.0)
+
+    def __setitem__(self, face: Face, value: float) -> None:
+        """Set the value of the 2-form on a face."""
+        if face not in self.mesh.faces:
+            raise KeyError("Face not in mesh.faces (boundary faces not supported)")
+
+        self.values[face] = value
+
+    def __add__(self, other: "TwoForm") -> "TwoForm":
+        """Add two TwoForm objects element-wise."""
+        if self.mesh is not other.mesh:
+            raise ValueError("Cannot add TwoForms on different meshes")
+
+        result = TwoForm(self.mesh)
+        for face in self.mesh.faces:
+            result[face] = self[face] + other[face]
+        return result
+
+    def __sub__(self, other: "TwoForm") -> "TwoForm":
+        """Subtract another TwoForm element-wise."""
+        if self.mesh is not other.mesh:
+            raise ValueError("Cannot subtract TwoForms on different meshes")
+
+        result = TwoForm(self.mesh)
+        for face in self.mesh.faces:
+            result[face] = self[face] - other[face]
+        return result
+
+    def __mul__(self, scalar: float) -> "TwoForm":
+        """Multiply this TwoForm by a scalar."""
+        result = TwoForm(self.mesh)
+        for face in self.mesh.faces:
+            result[face] = self[face] * scalar
+        return result
+
+    def __rmul__(self, scalar: float) -> "TwoForm":
+        """Right multiplication by a scalar."""
+        return self.__mul__(scalar)
+
+    def __truediv__(self, scalar: float) -> "TwoForm":
+        """Divide this TwoForm by a scalar."""
+        if scalar == 0:
+            raise ZeroDivisionError("Cannot divide TwoForm by zero")
+
+        result = TwoForm(self.mesh)
+        for face in self.mesh.faces:
+            result[face] = self[face] / scalar
+        return result
+
+    def __neg__(self) -> "TwoForm":
+        """Negate all values in this TwoForm."""
+        result = TwoForm(self.mesh)
+        for face in self.mesh.faces:
+            result[face] = -self[face]
+        return result
+
+
 class Mesher:
     """
     This class is responsible for generating a mesh from a Shapely polygon.
