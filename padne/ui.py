@@ -120,7 +120,6 @@ void main() {
 """
 
 
-COLOR_MAP = colormaps.PLASMA
 
 
 @dataclass
@@ -768,6 +767,7 @@ class MeshViewer(QOpenGLWidget):
     class BaseRenderingMode:
         unit: str
         name: str
+        color_map: colormaps.UniformColorMap
         min_value: float = 0.0
         max_value: float = 1.0
         solution: Optional[solver.Solution] = None
@@ -832,6 +832,7 @@ class MeshViewer(QOpenGLWidget):
     class VoltageRenderingMode(BaseRenderingMode):
         unit: str = "V"
         name: str = "Potential"
+        color_map: colormaps.UniformColorMap = colormaps.PLASMA
 
         def _build_spatial_indices(self):
             """Build spatial indices for fast vertex lookups."""
@@ -855,6 +856,7 @@ class MeshViewer(QOpenGLWidget):
     class PowerDensityRenderingMode(BaseRenderingMode):
         unit: str = "W/mm²"
         name: str = "Power Density"
+        color_map: colormaps.UniformColorMap = colormaps.INFERNO
 
         def _compute_min_max(self) -> tuple[float, float]:
             _, max_val = super()._compute_min_max()
@@ -890,6 +892,8 @@ class MeshViewer(QOpenGLWidget):
     currentModeChanged = Signal(str)
     # Signal to notify when the unit changes
     unitChanged = Signal(str)
+    # Signal to notify when the color map changes
+    colorMapChanged = Signal(object)  # object is colormaps.UniformColorMap
     # Signals for tools
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
@@ -1078,8 +1082,9 @@ class MeshViewer(QOpenGLWidget):
 
         # Emit mode-related signals
         self.currentModeChanged.emit(current_mode.name)
-        self.valueRangeChanged.emit(self.min_value, self.max_value)
         self.unitChanged.emit(current_mode.unit)
+        self.colorMapChanged.emit(current_mode.color_map)
+        self.valueRangeChanged.emit(self.min_value, self.max_value)
 
         # We can't just do autoscaleXY here, since we may be in some
         # semi-initialized state and the widget may not have reached a valid
@@ -1154,13 +1159,8 @@ class MeshViewer(QOpenGLWidget):
             VERTEX_SHADER_POINTS, FRAGMENT_SHADER_POINTS
         )
 
-        # Set the color map uniform to Gradient.rainbow
-        with self.mesh_shader.use():
-            color_map_uniform = self.mesh_shader.shader_program.uniformLocation("color_map")
-            # Render 256 colors from the color map
-            colors = np.array([COLOR_MAP(i / 255)[0:3] for i in range(256)],
-                              dtype=np.float32)
-            gl.glUniform3fv(color_map_uniform, 256, colors)
+        # Set the color map uniform
+        self._updateShaderColorMap()
 
         # If meshes are already set, setup the mesh data
         if self.solution:
@@ -1528,15 +1528,31 @@ class MeshViewer(QOpenGLWidget):
 
                 # Update rendered meshes and emit signals if mode changed
                 if old_mode_index != index:
+                    # Update shader color map for new mode
+                    self._updateShaderColorMap()
 
                     # Emit signals
                     self.currentModeChanged.emit(mode.name)
                     self.unitChanged.emit(mode.unit)
+                    self.colorMapChanged.emit(mode.color_map)
                     self.valueRangeChanged.emit(self.min_value, self.max_value)
                     self.update()
                 return
 
         log.warning(f"Attempted to set current mode to unknown mode: {mode_name}")
+
+    def _updateShaderColorMap(self):
+        """Update the shader color map uniform with the current mode's color map."""
+        if not self.mesh_shader:
+            return
+
+        current_color_map = self.current_rendering_mode.color_map
+        with self.mesh_shader.use():
+            color_map_uniform = self.mesh_shader.shader_program.uniformLocation("color_map")
+            # Render 256 colors from the color map
+            colors = np.array([current_color_map(i / 255)[0:3] for i in range(256)],
+                              dtype=np.float32)
+            gl.glUniform3fv(color_map_uniform, 256, colors)
 
 
 class ColorScaleWidget(QWidget):
@@ -1550,6 +1566,7 @@ class ColorScaleWidget(QWidget):
         self.v_min = 0.0
         self.v_max = 1.0
         self.unit = "V"  # Default unit
+        self.color_map = colormaps.PLASMA  # Default color map
 
         self.setMinimumWidth(110)
         self.setMinimumHeight(200)
@@ -1595,6 +1612,12 @@ class ColorScaleWidget(QWidget):
         """Set the unit for the scale."""
         self.unit = unit
         self.updateLabels()
+
+    @Slot(object)
+    def setColorMap(self, color_map):
+        """Set the color map for the scale."""
+        self.color_map = color_map
+        self.update()  # Trigger a repaint
 
     def updateLabels(self):
         """Update the delta and range labels."""
@@ -1642,7 +1665,7 @@ class ColorScaleWidget(QWidget):
         for i in range(gradient_rect.height()):
             # Map position to color
             t = 1.0 - (i / gradient_rect.height())
-            color = COLOR_MAP(t)
+            color = self.color_map(t)
 
             # Convert to QColor
             qcolor = QColor(
@@ -1733,6 +1756,7 @@ class MainWindow(QMainWindow):
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         self.mesh_viewer.unitChanged.connect(self.color_scale.setUnit)
+        self.mesh_viewer.colorMapChanged.connect(self.color_scale.setColorMap)
         self.projectLoaded.connect(self.mesh_viewer.setSolution)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
