@@ -33,6 +33,7 @@ class SolverWarning(Warning):
 class LayerSolution:
     meshes: list[mesh.Mesh]
     values: list[mesh.ZeroForm]
+    power_densities: list[mesh.TwoForm] = field(default_factory=list)
 
 
 @dataclass
@@ -534,6 +535,7 @@ def produce_layer_solutions(layers: list[problem.Layer],
     for layer_i, layer in enumerate(layers):
         layer_meshes = []
         layer_values = []
+        layer_power_densities = []
         for mesh_i, msh in enumerate(meshes):
             if mesh_index_to_layer_index[mesh_i] != layer_i:
                 continue
@@ -545,11 +547,19 @@ def produce_layer_solutions(layers: list[problem.Layer],
                 global_index = vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
                 vertex_values[vertex] = v[global_index]
 
-            # Append to the layer values
+            # Compute power density for this mesh
+            power_density = compute_power_density(vertex_values, layer.conductance)
+
+            # Append to the layer data
             layer_values.append(vertex_values)
             layer_meshes.append(msh)
+            layer_power_densities.append(power_density)
 
-        layer_solutions.append(LayerSolution(meshes=layer_meshes, values=layer_values))
+        layer_solutions.append(LayerSolution(
+            meshes=layer_meshes,
+            values=layer_values,
+            power_densities=layer_power_densities
+        ))
 
     return layer_solutions
 
@@ -613,6 +623,65 @@ def find_best_ground_node_index(prob: problem.Problem, node_indexer: NodeIndexer
     log.debug(f"Selected ground node index: {ground_node_index}")
 
     return ground_node_index
+
+
+def compute_triangle_gradient(vertices: list[mesh.Vertex],
+                              values: list[float]) -> mesh.Vector:
+    """
+    Compute the gradient of a function that is a linear interpolation of the
+    values at the vertices of a triangle.
+    """
+    if len(vertices) != 3 or len(values) != 3:
+        raise ValueError("Vertices and values must be of length 3 for a triangle")
+    # Ugh. This is all veeeeery adhoc.
+    # The magical keywords here are
+    # * Finite Element Exterior Calculus
+    # * Whitney Forms
+    # * Nedelec elements
+    # So, ultimately, this should all be implemented in mesh.py and we would just
+    # like take the exterior derivative and have the interpolant etc.
+    # However, for now, I want to get a simple solution and get the more
+    # complicated stuff going later.
+    v1, v2, v3 = vertices
+    x1, y1 = v1.p.x, v1.p.y
+    x2, y2 = v2.p.x, v2.p.y
+    x3, y3 = v3.p.x, v3.p.y
+    f1, f2, f3 = values
+
+    def interpolate(x, y) -> float:
+        # Barycentric coordinates
+        D = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
+        l1 = ((y2 - y3) * (x - x3) + (x3 - x2) * (y - y3)) / D
+        l2 = ((y3 - y1) * (x - x3) + (x1 - x3) * (y - y3)) / D
+        l3 = 1 - l1 - l2
+        return l1 * f1 + l2 * f2 + l3 * f3
+
+    # Since this is a linear interpolation, the gradient is just equal to the
+    # difference quotient
+    partial_x = interpolate(x1 + 1, y1) - f1
+    partial_y = interpolate(x1, y1 + 1) - f1
+    # TODO: mesh.Vector is semantically not quite the right type here
+    return mesh.Vector(partial_x, partial_y)
+
+
+def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.TwoForm:
+    """
+    Compute the power density at the mesh faces.
+    """
+    power_density = mesh.TwoForm(voltage.mesh)
+    for face in voltage.mesh.faces:
+        vertices = list(face.vertices)
+        if len(vertices) != 3:
+            continue
+        # Electric field is the gradient of the voltage
+        E = compute_triangle_gradient(
+            vertices,
+            [voltage[v] for v in vertices]
+        )
+        J = E * conductivity
+        p = J.dot(E)
+        power_density[face] = p
+    return power_density
 
 
 def solve(prob: problem.Problem) -> Solution:
