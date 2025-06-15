@@ -842,6 +842,200 @@ class TestVertexIndexer:
                 assert 0 <= vertex_idx < len(mesh_2.vertices)
 
 
+class TestComputePowerDensity:
+
+    def test_power_density_constant_voltage(self):
+        """Test power density with constant voltage (should be zero)."""
+        # Create a simple triangle mesh
+        points = [
+            mesh.Point(0.0, 0.0),
+            mesh.Point(1.0, 0.0),
+            mesh.Point(0.0, 1.0)
+        ]
+        triangles = [(0, 1, 2)]
+        test_mesh = mesh.Mesh.from_triangle_soup(points, triangles)
+
+        # Create ZeroForm with constant voltage
+        voltage = mesh.ZeroForm(test_mesh)
+        for vertex in test_mesh.vertices:
+            voltage[vertex] = 5.0  # Constant voltage
+
+        # Compute power density
+        conductivity = 1.0
+        power_density = solver.compute_power_density(voltage, conductivity)
+
+        # Power density should be zero for constant voltage (no gradient)
+        for face in test_mesh.faces:
+            assert power_density[face] == pytest.approx(0.0, abs=1e-10)
+
+    def test_power_density_linear_voltage(self):
+        """Test power density with linear voltage gradient."""
+        # Create a simple triangle mesh
+        points = [
+            mesh.Point(0.0, 0.0),
+            mesh.Point(1.0, 0.0),
+            mesh.Point(0.0, 1.0)
+        ]
+        triangles = [(0, 1, 2)]
+        test_mesh = mesh.Mesh.from_triangle_soup(points, triangles)
+
+        # Create ZeroForm with linear voltage: V(x,y) = x
+        voltage = mesh.ZeroForm(test_mesh)
+        for vertex in test_mesh.vertices:
+            voltage[vertex] = vertex.p.x  # Linear in x direction
+
+        # Compute power density
+        conductivity = 2.0
+        power_density = solver.compute_power_density(voltage, conductivity)
+
+        # For V(x,y) = x: grad(V) = (1, 0), E = (1, 0)
+        # J = conductivity * E = (2, 0)
+        # Power density = J · E = 2 * 1 = 2.0
+        for face in test_mesh.faces:
+            assert power_density[face] == pytest.approx(2.0, abs=1e-6)
+
+    def test_power_density_integration_with_layer_solution(self):
+        """Test that power densities are correctly computed and stored in LayerSolution."""
+        # Create a simple synthetic problem with a voltage source
+        rect_width = 2.0
+        rect_height = 1.0
+
+        # Create rectangle geometry
+        boundary_coords = [
+            (0, 0), (rect_width, 0), (rect_width, rect_height), (0, rect_height), (0, 0)
+        ]
+        rectangle = shapely.geometry.Polygon(boundary_coords)
+
+        # Create layer
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([rectangle]),
+            name="TestLayer",
+            conductance=1.5  # Use non-unity conductance to test scaling
+        )
+
+        # Create connections and voltage source
+        p_left = shapely.geometry.Point(0.0, rect_height/2)
+        p_right = shapely.geometry.Point(rect_width, rect_height/2)
+
+        conn_left = problem.Connection(layer=layer, point=p_left)
+        conn_right = problem.Connection(layer=layer, point=p_right)
+
+        vsource = problem.VoltageSource(
+            p=conn_right.node_id,
+            n=conn_left.node_id,
+            voltage=3.0
+        )
+
+        network = problem.Network(
+            connections=[conn_left, conn_right],
+            elements=[vsource]
+        )
+
+        # Create problem
+        prob_synthetic = problem.Problem(layers=[layer], networks=[network])
+
+        # Solve
+        solution = solver.solve(prob_synthetic)
+
+        # Verify LayerSolution has power densities
+        assert len(solution.layer_solutions) == 1
+        layer_solution = solution.layer_solutions[0]
+
+        # Check that power_densities field exists and has correct length
+        assert hasattr(layer_solution, 'power_densities')
+        assert len(layer_solution.power_densities) == len(layer_solution.meshes)
+
+        # Check that each power density is a TwoForm
+        for power_density in layer_solution.power_densities:
+            assert isinstance(power_density, mesh.TwoForm)
+
+        # Check that power densities are non-zero (we have a voltage gradient)
+        total_power = 0.0
+        for power_density in layer_solution.power_densities:
+            for face in power_density.mesh.faces:
+                face_power = power_density[face]
+                assert face_power >= 0.0  # Power density should be non-negative
+                total_power += face_power
+
+        # Total power should be positive since we have current flow
+        assert total_power > 0.0
+
+
+class TestComputeTriangleGradient:
+
+    def test_constant_function(self):
+        """Test gradient of a constant function (should be zero)."""
+        # Create three vertices for a simple triangle
+        vertices = [
+            mesh.Vertex(mesh.Point(0.0, 0.0)),
+            mesh.Vertex(mesh.Point(1.0, 0.0)),
+            mesh.Vertex(mesh.Point(0.0, 1.0))
+        ]
+
+        # Constant function value of 5.0 at all vertices
+        values = [5.0, 5.0, 5.0]
+
+        gradient = solver.compute_triangle_gradient(vertices, values)
+
+        # Gradient of constant function should be zero
+        assert gradient.dx == pytest.approx(0.0, abs=1e-10)
+        assert gradient.dy == pytest.approx(0.0, abs=1e-10)
+
+    def test_linear_function_x(self):
+        """Test gradient of f(x,y) = x (linear in x direction)."""
+        # Create vertices for unit right triangle
+        vertices = [
+            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
+            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 1
+            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 0
+        ]
+
+        # Function values: f(x,y) = x
+        values = [0.0, 1.0, 0.0]
+
+        gradient = solver.compute_triangle_gradient(vertices, values)
+
+        # Gradient should be (1, 0) since ∂f/∂x = 1, ∂f/∂y = 0
+        assert gradient.dx == pytest.approx(1.0, abs=1e-10)
+        assert gradient.dy == pytest.approx(0.0, abs=1e-10)
+
+    def test_linear_function_y(self):
+        """Test gradient of f(x,y) = y (linear in y direction)."""
+        # Create vertices for unit right triangle
+        vertices = [
+            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
+            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 0
+            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 1
+        ]
+
+        # Function values: f(x,y) = y
+        values = [0.0, 0.0, 1.0]
+
+        gradient = solver.compute_triangle_gradient(vertices, values)
+
+        # Gradient should be (0, 1) since ∂f/∂x = 0, ∂f/∂y = 1
+        assert gradient.dx == pytest.approx(0.0, abs=1e-10)
+        assert gradient.dy == pytest.approx(1.0, abs=1e-10)
+
+    def test_linear_function_xy(self):
+        """Test gradient of f(x,y) = x + y."""
+        # Create vertices for unit right triangle
+        vertices = [
+            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
+            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 1
+            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 1
+        ]
+
+        # Function values: f(x,y) = x + y
+        values = [0.0, 1.0, 1.0]
+
+        gradient = solver.compute_triangle_gradient(vertices, values)
+
+        # Gradient should be (1, 1) since ∂f/∂x = 1, ∂f/∂y = 1
+        assert gradient.dx == pytest.approx(1.0, abs=1e-10)
+        assert gradient.dy == pytest.approx(1.0, abs=1e-10)
+
+
 class TestSolverEndToEnd:
 
     @for_all_kicad_projects(exclude=["tht_component",
