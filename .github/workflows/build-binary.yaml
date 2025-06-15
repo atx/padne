@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 jobs:
   check_commits:
@@ -26,10 +28,10 @@ jobs:
         run: |
           # Get the timestamp for 24 hours ago
           yesterday=$(date -d '24 hours ago' --iso-8601=seconds)
-          
+
           # Check if there are any commits on master since yesterday
           commits=$(git log --since="$yesterday" --oneline | wc -l)
-          
+
           if [ "$commits" -gt 0 ]; then
             echo "Found $commits commits in the last 24 hours"
             echo "should_build=true" >> $GITHUB_OUTPUT
@@ -64,3 +66,21 @@ jobs:
           name: padne-linux-x64-${{ github.sha }}
           path: dist/padne
           retention-days: 30
+
+      - name: Prepare GitHub Pages deployment
+        run: |
+          mkdir -p pages
+          cp dist/padne pages/padne-linux-x64
+          echo "Binary built from commit ${{ github.sha }} on $(date)" > pages/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
