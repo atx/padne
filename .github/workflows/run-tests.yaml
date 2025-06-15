@@ -28,3 +28,4 @@ jobs:
         path: pytest-results.xml
         reporter: java-junit
         fail-on-error: 'true'
+        badge-title: 'Tests'
