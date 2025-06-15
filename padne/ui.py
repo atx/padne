@@ -379,6 +379,16 @@ class AppToolBar(QToolBar):
         self._setupActions()
 
     def _setupActions(self):
+        self._setupToolActions()
+        self.addSeparator()
+        self._setupViewMenu()
+        self.addSeparator()
+        self._setupLayersAndModesButtons()
+        self.addSeparator()
+        self._setupViewControlActions()
+
+    def _setupToolActions(self):
+        """Setup tool selection actions."""
         tool_action_group = QActionGroup(self)
         tool_action_group.setExclusive(True)
 
@@ -398,15 +408,13 @@ class AppToolBar(QToolBar):
             # Set the default tool (first tool in the list) as checked
             if self.tool_manager.active_tool == tool_instance:
                 action.setChecked(True)
-                # self.tool_manager.activate_tool(tool_instance) # Already active by default in ToolManager
 
-        self.addSeparator()
-
+    def _setupViewMenu(self):
+        """Setup the View menu with visibility toggles."""
         # Create the "View" QToolButton
         view_menu_button = QToolButton(self)
         view_menu_button.setText("View")
         view_menu_button.setToolTip("View options")
-        # This makes it into a popup menu
         view_menu_button.setPopupMode(QToolButton.InstantPopup)
 
         # Create the menu that will be shown by the QToolButton
@@ -418,11 +426,7 @@ class AppToolBar(QToolBar):
         show_edges_action_in_menu.setToolTip("Toggle visibility of mesh edges (E)")
         show_edges_action_in_menu.setCheckable(True)
         show_edges_action_in_menu.setChecked(True)  # Default to visible
-
-        # Connect to MeshViewer's slot
         show_edges_action_in_menu.triggered.connect(self.mesh_viewer.setEdgesVisible)
-
-        # Add the action to the menu
         view_menu.addAction(show_edges_action_in_menu)
 
         # Create "Show Connection Points" action for the menu
@@ -430,19 +434,16 @@ class AppToolBar(QToolBar):
         show_connection_points_action.setStatusTip("Toggle visibility of connection points (C)")
         show_connection_points_action.setToolTip("Toggle visibility of connection points (C)")
         show_connection_points_action.setCheckable(True)
-        show_connection_points_action.setChecked(True) # Default to visible
+        show_connection_points_action.setChecked(True)  # Default to visible
         show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
         view_menu.addAction(show_connection_points_action)
 
         # Set the menu for the QToolButton
         view_menu_button.setMenu(view_menu)
-
-        # Add the QToolButton to the toolbar
         self.addWidget(view_menu_button)
 
-        # Add a separator
-        self.addSeparator()
-
+    def _setupLayersAndModesButtons(self):
+        """Setup the Layers and Modes dropdown buttons."""
         # Create the "Layers" QToolButton
         self.layers_button = QToolButton(self)
         self.layers_button.setText("Layers")
@@ -486,9 +487,8 @@ class AppToolBar(QToolBar):
         self.modes_button.setMenu(self.modes_menu)
         self.addWidget(self.modes_button)
 
-        # Add a separator after the tool actions
-        self.addSeparator()
-
+    def _setupViewControlActions(self):
+        """Setup view control actions (Reset View, Full Scale)."""
         # Add Reset View button
         fit_view_action = QAction("Reset View", self)
         fit_view_action.setStatusTip("Reset view to fit all content (F)")
@@ -830,8 +830,6 @@ class MeshViewer(QOpenGLWidget):
     @dataclass
     class VoltageRenderingMode(BaseRenderingMode):
         unit: str = "V"
-        spatial_indices: dict[str, VertexSpatialIndex] = field(default_factory=dict)
-        rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
 
         def _build_spatial_indices(self):
             """Build spatial indices for fast vertex lookups."""
@@ -851,12 +849,9 @@ class MeshViewer(QOpenGLWidget):
                     rendered_meshes.append(RenderedMesh.from_zero_form(msh, values))
             return rendered_meshes
 
-
     @dataclass
     class PowerDensityRenderingMode(BaseRenderingMode):
         unit: str = "W/mm²"
-        spatial_indices: dict[str, FaceSpatialIndex] = field(default_factory=dict)
-        rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
 
         def _compute_min_max(self) -> tuple[float, float]:
             _, max_val = super()._compute_min_max()
@@ -913,7 +908,6 @@ class MeshViewer(QOpenGLWidget):
             self.PowerDensityRenderingMode()
         ]
         self.current_mode_index = 0  # Start with voltage mode
-
 
         self.scale = 1.0
         self.offset_x = 0.0
@@ -976,7 +970,7 @@ class MeshViewer(QOpenGLWidget):
             The value at the nearest point, or None if no values are found
             or if the point is outside the layer's geometries.
         """
-        if not self.solution or not self.visible_layers or self.current_layer_index >= len(self.visible_layers):
+        if not self.solution or not self.visible_layers:
             return None
 
         current_layer_name = self.visible_layers[self.current_layer_index]
@@ -1076,14 +1070,14 @@ class MeshViewer(QOpenGLWidget):
 
         # Initialize all modes with solution data (spatial indices + rendered meshes)
         for mode in self.modes:
-            mode.autoscale_values(solution)
             mode.set_solution(solution)
+            mode.autoscale_values(solution)
 
         # Emit mode-related signals
         self.currentModeChanged.emit(current_mode.unit)
+        self.valueRangeChanged.emit(self.min_value, self.max_value)
         self.unitChanged.emit(current_mode.unit)
 
-        self.autoscaleValue()
         # We can't just do autoscaleXY here, since we may be in some
         # semi-initialized state and the widget may not have reached a valid
         # size yet.
@@ -1713,7 +1707,7 @@ class MainWindow(QMainWindow):
         self.y_position_label = QLabel("Y: -")
         self.y_position_label.setMinimumWidth(80)
 
-        self.value_label = QLabel("V: ?")
+        self.value_label = QLabel("?: ?")
         self.value_label.setMinimumWidth(80)
 
         self.delta_label = QLabel("Δ: ?")
