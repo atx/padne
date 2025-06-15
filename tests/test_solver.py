@@ -156,7 +156,7 @@ def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
     found_value = None
     closest_vertex_point = None # For debugging
 
-    for msh, values in zip(layer_sol.meshes, layer_sol.values):
+    for msh, values in zip(layer_sol.meshes, layer_sol.potentials):
         for vertex in msh.vertices:
             # vertex.p is mesh.Point, convert to shapely for distance comparison
             dist = vertex.p.to_shapely().distance(target_point_shapely)
@@ -500,7 +500,7 @@ class TestSyntheticProblems:
         # Handle possibility of multiple meshes if mesher splits the rectangle
         all_vertices = []
         all_values = {}
-        for msh, values_form in zip(layer_solution.meshes, layer_solution.values):
+        for msh, values_form in zip(layer_solution.meshes, layer_solution.potentials):
             all_vertices.extend(msh.vertices)
             for v in msh.vertices:
                 all_values[v] = values_form[v]
@@ -656,7 +656,7 @@ class TestSyntheticProblems:
         # It seems that shifting the outer_radius and inner_radius in the
         # analytical_solution function definition does help and allow us to match the actual result exactly
 
-        for mesh_idx, (msh, values) in enumerate(zip(layer_solution.meshes, layer_solution.values)):
+        for mesh_idx, (msh, values) in enumerate(zip(layer_solution.meshes, layer_solution.potentials)):
             for vertex in msh.vertices:
                 numerical_value = values[vertex] - reference_potential
                 x, y = vertex.p.x, vertex.p.y
@@ -1057,9 +1057,9 @@ class TestSolverEndToEnd:
         # Next, we iterate over all the solutions and check that the ZeroForms
         # live in the corresponding meshes
         for layer_solution in solution.layer_solutions:
-            assert len(layer_solution.meshes) == len(layer_solution.values)
+            assert len(layer_solution.meshes) == len(layer_solution.potentials)
 
-            for msh, value in zip(layer_solution.meshes, layer_solution.values):
+            for msh, value in zip(layer_solution.meshes, layer_solution.potentials):
                 for vertex in msh.vertices:
                     # This checks both that the value is valid number and
                     # that it is finite
@@ -1390,7 +1390,7 @@ class TestSolverEndToEnd:
 
         # Verify the mesh has vertices and values
         assert len(layer_solution.meshes[0].vertices) > 0
-        assert len(layer_solution.values[0].values) > 0
+        assert len(layer_solution.potentials[0].values) > 0
 
     def test_unconnected_via_mesh_isolation(self, kicad_test_projects):
         """
@@ -1451,7 +1451,7 @@ class TestSolverEndToEnd:
 
         # Check that ALL vertices in the positive mesh have consistent voltage
         pos_mesh = pos_layer_sol.meshes[pos_mesh_idx]
-        pos_values = pos_layer_sol.values[pos_mesh_idx]
+        pos_values = pos_layer_sol.potentials[pos_mesh_idx]
 
         # With the bug: some vertices might have incorrect voltage due to via shorting
         # After fix: all vertices should have same voltage as positive terminal
@@ -1513,7 +1513,7 @@ class TestSolverEndToEnd:
 
         # Get the meshes and their corresponding voltage values
         mesh1, mesh2 = layer_solution.meshes
-        values1, values2 = layer_solution.values
+        values1, values2 = layer_solution.potentials
 
         # Verify voltage is constant within each mesh and get representative voltages
         def check_mesh_voltage(msh, values):

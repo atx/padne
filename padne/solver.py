@@ -32,7 +32,7 @@ class SolverWarning(Warning):
 @dataclass
 class LayerSolution:
     meshes: list[mesh.Mesh]
-    values: list[mesh.ZeroForm]
+    potentials: list[mesh.ZeroForm]
     power_densities: list[mesh.TwoForm] = field(default_factory=list)
 
 
@@ -557,7 +557,7 @@ def produce_layer_solutions(layers: list[problem.Layer],
 
         layer_solutions.append(LayerSolution(
             meshes=layer_meshes,
-            values=layer_values,
+            potentials=layer_values,
             power_densities=layer_power_densities
         ))
 

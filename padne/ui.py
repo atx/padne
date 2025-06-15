@@ -177,7 +177,7 @@ class VertexSpatialIndex(BaseSpatialIndex):
         all_vertices = []
         all_values = []
 
-        for msh, values in zip(layer_solution.meshes, layer_solution.values):
+        for msh, values in zip(layer_solution.meshes, layer_solution.potentials):
             for vertex in msh.vertices:
                 all_vertices.append([vertex.p.x, vertex.p.y])
                 all_values.append(values[vertex])
@@ -848,7 +848,7 @@ class MeshViewer(QOpenGLWidget):
                                              self.solution.layer_solutions):
                 if layer.name != layer_name:
                     continue
-                for msh, values in zip(layer_solution.meshes, layer_solution.values):
+                for msh, values in zip(layer_solution.meshes, layer_solution.potentials):
                     rendered_meshes.append(RenderedMesh.from_zero_form(msh, values))
             return rendered_meshes
 
