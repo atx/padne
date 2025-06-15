@@ -469,10 +469,10 @@ class AppToolBar(QToolBar):
 
         # Create mode actions statically based on mesh_viewer.modes
         for mode in self.mesh_viewer.modes:
-            action = QAction(mode.unit, self)
+            action = QAction(mode.name, self)
             action.setCheckable(True)
             action.triggered.connect(
-                lambda checked, name=mode.unit: self.mesh_viewer.setCurrentModeByName(name)
+                lambda checked, name=mode.name: self.mesh_viewer.setCurrentModeByName(name)
             )
             self.modes_menu.addAction(action)
             self.mode_action_group.addAction(action)
@@ -480,7 +480,7 @@ class AppToolBar(QToolBar):
         # Set initial mode as checked
         initial_mode = self.mesh_viewer.modes[self.mesh_viewer.current_mode_index]
         for action in self.mode_action_group.actions():
-            if action.text() == initial_mode.unit:
+            if action.text() == initial_mode.name:
                 action.setChecked(True)
                 break
 
@@ -767,6 +767,7 @@ class MeshViewer(QOpenGLWidget):
     @dataclass
     class BaseRenderingMode:
         unit: str
+        name: str
         min_value: float = 0.0
         max_value: float = 1.0
         solution: Optional[solver.Solution] = None
@@ -830,6 +831,7 @@ class MeshViewer(QOpenGLWidget):
     @dataclass
     class VoltageRenderingMode(BaseRenderingMode):
         unit: str = "V"
+        name: str = "Potential"
 
         def _build_spatial_indices(self):
             """Build spatial indices for fast vertex lookups."""
@@ -852,6 +854,7 @@ class MeshViewer(QOpenGLWidget):
     @dataclass
     class PowerDensityRenderingMode(BaseRenderingMode):
         unit: str = "W/mm²"
+        name: str = "Power Density"
 
         def _compute_min_max(self) -> tuple[float, float]:
             _, max_val = super()._compute_min_max()
@@ -1074,7 +1077,7 @@ class MeshViewer(QOpenGLWidget):
             mode.autoscale_values(solution)
 
         # Emit mode-related signals
-        self.currentModeChanged.emit(current_mode.unit)
+        self.currentModeChanged.emit(current_mode.name)
         self.valueRangeChanged.emit(self.min_value, self.max_value)
         self.unitChanged.emit(current_mode.unit)
 
@@ -1517,9 +1520,9 @@ class MeshViewer(QOpenGLWidget):
 
     @Slot(str)
     def setCurrentModeByName(self, mode_name: str):
-        """Sets the current rendering mode by its unit name."""
+        """Sets the current rendering mode by its name."""
         for index, mode in enumerate(self.modes):
-            if mode.unit == mode_name:
+            if mode.name == mode_name:
                 old_mode_index = self.current_mode_index
                 self.current_mode_index = index
 
@@ -1527,7 +1530,7 @@ class MeshViewer(QOpenGLWidget):
                 if old_mode_index != index:
 
                     # Emit signals
-                    self.currentModeChanged.emit(mode.unit)
+                    self.currentModeChanged.emit(mode.name)
                     self.unitChanged.emit(mode.unit)
                     self.valueRangeChanged.emit(self.min_value, self.max_value)
                     self.update()
