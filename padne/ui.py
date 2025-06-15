@@ -124,20 +124,57 @@ COLOR_MAP = colormaps.PLASMA
 
 
 @dataclass
-class LayerSpatialIndex:
-    """Spatial index for fast vertex value lookups within a layer."""
-    vertex_tree: Optional[cKDTree]
-    vertex_values: list[float]
-    layer_shape: shapely.geometry.MultiPolygon
+class BaseSpatialIndex:
+    tree: Optional[cKDTree]
+    values: list[float]
+    shape: shapely.geometry.MultiPolygon
+
+    @classmethod
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution):
+        raise NotImplementedError("This method should be implemented in subclasses")
 
     @classmethod
     def from_layer_data(cls, layer: solver.problem.Layer, layer_solution: solver.LayerSolution):
-        """Build spatial index from layer solution data."""
         if not layer_solution.meshes:
             # Empty layer
             return cls(None, [], layer.shape)
 
-        # Collect all vertices and their values
+        vertices, values = cls._extract_points_and_values(layer_solution)
+
+        if not vertices:
+            return cls(None, [], layer.shape)
+
+        vertex_array = np.array(vertices)
+        tree = cKDTree(vertex_array)
+
+        return cls(tree, values, layer.shape)
+
+    def query_nearest(self, x: float, y: float) -> Optional[float]:
+        """Find nearest value to given coordinates."""
+        if not self.tree:
+            return None
+
+        # Check if point is within layer geometry
+        point = shapely.geometry.Point(x, y)
+        if not self.shape.contains(point):
+            return None
+
+        # Query nearest vertex
+        distance, index = self.tree.query([x, y])
+
+        # Return value if distance is reasonable
+        if distance < float('inf'):
+            return self.values[index]
+
+        return None
+
+
+class VertexSpatialIndex(BaseSpatialIndex):
+    """Spatial index for fast vertex value lookups within a layer."""
+
+    @classmethod
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution):
+        """Extract vertex coordinates and their values from the layer solution."""
         all_vertices = []
         all_values = []
 
@@ -146,33 +183,26 @@ class LayerSpatialIndex:
                 all_vertices.append([vertex.p.x, vertex.p.y])
                 all_values.append(values[vertex])
 
-        if not all_vertices:
-            return cls(None, [], layer.shape)
+        return all_vertices, all_values
 
-        # Build KD-tree
-        vertex_array = np.array(all_vertices)
-        tree = cKDTree(vertex_array)
 
-        return cls(tree, all_values, layer.shape)
+class FaceSpatialIndex(BaseSpatialIndex):
+    """Spatial index for fast face value lookups within a layer."""
 
-    def query_nearest(self, x: float, y: float) -> Optional[float]:
-        """Find nearest vertex value to given coordinates."""
-        if not self.vertex_tree:
-            return None
+    @classmethod
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution):
+        """Extract face coordinates and their values from the layer solution."""
+        all_faces = []
+        all_values = []
 
-        # Check if point is within layer geometry
-        point = shapely.geometry.Point(x, y)
-        if not self.layer_shape.contains(point):
-            return None
+        for msh, values in zip(layer_solution.meshes, layer_solution.power_densities):
+            for face in msh.faces:
+                # Use the centroid of the face as the representative point
+                centroid = face.centroid
+                all_faces.append([centroid.x, centroid.y])
+                all_values.append(values[face])
 
-        # Query nearest vertex
-        distance, index = self.vertex_tree.query([x, y])
-
-        # Return value if distance is reasonable
-        if distance < float('inf'):
-            return self.vertex_values[index]
-
-        return None
+        return all_faces, all_values
 
 
 class BaseTool(abc.ABC):
@@ -426,6 +456,36 @@ class AppToolBar(QToolBar):
         self.layers_button.setMenu(self.layers_menu)
         self.addWidget(self.layers_button)
 
+        # Create the "Modes" QToolButton
+        self.modes_button = QToolButton(self)
+        self.modes_button.setText("Modes")
+        self.modes_button.setToolTip("Select rendering mode")
+        self.modes_button.setPopupMode(QToolButton.InstantPopup)
+
+        self.modes_menu = QMenu(self.modes_button)
+        self.mode_action_group = QActionGroup(self)
+        self.mode_action_group.setExclusive(True)
+
+        # Create mode actions statically based on mesh_viewer.modes
+        for mode in self.mesh_viewer.modes:
+            action = QAction(mode.unit, self)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda checked, name=mode.unit: self.mesh_viewer.setCurrentModeByName(name)
+            )
+            self.modes_menu.addAction(action)
+            self.mode_action_group.addAction(action)
+
+        # Set initial mode as checked
+        initial_mode = self.mesh_viewer.modes[self.mesh_viewer.current_mode_index]
+        for action in self.mode_action_group.actions():
+            if action.text() == initial_mode.unit:
+                action.setChecked(True)
+                break
+
+        self.modes_button.setMenu(self.modes_menu)
+        self.addWidget(self.modes_button)
+
         # Add a separator after the tool actions
         self.addSeparator()
 
@@ -474,6 +534,12 @@ class AppToolBar(QToolBar):
                 action.setChecked(True)
                 break
 
+    @Slot(str)
+    def updateActiveModeInMenu(self, active_mode_name: str):
+        """Update which mode action is checked."""
+        for action in self.mode_action_group.actions():
+            action.setChecked(action.text() == active_mode_name)
+
 
 @dataclass
 class ShaderProgram:
@@ -505,31 +571,11 @@ class RenderedMesh:
     edge_count: int
 
     @classmethod
-    def from_mesh(cls, msh: mesh.Mesh, values: mesh.ZeroForm):
-        triangle_vertices = []
-        triangle_colors = []
-        edge_vertices = []
-        edge_colors = []
-
-        for face in msh.faces:
-            # Note that we assume the face is a triangle. This should be already
-            # checked by other layers
-
-            # Vertex data
-            for vertex in face.vertices:
-                triangle_vertices.extend([vertex.p.x, vertex.p.y])
-                triangle_colors.extend([values[vertex]])
-
-            # Edge data
-            for edge in face.edges:
-                # TODO: I am not quite sure how this differs from the previous case
-                # Maybe we can be sneaky and just use the same data, potentially
-                # inserting some spacing in between?
-                for e in [edge, edge.next]:
-                    edge_vertices.extend([e.origin.p.x, e.origin.p.y])
-                    edge_colors.extend([0.9, 0.9, 0.9])
-
-        # VAO for triangles
+    def _from_common(cls,
+                     triangle_vertices: list[float],
+                     triangle_colors: list[float],
+                     edge_vertices: list[float],
+                     edge_colors: list[float]) -> 'RenderedMesh':
 
         vao_triangles = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao_triangles)
@@ -588,6 +634,70 @@ class RenderedMesh:
                    len(triangle_vertices) // 2,
                    vao_edges,
                    len(edge_vertices))
+
+    @classmethod
+    def from_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm):
+        triangle_vertices = []
+        triangle_colors = []
+        edge_vertices = []
+        edge_colors = []
+
+        for face in msh.faces:
+            # Note that we assume the face is a triangle. This should be already
+            # checked by other layers
+
+            # Vertex data
+            for vertex in face.vertices:
+                triangle_vertices.extend([vertex.p.x, vertex.p.y])
+                triangle_colors.extend([values[vertex]])
+
+            # Edge data
+            for edge in face.edges:
+                # TODO: I am not quite sure how this differs from the previous case
+                # Maybe we can be sneaky and just use the same data, potentially
+                # inserting some spacing in between?
+                for e in [edge, edge.next]:
+                    edge_vertices.extend([e.origin.p.x, e.origin.p.y])
+                    edge_colors.extend([0.9, 0.9, 0.9])
+
+        return cls._from_common(
+            triangle_vertices,
+            triangle_colors,
+            edge_vertices,
+            edge_colors
+        )
+
+    @classmethod
+    def from_two_form(cls, msh: mesh.Mesh, values: mesh.TwoForm):
+        triangle_vertices = []
+        triangle_colors = []
+        edge_vertices = []
+        edge_colors = []
+
+        for face in msh.faces:
+            # Note that we assume the face is a triangle. This should be already
+            # checked by other layers
+
+            # Vertex data
+            for vertex in face.vertices:
+                triangle_vertices.extend([vertex.p.x, vertex.p.y])
+                triangle_colors.extend([values[face]])
+
+            # Edge data
+            for edge in face.edges:
+                # TODO: I am not quite sure how this differs from the previous case
+                # Maybe we can be sneaky and just use the same data, potentially
+                # inserting some spacing in between?
+                for e in [edge, edge.next]:
+                    edge_vertices.extend([e.origin.p.x, e.origin.p.y])
+                    edge_colors.extend([0.9, 0.9, 0.9])
+
+        return cls._from_common(
+            triangle_vertices,
+            triangle_colors,
+            edge_vertices,
+            edge_colors
+        )
 
     def render_triangles(self):
         gl.glBindVertexArray(self.vao_triangles)
@@ -653,12 +763,135 @@ class RenderedPoints:
 
 
 class MeshViewer(QOpenGLWidget):
+
+    @dataclass
+    class BaseRenderingMode:
+        unit: str
+        min_value: float = 0.0
+        max_value: float = 1.0
+        solution: Optional[solver.Solution] = None
+        spatial_indices: dict[str, BaseSpatialIndex] = field(default_factory=dict)
+        rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
+
+        def _compute_min_max(self) -> tuple[float, float]:
+            """Compute min and max values across all spatial indices."""
+            min_val = float('inf')
+            max_val = float('-inf')
+
+            for index in self.spatial_indices.values():
+                if not index.values:
+                    continue
+                min_val = min(min_val, min(index.values))
+                max_val = max(max_val, max(index.values))
+
+            if min_val == float('inf'):
+                min_val, max_val = 0.0, 1.0
+            elif min_val == max_val:
+                min_val, max_val = min_val, min_val + 1.0
+
+            return min_val, max_val
+
+        def autoscale_values(self, solution: solver.Solution):
+            """Autoscale values for the rendering mode."""
+            self.min_value, self.max_value = self._compute_min_max()
+
+        def _build_spatial_indices(self):
+            raise NotImplementedError("This method should be implemented in subclasses")
+
+        @abc.abstractmethod
+        def set_solution(self, solution: solver.Solution):
+            """Initialize this mode with solution data (build indices + meshes)."""
+            self.solution = solution
+            self.spatial_indices.clear()
+            self._build_spatial_indices()
+            # We have to delay this until the OpenGL context is properly initialized.
+            self.rendered_meshes.clear()
+
+        def _create_rendered_meshes_for_layer(self, layer_name) -> list[RenderedMesh]:
+            """Create RenderedMesh objects for a specific layer."""
+            raise NotImplementedError("This method should be implemented in subclasses")
+
+        def pick_nearest_value(self, layer_name: str, world_x: float, world_y: float) -> Optional[float]:
+            """Pick value at coordinates using spatial index."""
+            if layer_name in self.spatial_indices:
+                return self.spatial_indices[layer_name].query_nearest(world_x, world_y)
+            return None
+
+        def get_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+            """Get pre-built rendered meshes for a layer."""
+            if layer_name not in self.rendered_meshes:
+                # If not already built, create them
+                # Ideally, we would do this in .set_solution, but that
+                # is getting called before OpenGL context is ready
+                self.rendered_meshes[layer_name] = \
+                    self._create_rendered_meshes_for_layer(layer_name)
+            return self.rendered_meshes[layer_name]
+
+    @dataclass
+    class VoltageRenderingMode(BaseRenderingMode):
+        unit: str = "V"
+        spatial_indices: dict[str, VertexSpatialIndex] = field(default_factory=dict)
+        rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
+
+        def _build_spatial_indices(self):
+            """Build spatial indices for fast vertex lookups."""
+            self.spatial_indices.clear()
+            for layer, layer_solution in zip(self.solution.problem.layers, self.solution.layer_solutions):
+                spatial_index = VertexSpatialIndex.from_layer_data(layer, layer_solution)
+                self.spatial_indices[layer.name] = spatial_index
+
+        def _create_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+            """Create RenderedMesh objects for a specific layer."""
+            rendered_meshes = []
+            for layer, layer_solution in zip(self.solution.problem.layers,
+                                             self.solution.layer_solutions):
+                if layer.name != layer_name:
+                    continue
+                for msh, values in zip(layer_solution.meshes, layer_solution.values):
+                    rendered_meshes.append(RenderedMesh.from_zero_form(msh, values))
+            return rendered_meshes
+
+
+    @dataclass
+    class PowerDensityRenderingMode(BaseRenderingMode):
+        unit: str = "W/mm²"
+        spatial_indices: dict[str, FaceSpatialIndex] = field(default_factory=dict)
+        rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
+
+        def _compute_min_max(self) -> tuple[float, float]:
+            _, max_val = super()._compute_min_max()
+            # Usually, we would get a value that is very close to zero anyway,
+            # this makes it a bit prettier
+            return 0.0, max_val
+
+        def _build_spatial_indices(self):
+            """Build spatial indices for fast face lookups."""
+            self.spatial_indices.clear()
+            for layer, layer_solution in zip(self.solution.problem.layers, self.solution.layer_solutions):
+                spatial_index = FaceSpatialIndex.from_layer_data(layer, layer_solution)
+                self.spatial_indices[layer.name] = spatial_index
+
+        def _create_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+            """Create RenderedMesh objects for a specific layer."""
+            rendered_meshes = []
+            for layer, layer_solution in zip(self.solution.problem.layers,
+                                             self.solution.layer_solutions):
+                if layer.name != layer_name:
+                    continue
+                for msh, values in zip(layer_solution.meshes, layer_solution.power_densities):
+                    rendered_meshes.append(RenderedMesh.from_two_form(msh, values))
+            return rendered_meshes
+
     # Signal to notify when the value range changes
     valueRangeChanged = Signal(float, float)
     # Signal to notify when the current layer changes
     currentLayerChanged = Signal(str)
     # Signal to notify when the list of available layers changes
     availableLayersChanged = Signal(list)
+    # Signal to notify when the current rendering mode changes
+    currentModeChanged = Signal(str)
+    # Signal to notify when the unit changes
+    unitChanged = Signal(str)
     # Signals for tools
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
@@ -674,8 +907,13 @@ class MeshViewer(QOpenGLWidget):
         self.rendered_connection_points: dict[str, RenderedPoints] = {}
         self.connection_points_visible: bool = True
 
-        # Spatial indices for fast vertex value lookups
-        self.layer_spatial_indices: dict[str, LayerSpatialIndex] = {}
+        # Rendering modes and current mode tracking
+        self.modes = [
+            self.VoltageRenderingMode(),
+            self.PowerDensityRenderingMode()
+        ]
+        self.current_mode_index = 0  # Start with voltage mode
+
 
         self.scale = 1.0
         self.offset_x = 0.0
@@ -699,22 +937,34 @@ class MeshViewer(QOpenGLWidget):
 
         self.edges_visible = True
 
-    def _buildSpatialIndices(self):
-        """Build spatial indices for all layers in the current solution."""
-        if not self.solution:
-            return
+    @property
+    def current_rendering_mode(self) -> BaseRenderingMode:
+        """Get the currently active rendering mode."""
+        return self.modes[self.current_mode_index]
 
-        self.layer_spatial_indices.clear()
+    @property
+    def min_value(self) -> float:
+        """Get the minimum value for the current rendering mode."""
+        return self.current_rendering_mode.min_value
 
-        for layer, layer_solution in zip(self.solution.problem.layers, self.solution.layer_solutions):
-            spatial_index = LayerSpatialIndex.from_layer_data(layer, layer_solution)
-            self.layer_spatial_indices[layer.name] = spatial_index
-            log.debug(f"Built spatial index for layer '{layer.name}' with {len(spatial_index.vertex_values)} vertices")
+    @min_value.setter
+    def min_value(self, value: float):
+        """Set the minimum value for the current rendering mode."""
+        self.current_rendering_mode.min_value = value
+
+    @property
+    def max_value(self) -> float:
+        """Get the maximum value for the current rendering mode."""
+        return self.current_rendering_mode.max_value
+
+    @max_value.setter
+    def max_value(self, value: float):
+        """Set the maximum value for the current rendering mode."""
+        self.current_rendering_mode.max_value = value
 
     def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
         """
-        Find the value at the vertex closest to the specified world coordinates,
-        only if the world coordinates are within the layer's defined geometries.
+        Find the value closest to the specified world coordinates using the current rendering mode.
 
         Uses spatial indexing for fast O(log n) lookups.
 
@@ -723,7 +973,7 @@ class MeshViewer(QOpenGLWidget):
             world_y: Y-coordinate in world space
 
         Returns:
-            The value at the nearest vertex, or None if no vertices are found
+            The value at the nearest point, or None if no values are found
             or if the point is outside the layer's geometries.
         """
         if not self.solution or not self.visible_layers or self.current_layer_index >= len(self.visible_layers):
@@ -731,39 +981,18 @@ class MeshViewer(QOpenGLWidget):
 
         current_layer_name = self.visible_layers[self.current_layer_index]
 
-        # Use spatial index
-        if current_layer_name in self.layer_spatial_indices:
-            spatial_index = self.layer_spatial_indices[current_layer_name]
-            return spatial_index.query_nearest(world_x, world_y)
-
-        return None
+        # Delegate to current rendering mode
+        return self.current_rendering_mode.pick_nearest_value(current_layer_name, world_x, world_y)
 
     def autoscaleValue(self):
         """
-        Automatically adjust the min/max values for color scaling.
-        Finds the minimum and maximum values across all layer solutions.
+        Automatically adjust the min/max values for color scaling using the current rendering mode.
         """
         if not self.solution or not self.solution.layer_solutions:
             return  # Nothing to scale if no solution is loaded
 
-        # Initialize min and max values
-        self.min_value = float('inf')
-        self.max_value = float('-inf')
-
-        # Go through all layer solutions to find min/max values
-        for layer_solution in self.solution.layer_solutions:
-            # Each layer solution has multiple meshes and their corresponding values
-            for msh, values in zip(layer_solution.meshes, layer_solution.values):
-                # Check values at each vertex
-                for vertex in msh.vertices:
-                    value = values[vertex]
-                    self.min_value = min(self.min_value, value)
-                    self.max_value = max(self.max_value, value)
-
-        # If no values were found or if all values are the same
-        if self.min_value == float('inf') or self.min_value == self.max_value:
-            self.min_value = 0.0
-            self.max_value = 1.0
+        # Delegate to current rendering mode
+        self.current_rendering_mode.autoscale_values(self.solution)
 
         # Emit signal to notify about the new value range
         self.valueRangeChanged.emit(self.min_value, self.max_value)
@@ -842,6 +1071,18 @@ class MeshViewer(QOpenGLWidget):
         if self.visible_layers:
             self.currentLayerChanged.emit(self.visible_layers[self.current_layer_index])
 
+        # Initialize all modes and emit mode signals
+        current_mode = self.current_rendering_mode
+
+        # Initialize all modes with solution data (spatial indices + rendered meshes)
+        for mode in self.modes:
+            mode.autoscale_values(solution)
+            mode.set_solution(solution)
+
+        # Emit mode-related signals
+        self.currentModeChanged.emit(current_mode.unit)
+        self.unitChanged.emit(current_mode.unit)
+
         self.autoscaleValue()
         # We can't just do autoscaleXY here, since we may be in some
         # semi-initialized state and the widget may not have reached a valid
@@ -851,30 +1092,10 @@ class MeshViewer(QOpenGLWidget):
         # even rely on the first call being reliable.
         self.needs_initial_autoscale = True
 
-        # Build spatial indices for fast voltage lookups
-        self._buildSpatialIndices()
-
         if self.mesh_shader is not None:
-            self.setupMeshData()
             self.setupConnectionPointsData()
 
         self.update()
-
-    def setupMeshData(self):
-        """Set up the mesh data for rendering."""
-
-        # TODO: Clear previously rendered meshes
-        assert self.solution is not None
-
-        for layer, lsol in zip(self.solution.problem.layers, self.solution.layer_solutions):
-            if layer.name not in self.rendered_meshes:
-                self.rendered_meshes[layer.name] = []
-
-            for msh, values in zip(lsol.meshes, lsol.values):
-                # Create a RenderedMesh object for each mesh
-                self.rendered_meshes[layer.name].append(
-                    RenderedMesh.from_mesh(msh, values)
-                )
 
     def setupConnectionPointsData(self):
         """Set up the connection points data for rendering."""
@@ -946,7 +1167,6 @@ class MeshViewer(QOpenGLWidget):
 
         # If meshes are already set, setup the mesh data
         if self.solution:
-            self.setupMeshData()
             self.setupConnectionPointsData()
 
     def resizeGL(self, width, height):
@@ -1052,7 +1272,7 @@ class MeshViewer(QOpenGLWidget):
         """Render the mesh using shaders."""
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
 
-        if not self.mesh_shader or not self.rendered_meshes or not self.visible_layers:
+        if not self.mesh_shader or not self.visible_layers:
             log.debug("No shader program or meshes to render")
             return
 
@@ -1061,12 +1281,8 @@ class MeshViewer(QOpenGLWidget):
         # Get current layer name
         current_layer_name = self.visible_layers[self.current_layer_index]
 
-        # Ensure current_layer_name exists in rendered_meshes before accessing
-        if current_layer_name not in self.rendered_meshes:
-            log.warning(f"Current layer {current_layer_name} not found in rendered_meshes.")
-            return
-
-        current_layer_mesh_list = self.rendered_meshes[current_layer_name]
+        # Get rendered meshes directly from current mode
+        current_layer_mesh_list = self.current_rendering_mode.get_rendered_meshes_for_layer(current_layer_name)
         self._renderMeshTriangles(mvp, current_layer_mesh_list)
         self._renderMeshEdges(mvp, current_layer_mesh_list)
 
@@ -1305,6 +1521,26 @@ class MeshViewer(QOpenGLWidget):
         else:
             log.warning(f"Attempted to set current layer to unknown layer: {layer_name}")
 
+    @Slot(str)
+    def setCurrentModeByName(self, mode_name: str):
+        """Sets the current rendering mode by its unit name."""
+        for index, mode in enumerate(self.modes):
+            if mode.unit == mode_name:
+                old_mode_index = self.current_mode_index
+                self.current_mode_index = index
+
+                # Update rendered meshes and emit signals if mode changed
+                if old_mode_index != index:
+
+                    # Emit signals
+                    self.currentModeChanged.emit(mode.unit)
+                    self.unitChanged.emit(mode.unit)
+                    self.valueRangeChanged.emit(self.min_value, self.max_value)
+                    self.update()
+                return
+
+        log.warning(f"Attempted to set current mode to unknown mode: {mode_name}")
+
 
 class ColorScaleWidget(QWidget):
     """Widget that displays a color scale with delta and absolute range."""
@@ -1477,8 +1713,8 @@ class MainWindow(QMainWindow):
         self.y_position_label = QLabel("Y: -")
         self.y_position_label.setMinimumWidth(80)
 
-        self.voltage_label = QLabel("V: ?")
-        self.voltage_label.setMinimumWidth(80)
+        self.value_label = QLabel("V: ?")
+        self.value_label.setMinimumWidth(80)
 
         self.delta_label = QLabel("Δ: ?")
         self.delta_label.setMinimumWidth(80)
@@ -1493,16 +1729,18 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(QLabel(" | "))  # Separator
         self.statusBar().addWidget(self.y_position_label)
         self.statusBar().addWidget(QLabel(" | "))  # Separator
-        self.statusBar().addWidget(self.voltage_label)
+        self.statusBar().addWidget(self.value_label)
         self.statusBar().addWidget(QLabel(" | "))  # Separator
         self.statusBar().addWidget(self.delta_label)
 
         # Connect signals/slots
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
+        self.mesh_viewer.unitChanged.connect(self.color_scale.setUnit)
         self.projectLoaded.connect(self.mesh_viewer.setSolution)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
+        self.mesh_viewer.currentModeChanged.connect(self.app_toolbar.updateActiveModeInMenu)
 
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
@@ -1522,21 +1760,23 @@ class MainWindow(QMainWindow):
         self.layer_status_label.setText(f"Layer: {layer_name}")
 
     @Slot(mesh.Point, object)
-    def updateMousePosition(self, world_point: mesh.Point, voltage):
-        """Update status bar with mouse position and voltage."""
+    def updateMousePosition(self, world_point: mesh.Point, value):
+        """Update status bar with mouse position and value."""
         self.x_position_label.setText(f"X: {world_point.x:.3f}")
         self.y_position_label.setText(f"Y: {world_point.y:.3f}")
 
-        if voltage is not None:
-            voltage_str = units.Value(voltage, "V").pretty_format(3)
-            self.voltage_label.setText(f"V: {voltage_str}")
+        if value is not None:
+            current_unit = self.mesh_viewer.current_rendering_mode.unit
+            value_str = units.Value(value, current_unit).pretty_format(3)
+            self.value_label.setText(f"{current_unit}: {value_str}")
 
             # Calculate delta from the minimum value of the color scale
-            delta_value = voltage - self.mesh_viewer.min_value
-            delta_str = units.Value(delta_value, "V").pretty_format(3)
+            delta_value = value - self.mesh_viewer.min_value
+            delta_str = units.Value(delta_value, current_unit).pretty_format(3)
             self.delta_label.setText(f"Δ: {delta_str}")
         else:
-            self.voltage_label.setText("V: ?")
+            current_unit = self.mesh_viewer.current_rendering_mode.unit
+            self.value_label.setText(f"{current_unit}: ?")
             self.delta_label.setText("Δ: ?")
 
 

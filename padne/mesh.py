@@ -151,6 +151,20 @@ class Face:
             yield edge.origin
 
     @property
+    def centroid(self) -> Point:
+        """
+        Compute the centroid of the face using the average of vertex coordinates.
+        """
+        x_sum = 0.0
+        y_sum = 0.0
+        count = 0
+        for vertex in self.vertices:
+            x_sum += vertex.p.x
+            y_sum += vertex.p.y
+            count += 1
+        return Point(x_sum / count, y_sum / count)
+
+    @property
     def area(self) -> float:
         """
         Compute the area using the shoelace formula.
