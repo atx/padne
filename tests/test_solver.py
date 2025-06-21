@@ -1069,7 +1069,11 @@ class TestSolverEndToEnd:
 
     @for_all_kicad_projects(exclude=["tht_component",
                                      "long_trace_current",
-                                     "unterminated_current_loop"])
+                                     "unterminated_current_loop",
+                                     "complicated_trace_current",
+                                     "two_lumped_elements_one_pad",
+                                     "via_tht_4layer",
+                                     "voltage_source_multipad_degeneration"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
@@ -1107,9 +1111,11 @@ class TestSolverEndToEnd:
                 assert voltage_p - voltage_n == pytest.approx(vsource.voltage, abs=0.001), \
                     f"Voltage difference for {vsource} (p@{p_conn.point}, n@{n_conn.point}) does not match expected value."
 
-        # If no suitable voltage source network was found in the project, skip the test
+        # If no suitable voltage source network was found in the project, fail the test
+        # This ensures that any newly added project is properly excluded from this test
         if not found_voltage_source:
-            pytest.skip(f"No networks containing only a VoltageSource found in project {project.name}.")
+            pytest.fail(f"No networks containing only a VoltageSource found in project {project.name}. "
+                       f"This project should be added to the exclude list for this test.")
 
     def test_long_trace_current_source(self, kicad_test_projects):
         project = kicad_test_projects["long_trace_current"]
