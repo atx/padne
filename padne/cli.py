@@ -1,9 +1,14 @@
 import argparse
 import logging
+import pickle
 import sys
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
+
+import padne.kicad
+import padne.solver
+import padne.ui
 
 
 def setup_logging(debug_mode: bool):
@@ -74,10 +79,6 @@ def handle_errors():
 
 def do_gui(args):
     with handle_errors():
-        import padne.kicad
-        import padne.solver
-        import padne.ui
-
         log = logging.getLogger(__name__)
         log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
@@ -90,10 +91,6 @@ def do_gui(args):
 
 def do_solve(args):
     with handle_errors():
-        import pickle
-        import padne.kicad
-        import padne.solver
-
         log = logging.getLogger(__name__)
         log.info(f"Loading KiCad project: {args.kicad_pro_file}")
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
@@ -105,9 +102,6 @@ def do_solve(args):
 
 
 def do_show(args):
-    import pickle
-    import padne.ui
-
     log = logging.getLogger(__name__)
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
