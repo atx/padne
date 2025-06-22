@@ -1,5 +1,5 @@
 # padne
-*A KiCad-native Power Delivery Network Simulator*
+*Turn your KiCad designs into an interactive voltage drop and current density visualizations*
 
 ![image](https://github.com/user-attachments/assets/0792fa00-28ec-4db6-be18-a0535ac59db3)
 
@@ -75,6 +75,8 @@ padne show pdn.padne
 > Run `padne gui --help` to see the exposed solver parameters.
 
 ## Usage
+
+
 
 padne is controlled by placing special text directives inside your KiCad schematic file. The idea is that you use these directives to wire up lumped elements (voltage sources, current sources etc.) to your PCB geometry.
 
