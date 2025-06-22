@@ -71,6 +71,9 @@ padne solve my_project.kicad_pro pdn.padne
 padne show pdn.padne
 ```
 
+> [!TIP]
+> Run `padne gui --help` to see the exposed solver parameters.
+
 ## Usage
 
 padne is controlled by placing special text directives inside your KiCad schematic file. The idea is that you use these directives to wire up lumped elements (voltage sources, current sources etc.) to your PCB geometry.
