@@ -1,0 +1,18 @@
+(kicad_sch
+	(version 20231120)
+	(generator "eeschema")
+	(generator_version "8.0")
+	(uuid "e1d716d6-6893-49a2-bee0-88d3841e1063")
+	(paper "A4")
+	(lib_symbols)
+	(text "!padne RESISTANCE r=0.01 a=R3.1 b=R3.2"
+		(exclude_from_sim no)
+		(at 134.112 88.9 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "e1a380a1-7172-40a3-aaae-d9bf4141aac3")
+	)
+)

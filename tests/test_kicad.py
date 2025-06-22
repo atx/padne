@@ -365,6 +365,80 @@ class TestDirectiveParse:
         # Verify the resistor properties (from nested schematic)
         assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
 
+    def test_nested_schematic_twoinstances_directive_deduplication(self, kicad_test_projects):
+        """Test that directives from multiple instances of the same file are deduplicated."""
+        # Get the nested_schematic_twoinstances project
+        project = kicad_test_projects["nested_schematic_twoinstances"]
+        assert project.sch_path.exists(), "Schematic file of nested_schematic_twoinstances project does not exist"
+
+        # Load the project and extract directives
+        kicad_problem = kicad.load_kicad_project(project.pro_path)
+
+        # Should have exactly 2 lumped elements: 1 from root + 1 from nested schematic
+        # Even though nested schematic is referenced twice, directive should only be extracted once
+        assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
+
+        # Extract the voltage source and resistor by type
+        voltage_source_element = None
+        resistor_element = None
+
+        for network in kicad_problem.networks:
+            for element in network.elements:
+                if isinstance(element, problem.VoltageSource):
+                    voltage_source_element = element
+                elif isinstance(element, problem.Resistor):
+                    resistor_element = element
+
+        assert voltage_source_element is not None, "VOLTAGE directive from root schematic not found"
+        assert resistor_element is not None, "RESISTANCE directive from nested schematic not found"
+
+        # Verify the voltage source properties (from root schematic)
+        assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
+
+        # Verify the resistor properties (from nested schematic)
+        assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
+
+    def test_nested_schematic_twoinstances_hierarchy_structure(self, kicad_test_projects):
+        """Test that hierarchy correctly preserves multiple instances with proper names."""
+        # Get the nested_schematic_twoinstances project
+        project = kicad_test_projects["nested_schematic_twoinstances"]
+        assert project.sch_path.exists(), "Schematic file of nested_schematic_twoinstances project does not exist"
+
+        # Build the schema hierarchy
+        schema_hierarchy = kicad.build_schema_hierarchy(project.sch_path)
+
+        # Root should have exactly 2 children
+        assert len(schema_hierarchy.child_instances) == 2, f"Expected 2 child instances, got {len(schema_hierarchy.child_instances)}"
+
+        # Extract child instances
+        child_a = None
+        child_b = None
+
+        for child in schema_hierarchy.child_instances:
+            if child.sheet_name == "Nested A":
+                child_a = child
+            elif child.sheet_name == "Nested B":
+                child_b = child
+
+        # Verify both children exist with correct names
+        assert child_a is not None, "Child instance 'Nested A' not found"
+        assert child_b is not None, "Child instance 'Nested B' not found"
+
+        # Verify both children reference the same nested.kicad_sch file
+        assert child_a.file_path.name == "nested.kicad_sch", f"Child A should reference nested.kicad_sch, got {child_a.file_path.name}"
+        assert child_b.file_path.name == "nested.kicad_sch", f"Child B should reference nested.kicad_sch, got {child_b.file_path.name}"
+
+        # Verify both children have the same file path (since they reference the same file)
+        assert child_a.file_path == child_b.file_path, "Both children should reference the same file path"
+
+        # Verify both children have no further children (nested.kicad_sch has no sheet references)
+        assert len(child_a.child_instances) == 0, "Child A should have no further children"
+        assert len(child_b.child_instances) == 0, "Child B should have no further children"
+
+        # Verify both children have parsed content
+        assert child_a.parsed_sexp is not None, "Child A should have parsed S-expression content"
+        assert child_b.parsed_sexp is not None, "Child B should have parsed S-expression content"
+
 
 class TestStackup:
 
