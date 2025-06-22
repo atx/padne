@@ -1236,7 +1236,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert len(mesh.halfedges) > 0
-        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)  # Check minimum angle constraint
+        assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)  # Check minimum angle constraint
 
         # A simple square should be triangulated into at least 2 triangles
         assert len(mesh.faces) >= 2
@@ -1255,7 +1255,7 @@ class TestMesher:
         # A simple triangle might be represented as one face
         # or more depending on quality constraints
         assert len(mesh.faces) >= 1
-        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
+        assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
         # Check that all vertices are within the polygon bounds
         for _, vertex in mesh.vertices.items():
@@ -1283,7 +1283,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 0
-        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
+        assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
         for vertex in mesh.vertices:
             x = vertex.p.x
@@ -1306,7 +1306,7 @@ class TestMesher:
         assert isinstance(mesh, Mesh)
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
-        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
+        assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
         for vertex in mesh.vertices:
             x = vertex.p.x
@@ -1333,7 +1333,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
-        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
+        assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
         # Check that all vertices are contained within the original polygon
         for vertex in mesh.vertices:
@@ -1345,14 +1345,14 @@ class TestMesher:
         square = shapely.geometry.box(0, 0, 1, 1)
 
         # Create two meshers with different quality constraints
-        low_quality_mesher = Mesher(minimum_angle=5.0, maximum_size=0.1)
-        high_quality_mesher = Mesher(minimum_angle=30.0, maximum_size=0.01)
+        low_quality_mesher = Mesher(Mesher.Config(minimum_angle=5.0, maximum_size=0.1))
+        high_quality_mesher = Mesher(Mesher.Config(minimum_angle=30.0, maximum_size=0.01))
 
         low_quality_mesh = low_quality_mesher.poly_to_mesh(square)
         high_quality_mesh = high_quality_mesher.poly_to_mesh(square)
 
-        assert_mesh_minimum_angle(low_quality_mesh, low_quality_mesher.minimum_angle)
-        assert_mesh_minimum_angle(high_quality_mesh, high_quality_mesher.minimum_angle)
+        assert_mesh_minimum_angle(low_quality_mesh, low_quality_mesher.config.minimum_angle)
+        assert_mesh_minimum_angle(high_quality_mesh, high_quality_mesher.config.minimum_angle)
 
         # The higher quality mesh should have more triangles due to stricter constraints
         assert len(high_quality_mesh.faces) > len(low_quality_mesh.faces)
@@ -1388,7 +1388,7 @@ class TestMesher:
         square = shapely.geometry.box(0, 0, 1, 1)
 
         # Create mesh without seed points
-        mesher = Mesher(minimum_angle=20.0, maximum_size=0.1)
+        mesher = Mesher(Mesher.Config(minimum_angle=20.0, maximum_size=0.1))
         mesh_without_seeds = mesher.poly_to_mesh(square, [])
 
         # Create mesh with a seed point in the middle
@@ -1484,7 +1484,7 @@ class TestMesher:
         assert mesh.euler_characteristic() == 1
 
         # Verify that all mesh triangles are valid
-        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
+        assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
@@ -1500,14 +1500,14 @@ class TestMesher:
         # Create a tiny square
         tiny_square = shapely.geometry.box(0, 0, 1e-6, 1e-6)
 
-        mesher = Mesher(maximum_size=1e-7)  # Small enough for the tiny square
+        mesher = Mesher(Mesher.Config(maximum_size=1e-7))  # Small enough for the tiny square
         mesh = mesher.poly_to_mesh(tiny_square)
 
         # Verify that something was meshed
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
-        assert_mesh_minimum_angle(mesh, mesher.minimum_angle)
+        assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
     def test_seed_points_in_polygon_vertex(self):
         seed_points = [
@@ -1662,7 +1662,7 @@ class TestMeshPickling:
 
         # Use a Mesher to create a reasonably complex mesh
         # A smaller maximum_size will result in more triangles.
-        mesher = Mesher(minimum_angle=20.0, maximum_size=0.1)
+        mesher = Mesher(Mesher.Config(minimum_angle=20.0, maximum_size=0.1))
         original_mesh = mesher.poly_to_mesh(square)
 
         # Ensure the mesh is non-trivial

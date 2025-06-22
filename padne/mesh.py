@@ -665,9 +665,14 @@ class Mesher:
     Works through the triangle library.
     """
 
-    def __init__(self, minimum_angle: float = 20.0, maximum_size: float = 0.6):
-        self.minimum_angle = minimum_angle
-        self.maximum_size = maximum_size
+    @dataclass(frozen=True)
+    class Config:
+        """Configuration parameters for mesh generation."""
+        minimum_angle: float = 20.0
+        maximum_size: float = 0.6
+
+    def __init__(self, config: Optional['Mesher.Config'] = None):
+        self.config = config if config is not None else Mesher.Config()
 
     def poly_to_mesh(self,
                      poly: shapely.geometry.Polygon,
@@ -713,7 +718,7 @@ class Mesher:
         for hole in poly.interiors:
             insert_linear_ring(hole)
 
-        cgal_output = cgal.mesh(self, vertices, segments, seeds)
+        cgal_output = cgal.mesh(self.config, vertices, segments, seeds)
 
         mesh = Mesh.from_triangle_soup(
             [Point(*p) for p in cgal_output['vertices']],

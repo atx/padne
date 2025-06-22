@@ -11,6 +11,7 @@ import shapely.geometry
 import warnings
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 from . import problem, mesh
 
@@ -684,12 +685,13 @@ def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.T
     return power_density
 
 
-def solve(prob: problem.Problem) -> Solution:
+def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = None) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
 
     Args:
         problem: The Problem object containing layers and lumped elements
+        mesher_config: Configuration for mesh generation, uses defaults if None
 
     Returns:
         A Solution object with the computed results
@@ -697,8 +699,8 @@ def solve(prob: problem.Problem) -> Solution:
     # References:
     # https://www.cs.cmu.edu/~kmcrane/Projects/DDG/paper.pdf
     # http://mobile.rodolphe-vaillant.fr/entry/101/definition-laplacian-matrix-for-triangle-meshes
-    # TODO: Eliminate disconnected regions
-    mesher = mesh.Mesher()
+    # Note that if mesher_config = None, default parameters are used.
+    mesher = mesh.Mesher(mesher_config)
 
     # As a first step, we flatten the Layer-Mesh tree to get a flat list of meshes.
     # We also keep track of which layer each mesh belongs to.

@@ -9,6 +9,7 @@ from pathlib import Path
 import padne.kicad
 import padne.solver
 import padne.ui
+import padne.mesh
 
 
 def setup_logging(debug_mode: bool):
@@ -23,8 +24,33 @@ def setup_logging(debug_mode: bool):
     )
 
 
+def add_mesher_args(parser):
+    """Add mesher configuration arguments to a parser."""
+    default_config = padne.mesh.Mesher.Config()
+    parser.add_argument(
+        "--mesh-angle",
+        type=float,
+        default=default_config.minimum_angle,
+        help="Minimum angle constraint for mesh triangles (degrees)"
+    )
+    parser.add_argument(
+        "--mesh-size",
+        type=float,
+        default=default_config.maximum_size,
+        help="Maximum size constraint for mesh triangles"
+    )
+
+
+def mesher_config_from_args(args):
+    """Construct a Mesher.Config from parsed arguments."""
+    return padne.mesh.Mesher.Config(
+        minimum_angle=args.mesh_angle,
+        maximum_size=args.mesh_size
+    )
+
+
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "-d", "--debug",
         action="store_true",
@@ -32,21 +58,34 @@ def parse_args():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    parser_gui = subparsers.add_parser("gui", help="Run the GUI")
+    parser_gui = subparsers.add_parser(
+        "gui",
+        help="Run the GUI",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser_gui.add_argument(
         "kicad_pro_file",
         type=Path,
         help="Path to the input file",
     )
+    add_mesher_args(parser_gui)
 
-    parser_show = subparsers.add_parser("show", help="Load and display a pre-computed solution")
+    parser_show = subparsers.add_parser(
+        "show",
+        help="Load and display a pre-computed solution",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser_show.add_argument(
         "solution_file",
         type=Path,
         help="Path to the pickled solution file",
     )
 
-    parser_solve = subparsers.add_parser("solve", help="Solve the problem and save the solution")
+    parser_solve = subparsers.add_parser(
+        "solve",
+        help="Solve the problem and save the solution",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser_solve.add_argument(
         "kicad_pro_file",
         type=Path,
@@ -58,6 +97,7 @@ def parse_args():
         type=Path,
         help="Path to save the pickled solution file",
     )
+    add_mesher_args(parser_solve)
 
     return parser.parse_args()
 
@@ -83,7 +123,8 @@ def do_gui(args):
         log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
         log.info("Solving problem for GUI...")
-        solution = padne.solver.solve(prob)
+        mesher_config = mesher_config_from_args(args)
+        solution = padne.solver.solve(prob, mesher_config=mesher_config)
         # TODO: Store the project name in the problem/solution object
         project_name = args.kicad_pro_file.name
         return padne.ui.main(solution, project_name)
@@ -95,7 +136,8 @@ def do_solve(args):
         log.info(f"Loading KiCad project: {args.kicad_pro_file}")
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
         log.info("Solving problem...")
-        solution = padne.solver.solve(prob)
+        mesher_config = mesher_config_from_args(args)
+        solution = padne.solver.solve(prob, mesher_config=mesher_config)
         with open(args.output_file, "wb") as f:
             pickle.dump(solution, f)
         log.info(f"Solution saved to {args.output_file}")

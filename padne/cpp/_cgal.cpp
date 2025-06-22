@@ -28,7 +28,7 @@ typedef CGAL::Triangulation_data_structure_2<Vb, Fb> Tds;
 typedef CGAL::Constrained_Delaunay_triangulation_2<K, Tds> CDT;
 typedef CGAL::Delaunay_mesh_size_criteria_2<CDT> Criteria;
 typedef CGAL::Delaunay_mesher_2<CDT, Criteria> Mesher;
- 
+
 typedef CDT::Vertex_handle Vertex_handle;
 typedef CDT::Point Point;
 
@@ -69,15 +69,15 @@ static void setup_cdt(CDT& cdt,
 
 
 void setup_mesher(Mesher& mesher,
-                  const py::object& pymesher,
+                  const py::object& pyconfig,
                   const std::vector<std::pair<double, double>>& seeds) {
     // TODO: We probably want to have the b value in the python object directly...
-    auto minimum_angle = pymesher.attr("minimum_angle").cast<float>();
+    auto minimum_angle = pyconfig.attr("minimum_angle").cast<float>();
     auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
     auto b = 1 / (4*B*B);
-    auto maximum_size = pymesher.attr("maximum_size").cast<float>();
+    auto maximum_size = pyconfig.attr("maximum_size").cast<float>();
     mesher.set_criteria(Criteria(b, maximum_size));
-    
+
     // Now we insert the seeds
     // Theoretically, it should not be necessary to insert _all_ the seeds,
     // since we have a single connected component. The python code
@@ -124,7 +124,7 @@ std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
 }
 
 
-py::dict mesh(const py::object& pymesher,
+py::dict mesh(const py::object& pyconfig,
               const std::vector<std::pair<double, double>>& vertices,
               const std::vector<std::pair<int, int>>& segments,
               const std::vector<std::pair<double, double>>& seeds) {
@@ -136,7 +136,7 @@ py::dict mesh(const py::object& pymesher,
     setup_cdt(cdt, vertices, segments, seeds);
 
     Mesher mesher(cdt);
-    setup_mesher(mesher, pymesher, seeds);
+    setup_mesher(mesher, pyconfig, seeds);
 
     mesher.refine_mesh();
 
@@ -176,7 +176,7 @@ PYBIND11_MODULE(_cgal, m) {
         Returns:
             A dictionary containing the results of the meshing process.
     )pbdoc");
-    
+
     m.attr("cgal_version") = CGAL_VERSION_STR;
 
 #ifdef VERSION_INFO
