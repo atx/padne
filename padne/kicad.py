@@ -702,6 +702,17 @@ class Directives:
     lumped_specs: list[BaseLumpedSpec]
 
 
+@dataclass
+class SchemaInstance:
+    """
+    Represents a schematic instance in the hierarchy.
+    """
+    file_path: pathlib.Path
+    sheet_name: str
+    parsed_sexp: Any
+    child_instances: list['SchemaInstance'] = field(default_factory=list)
+
+
 def parse_endpoint(token: str) -> Endpoint:
     """
     Parse an endpoint in the format DESIGNATOR.PAD.
@@ -759,16 +770,110 @@ def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
     return pcb_file_path, sch_file_path
 
 
-def extract_directives_from_eeschema(sch_file_path: pathlib.Path) -> list[Directive]:
-    # First load the input schematic file
+def build_schema_hierarchy(sch_file_path: pathlib.Path,
+                           sheet_name: str = "Root") -> SchemaInstance:
+    """
+    Build the complete schematic hierarchy starting from a root schematic.
+    """
+    # Resolve the path to handle any relative references consistently
+    sch_file_path = sch_file_path.resolve()
+
+    # Parse the schematic file once
     with open(sch_file_path, "r") as f:
         import sexpdata
-        sexpr = sexpdata.load(f)
+        parsed_sexp = sexpdata.load(f)
+
+    # Create the schema instance
+    schema_instance = SchemaInstance(
+        file_path=sch_file_path,
+        sheet_name=sheet_name,
+        parsed_sexp=parsed_sexp,
+        child_instances=[]
+    )
+
+    # Find sheet elements in the parsed data
+    def find_sheet_elements(sexp_data):
+        """Recursively find all (sheet ...) elements in the sexp tree."""
+        if not isinstance(sexp_data, list):
+            return []
+
+        ret = []
+
+        if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol("sheet"):
+            ret.append(sexp_data)
+
+        for item in sexp_data:
+            ret.extend(find_sheet_elements(item))
+
+        return ret
+
+    def extract_sheet_properties(sheet_element):
+        """Extract Sheetname and Sheetfile properties from a sheet element."""
+        sheetname = None
+        sheetfile = None
+
+        for item in sheet_element:
+            if (isinstance(item, list) and len(item) >= 3 and
+                    item[0] == sexpdata.Symbol("property")):
+                if item[1] == "Sheetname":
+                    sheetname = item[2]
+                elif item[1] == "Sheetfile":
+                    sheetfile = item[2]
+
+        if sheetname is None:
+            log.warning(f"Sheetname not found in {sheet_element}")
+
+        return sheetname, sheetfile
+
+    # Process all sheet elements
+    sheet_elements = find_sheet_elements(parsed_sexp)
+
+    for sheet_element in sheet_elements:
+        sheetname, sheetfile = extract_sheet_properties(sheet_element)
+
+        if not sheetfile:
+            log.warning(f"Sheetfile not found in {sheet_element}, skipping this child")
+            continue
+
+        # Resolve relative path relative to the parent schematic directory
+        nested_sch_path = sch_file_path.parent / sheetfile
+
+        if not nested_sch_path.exists():
+            log.warning(f"Referenced schematic file not at {nested_sch_path}, skipping this child")
+            continue
+
+        child_instance = build_schema_hierarchy(
+            nested_sch_path,
+            sheetname or "Unnamed"
+        )
+        schema_instance.child_instances.append(child_instance)
+
+    return schema_instance
+
+
+def flatten_schema_hierarchy(schema_instance: SchemaInstance) -> list[SchemaInstance]:
+    """
+    Flatten a schema hierarchy into a list of all instances.
+
+    Args:
+        schema_instance: Root schema instance
+
+    Returns:
+        List of all schema instances in the hierarchy (root first, then children)
+    """
+    result = [schema_instance]
+
+    for child_instance in schema_instance.child_instances:
+        result.extend(flatten_schema_hierarchy(child_instance))
+
+    return result
+
+
+def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
+    import sexpdata
 
     def find_text_elements(sexp_data):
-        # Recurse to find all (text ...) elements in the sexp tree
-        # This might be overkill, since I think they only live at the
-        # top level
+        """Recursively find all (text ...) elements in the sexp tree."""
         if not isinstance(sexp_data, list):
             return []
 
@@ -783,6 +888,7 @@ def extract_directives_from_eeschema(sch_file_path: pathlib.Path) -> list[Direct
         return ret
 
     def extract_content_from_text_element(text_element):
+        """Extract text content from a text element."""
         assert isinstance(text_element, list)
         assert text_element[0] == sexpdata.Symbol("text")
         # This should probably always be the second element
@@ -790,14 +896,52 @@ def extract_directives_from_eeschema(sch_file_path: pathlib.Path) -> list[Direct
 
     all_texts = [
         extract_content_from_text_element(text_element)
-        for text_element in find_text_elements(sexpr)
+        for text_element in find_text_elements(instance.parsed_sexp)
     ]
 
-    directives = [
+    return [
         Directive.parse(text)
         for text in all_texts
         if text.startswith("!padne")
     ]
+
+
+def extract_directives_from_hierarchy(schema_instance: SchemaInstance) -> list[Directive]:
+    """
+    Extract all directives from a schematic hierarchy.
+
+    Args:
+        schema_instance: Root of the schematic hierarchy
+
+    Returns:
+        List of all directives found in the hierarchy (deduplicated by file path)
+    """
+    # Flatten the hierarchy to get all instances
+    all_instances = flatten_schema_hierarchy(schema_instance)
+
+    # Track processed file paths to avoid duplicates
+    processed_files: set[pathlib.Path] = set()
+    directives = []
+
+    # Iterate through all instances and extract directives from unique files
+    for instance in all_instances:
+        # Skip if this file has already been processed
+        if instance.file_path in processed_files:
+            warnings.warn(f"Schematic files with multiple instances are not supported, loaded only one instance of {instance.file_path}, skipping the rest")
+            continue
+
+        # Mark this file as processed
+        processed_files.add(instance.file_path)
+
+        # Extract directives from this instance (if it has content)
+        if instance.parsed_sexp is None:
+            # This should not happen I think?
+            log.error(f"Parsed S-expression is None for instance: {instance.file_path}")
+            continue
+
+        instance_directives = extract_directives_from_schema(instance)
+
+        directives.extend(instance_directives)
 
     return directives
 
@@ -1153,7 +1297,9 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     board = pcbnew.LoadBoard(str(pcb_file_path))
     stackup = extract_stackup_from_kicad_pcb(board)
     plotted_layers = render_gerbers_from_kicad(board)
-    directives = process_directives(extract_directives_from_eeschema(sch_file_path))
+    # Build schematic hierarchy first, then extract directives
+    schema_hierarchy = build_schema_hierarchy(sch_file_path)
+    directives = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
 
     if not verify_stackup_contains_all_layers(stackup, plotted_layers):
         raise ValueError("Stackup does not contain all plotted layers")

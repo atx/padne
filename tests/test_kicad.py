@@ -293,9 +293,10 @@ class TestDirectiveParse:
         project = kicad_test_projects["simple_geometry"]
         assert project.sch_path.exists(), "Schematic file of simple_geometry project does not exist"
 
-        # Extract the raw directive strings from the schematic file
+        # Extract directives using the hierarchy-based approach
+        schema_hierarchy = kicad.build_schema_hierarchy(project.sch_path)
         directives = kicad.process_directives(
-            kicad.extract_directives_from_eeschema(project.sch_path)
+            kicad.extract_directives_from_hierarchy(schema_hierarchy)
         )
         # Expecting exactly two directives based on our simple_geometry project
         assert len(directives.lumped_specs) == 2, f"Expected 2 lumped elements, got {len(directives.lumped_specs)}"
@@ -331,6 +332,38 @@ class TestDirectiveParse:
             "Resistor directive endpoint B designator should be R3"
         assert resistor_spec.endpoints["b"][0].pad == "2", \
             "Resistor directive endpoint B pad should be 2"
+
+    def test_nested_schematic_directives(self, kicad_test_projects):
+        """Test that directives are loaded from both root and nested schematics."""
+        # Get the nested_schematic project
+        project = kicad_test_projects["nested_schematic"]
+        assert project.sch_path.exists(), "Schematic file of nested_schematic project does not exist"
+
+        # Load the project and extract directives
+        kicad_problem = kicad.load_kicad_project(project.pro_path)
+
+        # Should have exactly 2 lumped elements: 1 from root + 1 from nested schematic
+        assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
+
+        # Extract the voltage source and resistor by type
+        voltage_source_element = None
+        resistor_element = None
+
+        for network in kicad_problem.networks:
+            for element in network.elements:
+                if isinstance(element, problem.VoltageSource):
+                    voltage_source_element = element
+                elif isinstance(element, problem.Resistor):
+                    resistor_element = element
+
+        assert voltage_source_element is not None, "VOLTAGE directive from root schematic not found"
+        assert resistor_element is not None, "RESISTANCE directive from nested schematic not found"
+
+        # Verify the voltage source properties (from root schematic)
+        assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
+
+        # Verify the resistor properties (from nested schematic)
+        assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
 
 
 class TestStackup:
