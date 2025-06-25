@@ -1039,7 +1039,8 @@ class TestComputeTriangleGradient:
 class TestSolverEndToEnd:
 
     @for_all_kicad_projects(exclude=["tht_component",
-                                     "unterminated_current_loop"])
+                                     "unterminated_current_loop",
+                                     "nested_schematic_twoinstances"])
     def test_all_test_projects_solve(self, project):
         """Test that solver.solve works on all test projects."""
         # Load the problem from the KiCad project
@@ -1073,7 +1074,8 @@ class TestSolverEndToEnd:
                                      "complicated_trace_current",
                                      "two_lumped_elements_one_pad",
                                      "via_tht_4layer",
-                                     "voltage_source_multipad_degeneration"])
+                                     "voltage_source_multipad_degeneration",
+                                     "nested_schematic_twoinstances"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)

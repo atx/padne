@@ -372,7 +372,8 @@ class TestDirectiveParse:
         assert project.sch_path.exists(), "Schematic file of nested_schematic_twoinstances project does not exist"
 
         # Load the project and extract directives
-        kicad_problem = kicad.load_kicad_project(project.pro_path)
+        with pytest.warns(UserWarning, match="Schematic files with multiple instances are not supported"):
+            kicad_problem = kicad.load_kicad_project(project.pro_path)
 
         # Should have exactly 2 lumped elements: 1 from root + 1 from nested schematic
         # Even though nested schematic is referenced twice, directive should only be extracted once
@@ -598,7 +599,7 @@ class TestLoadKicadProject:
         assert (conn_b.point.x == r3_2_point.x and
                 conn_b.point.y == r3_2_point.y)
 
-    @for_all_kicad_projects
+    @for_all_kicad_projects(exclude=["nested_schematic_twoinstances"])
     def test_lumped_points_inside_layers(self, project):
         """
         Test that for all test projects, the start and end points of lumped elements
@@ -618,7 +619,7 @@ class TestLoadKicadProject:
                     f"point {connection.point} is not inside its layer shape {connection.layer.name}"
                 )
 
-    @for_all_kicad_projects
+    @for_all_kicad_projects(exclude=["nested_schematic_twoinstances"])
     def test_all_layer_shapes_are_multipolygons(self, project):
         """
         Test that for all test projects, the shapes of all layers are MultiPolygons.
