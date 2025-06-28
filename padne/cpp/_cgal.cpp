@@ -48,7 +48,7 @@ static void setup_cdt(CDT& cdt,
         int i_start = segment.first;
         int i_end = segment.second;
 
-        if (i_end < 0 || i_start >= vertex_handles.size() ||
+        if (i_start < 0 || i_start >= vertex_handles.size() ||
             i_end < 0 || i_end >= vertex_handles.size()) {
             throw std::runtime_error("Segment indices out of bounds.");
         }
@@ -69,13 +69,13 @@ static void setup_cdt(CDT& cdt,
 
 
 void setup_mesher(Mesher& mesher,
-                  const py::object& pyconfig,
+                  const py::object& py_config,
                   const std::vector<std::pair<double, double>>& seeds) {
     // TODO: We probably want to have the b value in the python object directly...
-    auto minimum_angle = pyconfig.attr("minimum_angle").cast<float>();
+    auto minimum_angle = py_config.attr("minimum_angle").cast<float>();
     auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
     auto b = 1 / (4*B*B);
-    auto maximum_size = pyconfig.attr("maximum_size").cast<float>();
+    auto maximum_size = py_config.attr("maximum_size").cast<float>();
     mesher.set_criteria(Criteria(b, maximum_size));
 
     // Now we insert the seeds
@@ -124,7 +124,7 @@ std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
 }
 
 
-py::dict mesh(const py::object& pyconfig,
+py::dict mesh(const py::object& py_config,
               const std::vector<std::pair<double, double>>& vertices,
               const std::vector<std::pair<int, int>>& segments,
               const std::vector<std::pair<double, double>>& seeds) {
@@ -136,7 +136,7 @@ py::dict mesh(const py::object& pyconfig,
     setup_cdt(cdt, vertices, segments, seeds);
 
     Mesher mesher(cdt);
-    setup_mesher(mesher, pyconfig, seeds);
+    setup_mesher(mesher, py_config, seeds);
 
     mesher.refine_mesh();
 
