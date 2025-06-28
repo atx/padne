@@ -589,6 +589,56 @@ class ViaSpec:
         return length / (conductivity * cross_sectional_area)
 
 
+@dataclass(frozen=True)
+class KiCadProject:
+    """
+    Represents a KiCad project with paths to its component files.
+    """
+    pro_path: Path
+    pcb_path: Path
+    sch_path: Path
+
+    @property
+    def name(self) -> str:
+        """Get the project name (stem of the project file)."""
+        return self.pro_path.stem
+
+    @classmethod
+    def from_pro_file(cls, pro_file_path: Path) -> 'KiCadProject':
+        """
+        Create a KiCadProject from a .kicad_pro file path.
+
+        Args:
+            pro_file_path: Path to the KiCad project file (*.kicad_pro)
+
+        Returns:
+            A KiCadProject instance with validated file paths
+
+        Raises:
+            FileNotFoundError: If any required files are missing
+        """
+        pro_file_path = Path(pro_file_path)
+
+        if not pro_file_path.exists():
+            raise FileNotFoundError(f"Project file not found: {pro_file_path}")
+
+        base_name = pro_file_path.stem
+
+        pcb_file_path = pro_file_path.parent / f"{base_name}.kicad_pcb"
+        if not pcb_file_path.exists():
+            raise FileNotFoundError(f"PCB file not found: {pcb_file_path}")
+
+        sch_file_path = pro_file_path.parent / f"{base_name}.kicad_sch"
+        if not sch_file_path.exists():
+            raise FileNotFoundError(f"Schematic file not found: {sch_file_path}")
+
+        return cls(
+            pro_path=pro_file_path,
+            pcb_path=pcb_file_path,
+            sch_path=sch_file_path
+        )
+
+
 def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
     """
     Extract via specifications from a KiCad PCB.
@@ -741,33 +791,6 @@ def process_directives(directives: list[Directive]) -> Directives:
         lumped_specs.append(lumped_spec)
 
     return Directives(lumped_specs=lumped_specs)
-
-
-def find_associated_files(pro_file_path: pathlib.Path) -> tuple[Path, Path]:
-    """
-    Given a KiCad project file, return the associated PCB and schematic file paths.
-
-    Args:
-        pro_file_path: The KiCad project file (*.kicad_pro)
-
-    Returns:
-        A tuple of (pcb_file_path, sch_file_path)
-    """
-
-    if not pro_file_path.exists():
-        raise FileNotFoundError(f"Project file not found: {pro_file_path}")
-
-    base_name = pro_file_path.stem
-
-    pcb_file_path = pro_file_path.parent / f"{base_name}.kicad_pcb"
-    if not pcb_file_path.exists():
-        raise FileNotFoundError(f"PCB file not found: {pcb_file_path}")
-
-    sch_file_path = pro_file_path.parent / f"{base_name}.kicad_sch"
-    if not sch_file_path.exists():
-        raise FileNotFoundError(f"Schematic file not found: {sch_file_path}")
-
-    return pcb_file_path, sch_file_path
 
 
 def build_schema_hierarchy(sch_file_path: pathlib.Path,
@@ -1280,7 +1303,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     Load a KiCad project and create a Problem object for PDN simulation.
 
     Args:
-        pro_file_path: Path to the KiCad project file (*.kicad_pro)
+        project: Either a path to the KiCad project file (*.kicad_pro) or a KiCadProject instance
 
     Returns:
         A Problem object containing layers and lumped elements
@@ -1289,16 +1312,15 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         FileNotFoundError: If required files are missing
         ValueError: If the project contains invalid data
     """
-    # Find associated PCB and schematic files
-    pcb_file_path, sch_file_path = find_associated_files(pro_file_path)
+    project = KiCadProject.from_pro_file(pro_file_path)
 
     # Load metadata and geometry from the PCB file
     log.info("Plotting layers to gerbers")
-    board = pcbnew.LoadBoard(str(pcb_file_path))
+    board = pcbnew.LoadBoard(str(project.pcb_path))
     stackup = extract_stackup_from_kicad_pcb(board)
     plotted_layers = render_gerbers_from_kicad(board)
     # Build schematic hierarchy first, then extract directives
-    schema_hierarchy = build_schema_hierarchy(sch_file_path)
+    schema_hierarchy = build_schema_hierarchy(project.sch_path)
     directives = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
 
     if not verify_stackup_contains_all_layers(stackup, plotted_layers):

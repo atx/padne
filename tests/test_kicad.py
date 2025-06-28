@@ -16,6 +16,79 @@ from padne import kicad, problem
 from conftest import for_all_kicad_projects
 
 
+class TestKiCadProject:
+
+    def test_from_pro_file_success(self):
+        """Test that from_pro_file() successfully creates KiCadProject instances."""
+        # Get the simple_geometry project path manually
+        kicad_dir = Path(__file__).parent / "kicad"
+        pro_path = kicad_dir / "simple_geometry" / "simple_geometry.kicad_pro"
+
+        # Create a KiCadProject using from_pro_file
+        project = kicad.KiCadProject.from_pro_file(pro_path)
+
+        # Verify the project was created correctly
+        assert project.name == "simple_geometry"
+        assert project.pro_path == pro_path
+        assert project.pcb_path == pro_path.parent / "simple_geometry.kicad_pcb"
+        assert project.sch_path == pro_path.parent / "simple_geometry.kicad_sch"
+
+        # Verify all files exist
+        assert project.pro_path.exists()
+        assert project.pcb_path.exists()
+        assert project.sch_path.exists()
+
+    def test_simple_geometry_paths(self):
+        """Test that paths are correctly resolved for the simple_geometry project."""
+        kicad_dir = Path(__file__).parent / "kicad"
+        pro_path = kicad_dir / "simple_geometry" / "simple_geometry.kicad_pro"
+
+        project = kicad.KiCadProject.from_pro_file(pro_path)
+
+        # Test that all paths point to the expected locations
+        expected_dir = kicad_dir / "simple_geometry"
+        assert project.pro_path == expected_dir / "simple_geometry.kicad_pro"
+        assert project.pcb_path == expected_dir / "simple_geometry.kicad_pcb"
+        assert project.sch_path == expected_dir / "simple_geometry.kicad_sch"
+
+        # Test that all paths are absolute
+        assert project.pro_path.is_absolute()
+        assert project.pcb_path.is_absolute()
+        assert project.sch_path.is_absolute()
+
+        # Test that all files have correct extensions
+        assert project.pro_path.suffix == ".kicad_pro"
+        assert project.pcb_path.suffix == ".kicad_pcb"
+        assert project.sch_path.suffix == ".kicad_sch"
+
+    def test_from_pro_file_missing_project_file(self):
+        """Test that from_pro_file() raises FileNotFoundError for missing project file."""
+        nonexistent_path = Path("/nonexistent/project.kicad_pro")
+
+        with pytest.raises(FileNotFoundError, match="Project file not found"):
+            kicad.KiCadProject.from_pro_file(nonexistent_path)
+
+    def test_from_pro_file_missing_pcb_file(self, tmp_path):
+        """Test that from_pro_file() raises FileNotFoundError for missing PCB file."""
+        # Create only the project file, but not the PCB file
+        pro_path = tmp_path / "test.kicad_pro"
+        pro_path.write_text("dummy content")
+
+        with pytest.raises(FileNotFoundError, match="PCB file not found"):
+            kicad.KiCadProject.from_pro_file(pro_path)
+
+    def test_from_pro_file_missing_sch_file(self, tmp_path):
+        """Test that from_pro_file() raises FileNotFoundError for missing schematic file."""
+        # Create project and PCB files, but not the schematic file
+        pro_path = tmp_path / "test.kicad_pro"
+        pcb_path = tmp_path / "test.kicad_pcb"
+        pro_path.write_text("dummy content")
+        pcb_path.write_text("dummy content")
+
+        with pytest.raises(FileNotFoundError, match="Schematic file not found"):
+            kicad.KiCadProject.from_pro_file(pro_path)
+
+
 class TestFixture:
 
     def test_fixture_files_exist(self, kicad_test_projects):
