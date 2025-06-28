@@ -1,8 +1,5 @@
 
 import warnings
-# This is to suppress pcbnew deprecation warning. Unfortunately the RPC API
-# is not yet cooked enough for us
-warnings.simplefilter("ignore", DeprecationWarning)
 
 import collections
 import enum
