@@ -99,6 +99,11 @@ class Resistor(BaseLumped):
     b: NodeID
     resistance: float
 
+    def __post_init__(self):
+        super().__post_init__()
+        if self.resistance <= 0:
+            raise ValueError(f"Resistance must be positive, got {self.resistance}")
+
     @property
     def terminals(self) -> list[NodeID]:
         return [self.a, self.b]
