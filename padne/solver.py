@@ -735,10 +735,6 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # where L is the "laplace operator",
     # v is the voltage vector and
     # r is the right-hand side "source" vector
-    # TODO: Maybe we need to force a ground somewhere? Honestly, I
-    # feel like as long as the solver can handle it, we can just leave everything
-    # floating and let the UI figure out. This can possibly lead to some
-    # numerical instability, so it needs more stress testing.
     N = len(vindex.global_index_to_vertex_index) + \
         node_indexer.internal_node_count + \
         len(node_indexer.extra_source_to_global_index) + \
@@ -775,10 +771,6 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
-    # TODO: This is a symmetric positive definite matrix, so we can theoretically
-    # use something like Conjugate Gradient. Unfortunately, this requires a strictly PD
-    # matrix. We can technically get that fairly easily, but it requires forcing a ground
-    # for every connected component.
     log.info("Solving the system of equations")
     v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
 

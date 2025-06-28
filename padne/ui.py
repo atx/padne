@@ -120,8 +120,6 @@ void main() {
 """
 
 
-
-
 @dataclass
 class BaseSpatialIndex:
     tree: Optional[cKDTree]

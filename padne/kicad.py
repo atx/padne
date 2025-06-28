@@ -9,6 +9,7 @@ import pathlib
 import pcbnew
 import pygerber.gerber.api
 import pygerber.vm
+import sexpdata
 import shapely
 import shapely.affinity
 import tempfile
@@ -83,7 +84,6 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
     # Unfortunately, the Python pcbnew API does not support reading the stackup
     # directly. We need to parse the file manually...
     with open(board.GetFileName(), "r") as f:
-        import sexpdata
         sexpr = sexpdata.load(f)
 
     stackup_items = []
@@ -563,6 +563,7 @@ class ViaSpec:
     def __post_init__(self):
         radius = self.drill_diameter / 2
         shape = shapely.geometry.Point(self.point).buffer(radius, quad_segs=4)
+        # Override frozen by calling setattr directly
         object.__setattr__(self, 'shape', shape)
 
     def compute_resistance(self, length: float, plating_thickness: float, conductivity: float) -> float:
@@ -800,7 +801,6 @@ def build_schema_hierarchy(sch_file_path: pathlib.Path,
 
     # Parse the schematic file once
     with open(sch_file_path, "r") as f:
-        import sexpdata
         parsed_sexp = sexpdata.load(f)
 
     # Create the schema instance
@@ -890,7 +890,6 @@ def flatten_schema_hierarchy(schema_instance: SchemaInstance) -> list[SchemaInst
 
 
 def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
-    import sexpdata
 
     def find_text_elements(sexp_data):
         """Recursively find all (text ...) elements in the sexp tree."""

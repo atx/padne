@@ -188,9 +188,6 @@ class IndexMap[T: Hashable]:
         self._idx_to_obj: list[T] = []
 
     def add(self, obj: T) -> int:
-        # TODO: Maybe we do not want to allow adding the same object multiple
-        # times? This breaks the set .add interface, but we are realistically
-        # never going to do it and it could catch bugs
         if obj not in self._obj_to_idx:
             idx = len(self._idx_to_obj)
             self._obj_to_idx[obj] = idx

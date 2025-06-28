@@ -2,7 +2,6 @@
 import shapely
 
 from dataclasses import dataclass, field
-from typing import Protocol
 
 
 # This file should specify the data structure that gets passed to the mesher
@@ -14,19 +13,12 @@ class Layer:
     """
     Represents a single copper layer of the input circuit board.
     """
-    # TODO: Theoretically, the solver does not need to distinguish layers,
-    # just a bunch of polygons with resistivity connected via lumped elements.
-    # However, the renderer _will_ need to know this.
-    # So, figuring out how to handle this correctly in the data model is important.
-    # A layer is simply a shapely multipolygon with some metadata
-    # At some point, this will get triangulated. Not quite sure what the data structure
     shape: shapely.geometry.MultiPolygon
     name: str
 
-    # Hmm, TODO: maybe it should be polygon specific? For now out of scope
     # This is in Siemens
     # Note that this is computed by
-    # conductivity [S/m] * thickness [m]
+    # conductivity [S/mm] * thickness [mm]
     conductance: float
 
 
@@ -50,7 +42,7 @@ class Connection:
 
 
 @dataclass(frozen=True)
-class BaseLumped(Protocol):
+class BaseLumped:
     """
     Represents a lumped element in the network.
     """
