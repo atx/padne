@@ -61,15 +61,6 @@ class Stackup:
         )
 
 
-DEFAULT_STACKUP = Stackup(
-    items=[
-        StackupItem(name="F.Cu", thickness=0.035, conductivity=COPPER_CONDUCTIVITY),
-        StackupItem(name="dielectric 1", thickness=1.51),
-        StackupItem(name="B.Cu", thickness=0.035, conductivity=COPPER_CONDUCTIVITY),
-    ]
-)
-
-
 def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
     """
     Iterate over layer IDs of copper layers in the given KiCad board.
@@ -80,9 +71,16 @@ def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
         yield layer_id
 
 
-def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
+def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
+                                   copper_conductivity: float = COPPER_CONDUCTIVITY
+                                   ) -> Stackup:
     """
     Extract the stackup from a KiCad PCB file.
+
+    Args:
+        board: KiCad board object
+        copper_conductivity: Optional custom copper conductivity in S/mm.
+                           If None, uses COPPER_CONDUCTIVITY constant.
     """
     # Unfortunately, the Python pcbnew API does not support reading the stackup
     # directly. We need to parse the file manually...
@@ -108,7 +106,14 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
         # I am not sure if it is possible to have no stackup section and
         # more than two layers. It seems KiCad generates the section
         # on every change in the stackup window...
-        return DEFAULT_STACKUP
+        # Use custom conductivity if provided, otherwise use default
+        return Stackup(
+            items=[
+                StackupItem(name="F.Cu", thickness=0.035, conductivity=copper_conductivity),
+                StackupItem(name="dielectric 1", thickness=1.51),
+                StackupItem(name="B.Cu", thickness=0.035, conductivity=copper_conductivity),
+            ]
+        )
 
     # Process each layer in the stackup
     for item in stackup:
@@ -130,7 +135,7 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
                     layer_type_str = prop[1].lower()
                     if "copper" in layer_type_str:
                         layer_type = StackupItem.Type.COPPER
-                        conductivity = COPPER_CONDUCTIVITY
+                        conductivity = copper_conductivity
                     elif any(x in layer_type_str for x in ['core', 'prepreg']):
                         layer_type = StackupItem.Type.DIELECTRIC
                     else:
@@ -553,6 +558,38 @@ class RegulatorSpec(BaseLumpedSpec):
 
 
 @dataclass(frozen=True)
+class CopperSpec:
+    """
+    Specifies custom copper conductivity for the project.
+    """
+    conductivity: float  # S/mm
+
+    @classmethod
+    def from_directive(cls, directive: Directive) -> 'CopperSpec':
+        """
+        Parse a COPPER directive into a CopperSpec object.
+
+        Args:
+            directive: The directive to parse
+
+        Returns:
+            A CopperSpec object with parsed conductivity
+
+        Raises:
+            ValueError: If conductivity parameter is missing or invalid
+        """
+        if "conductivity" not in directive.params:
+            raise KeyError("The parameter `conductivity` not specified for the COPPER directive")
+        # Convert from S/m to S/mm
+        conductivity = units.Value.parse(directive.params["conductivity"]).value * 1e-3
+
+        if conductivity <= 0:
+            raise ValueError(f"Conductivity must be positive, got {conductivity}")
+
+        return cls(conductivity=conductivity)
+
+
+@dataclass(frozen=True)
 class ViaSpec:
     """
     Specifies a via in the PCB.
@@ -751,6 +788,7 @@ class Directives:
     Accumulates different directive types that can be present in the schematic.
     """
     lumped_specs: list[BaseLumpedSpec]
+    copper_spec: Optional[CopperSpec] = None
 
 
 @dataclass
@@ -783,15 +821,21 @@ def process_directives(directives: list[Directive]) -> Directives:
         "REGULATOR": RegulatorSpec
     }
     lumped_specs = []
+    copper_spec = None
 
     for directive in directives:
-        if directive.name not in directive_name_to_spec_type:
+        if directive.name == "COPPER":
+            if copper_spec is not None:
+                warnings.warn("Multiple COPPER directives found, using the first one")
+                continue
+            copper_spec = CopperSpec.from_directive(directive)
+        elif directive.name in directive_name_to_spec_type:
+            lumped_spec = directive_name_to_spec_type[directive.name].from_directive(directive)
+            lumped_specs.append(lumped_spec)
+        else:
             warnings.warn(f"Unknown directive: {directive.name}")
-            continue
-        lumped_spec = directive_name_to_spec_type[directive.name].from_directive(directive)
-        lumped_specs.append(lumped_spec)
 
-    return Directives(lumped_specs=lumped_specs)
+    return Directives(lumped_specs=lumped_specs, copper_spec=copper_spec)
 
 
 def build_schema_hierarchy(sch_file_path: pathlib.Path,
@@ -1316,11 +1360,19 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Load metadata and geometry from the PCB file
     log.info("Plotting layers to gerbers")
     board = pcbnew.LoadBoard(str(project.pcb_path))
-    stackup = extract_stackup_from_kicad_pcb(board)
     plotted_layers = render_gerbers_from_kicad(board)
     # Build schematic hierarchy first, then extract directives
     schema_hierarchy = build_schema_hierarchy(project.sch_path)
     directives = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
+
+    copper_conductivity = COPPER_CONDUCTIVITY
+    # Extract custom copper conductivity if specified
+    if directives.copper_spec is not None:
+        copper_conductivity = directives.copper_spec.conductivity
+        log.info(f"Using custom copper conductivity of {copper_conductivity} S/mm")
+
+    # Create stackup with custom conductivity if provided
+    stackup = extract_stackup_from_kicad_pcb(board, copper_conductivity)
 
     if not verify_stackup_contains_all_layers(stackup, plotted_layers):
         raise ValueError("Stackup does not contain all plotted layers")

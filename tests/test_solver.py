@@ -1075,7 +1075,8 @@ class TestSolverEndToEnd:
                                      "two_lumped_elements_one_pad",
                                      "via_tht_4layer",
                                      "voltage_source_multipad_degeneration",
-                                     "nested_schematic_twoinstances"])
+                                     "nested_schematic_twoinstances",
+                                     "long_trace_current_custom_conductivity"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)

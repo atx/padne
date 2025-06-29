@@ -171,3 +171,20 @@ results in the following lumped elements being wired into the mesh:
 <img src="https://github.com/user-attachments/assets/4dd49da1-7702-42b3-8763-d371c681aada"/>
 
 Note that the resistance of the coupling resistors can be adjusted by the optional `coupling` parameter (defaults to 1mΩ).
+
+### Other directives
+
+These do not create new lumped elements, but serve instead as a way to
+inject various parameters into the simulation process.
+
+#### COPPER
+
+Specifies custom copper conductivity for all copper layers in the project, overriding the default value.
+
+**Parameters:**
+- `conductivity=VALUE` - Copper conductivity in S/m
+
+For example:
+```
+!padne COPPER conductivity=5.97e7
+```

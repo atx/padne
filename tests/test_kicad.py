@@ -816,3 +816,70 @@ class TestLoadKicadProject:
                     f"{description} at ({x}, {y}) should have copper around the hole in layer {layer.name}. "
                     f"Expected non-empty intersection but found empty geometry"
                 )
+
+    def test_copper_directive_custom_conductivity(self, kicad_test_projects):
+        """Test that COPPER directive overrides default conductivity."""
+        project = kicad_test_projects["long_trace_current_custom_conductivity"]
+        #project = kicad_test_projects["long_trace_current"]
+
+        # Load the project
+        result = kicad.load_kicad_project(project.pro_path)
+
+        # Expected custom conductivity from the schematic
+        expected_conductivity = 29.75e3  # S/mm
+
+        # All copper layers should have the custom conductivity
+        copper_layers_found = 0
+        for layer in result.layers:
+            # Copper layers should have names like "F.Cu", "B.Cu", etc.
+            if layer.name.endswith(".Cu"):
+                copper_layers_found += 1
+                # Calculate expected conductance (conductivity * thickness)
+                # Default thickness is 0.035mm for copper layers
+                expected_conductance = 0.035 * expected_conductivity
+
+                assert abs(layer.conductance - expected_conductance) < 1e-6, (
+                    f"Layer {layer.name} should have conductance {expected_conductance} "
+                    f"(from custom conductivity {expected_conductivity} S/mm), "
+                    f"but found {layer.conductance}"
+                )
+
+        # Ensure we found at least one copper layer
+        assert copper_layers_found > 0, "No copper layers found in the project"
+
+
+class TestCopperDirective:
+    """Tests for COPPER directive parsing and validation."""
+
+    def test_copper_directive_parsing(self):
+        """Test that COPPER directives are parsed correctly."""
+        directive_text = "!padne COPPER conductivity=29.75e6"
+        directive = kicad.Directive.parse(directive_text)
+
+        copper_spec = kicad.CopperSpec.from_directive(directive)
+        assert copper_spec.conductivity == 29750.0
+
+    def test_copper_directive_missing_conductivity(self):
+        """Test error when conductivity parameter is missing."""
+        directive_text = "!padne COPPER"
+        directive = kicad.Directive.parse(directive_text)
+
+        with pytest.raises(KeyError,
+                           match="The parameter `conductivity` not specified for the COPPER directive"):
+            kicad.CopperSpec.from_directive(directive)
+
+    def test_copper_directive_negative_conductivity(self):
+        """Test error when conductivity is negative."""
+        directive_text = "!padne COPPER conductivity=-1000"
+        directive = kicad.Directive.parse(directive_text)
+
+        with pytest.raises(ValueError, match="Conductivity must be positive"):
+            kicad.CopperSpec.from_directive(directive)
+
+    def test_copper_directive_zero_conductivity(self):
+        """Test error when conductivity is zero."""
+        directive_text = "!padne COPPER conductivity=0"
+        directive = kicad.Directive.parse(directive_text)
+
+        with pytest.raises(ValueError, match="Conductivity must be positive"):
+            kicad.CopperSpec.from_directive(directive)
