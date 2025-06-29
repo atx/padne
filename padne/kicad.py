@@ -26,6 +26,9 @@ log = logging.getLogger(__name__)
 # This file is responsible for loading KiCad files and converting them to our
 # internal representation.
 
+# Copper conductivity in S/mm (not S/m!)
+COPPER_CONDUCTIVITY = 5.95e4
+
 
 def nm_to_mm(f: float) -> float:
     return f / 1000000
@@ -60,9 +63,9 @@ class Stackup:
 
 DEFAULT_STACKUP = Stackup(
     items=[
-        StackupItem(name="F.Cu", thickness=0.035, conductivity=5.95e4),
+        StackupItem(name="F.Cu", thickness=0.035, conductivity=COPPER_CONDUCTIVITY),
         StackupItem(name="dielectric 1", thickness=1.51),
-        StackupItem(name="B.Cu", thickness=0.035, conductivity=5.95e4),
+        StackupItem(name="B.Cu", thickness=0.035, conductivity=COPPER_CONDUCTIVITY),
     ]
 )
 
@@ -127,7 +130,7 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD) -> Stackup:
                     layer_type_str = prop[1].lower()
                     if "copper" in layer_type_str:
                         layer_type = StackupItem.Type.COPPER
-                        conductivity = 5.95e4  # S/mm (!!! not S/m)
+                        conductivity = COPPER_CONDUCTIVITY
                     elif any(x in layer_type_str for x in ['core', 'prepreg']):
                         layer_type = StackupItem.Type.DIELECTRIC
                     else:
