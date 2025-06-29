@@ -83,6 +83,14 @@ padne is controlled by placing special text directives inside your KiCad schemat
 ![image](https://github.com/user-attachments/assets/0171c06f-a332-4b24-bcce-07ca67d9f857)
 
 
+**Index of directives:**
+- [VOLTAGE](#voltage) - Create an ideal voltage source between the specified terminals.
+- [CURRENT](#current) - Create an ideal current source flowing from one terminal to another.
+- [RESISTANCE](#resistance) - Creates a resistor between two terminals.
+- [REGULATOR](#regulator) - Creates a current-controlled current source
+- [COPPER](#copper) - Serves to specify custom copper conductivity
+
+
 ### Lumped element directives
 
 These directives specify a discrete lumped element connected to somewhere in the geometry.
