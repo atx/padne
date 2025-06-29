@@ -4,7 +4,7 @@
 ![image](https://github.com/user-attachments/assets/0792fa00-28ec-4db6-be18-a0535ac59db3)
 
 
-padne is a KiCad-native power delivery network analysis tool. It uses the finite element method in order to simulate the voltage drop induced by DC currents on printed circuit boards. This allows easy identification of resistive bottlenecks, design of high current distribution networks or implementing complex heating elements. 
+padne is a KiCad-native power delivery network analysis tool. It uses the finite element method in order to simulate the voltage drop induced by DC currents on printed circuit boards. This allows easy identification of resistive bottlenecks, design of high current distribution networks or implementing complex heating elements.
 
 ![image](https://github.com/atx/padne/actions/workflows/run-tests.yaml/badge.svg) ![image](https://github.com/atx/padne/actions/workflows/build-binary.yaml/badge.svg)
 
@@ -24,7 +24,7 @@ Simply download the binary from [here](https://atx.github.io/padne/padne-linux-x
 
 For a quick start, consider:
 ```sh
-wget https://atx.github.io/padne/padne-linux-x64 
+wget https://atx.github.io/padne/padne-linux-x64
 chmod +x padne-linux-x64
 
 # Clone the repository to get the example KiCad projects
@@ -114,7 +114,7 @@ Creates an ideal current source flowing from one terminal to another.
 
 **Parameters:**
 - `f=ENDPOINTS` - From terminal(s) (current source)
-- `t=ENDPOINTS` - To terminal(s) (current sink) 
+- `t=ENDPOINTS` - To terminal(s) (current sink)
 - `i=VALUE` - Current magnitude
 - `coupling=VALUE` - (Optional) Coupling resistance, for multi-pad terminals
 
@@ -130,7 +130,7 @@ Creates a resistor between two terminals.
 
 **Parameters:**
 - `a=ENDPOINTS` - Terminal A
-- `b=ENDPOINTS` - Terminal B  
+- `b=ENDPOINTS` - Terminal B
 - `r=VALUE` - Resistance value
 - `coupling=VALUE` - (Optional) Coupling resistance, for multi-pad terminals
 
@@ -147,7 +147,7 @@ This is effectively a current-controlled current source, that can also set a vol
 
 **Parameters:**
 - `p=ENDPOINTS` - Positive voltage sense
-- `n=ENDPOINTS` - Negative voltage sense  
+- `n=ENDPOINTS` - Negative voltage sense
 - `f=ENDPOINTS` - Current source terminal (from)
 - `t=ENDPOINTS` - Current sink terminal (to)
 - `v=VALUE` - Target voltage (V_p - V_n = v)
