@@ -8,10 +8,10 @@ padne is a KiCad-native power delivery network analysis tool. It uses the finite
 
 ![image](https://github.com/atx/padne/actions/workflows/run-tests.yaml/badge.svg) ![image](https://github.com/atx/padne/actions/workflows/build-binary.yaml/badge.svg)
 
-## Key Features
- - **KiCad Native** - Works directly with your existing KiCad projects
+## Features
+ - **KiCad Native** - Loads KiCad projects directly
  - **2.5D FEM Solver** - Uses the finite element method to quickly solve the Laplace equation
- - **Easy to integrate** - Control via simple text directives in your schematic files
+ - **Easy to integrate** - Control via ext directives in your schematic files
  - **Interactive GUI** - Contains an interactive Qt GUI for exploring the computed solution
 
 ## Installation
@@ -22,7 +22,7 @@ Two methods are supported at the moment:
 
 Simply download the binary from [here](https://atx.github.io/padne/padne-linux-x64). This comes with all dependencies already bundled. The downside is the relatively large size (around 200MB binary) and some startup time penalty (a few seconds or so).
 
-For a quick start, consider:
+For a quick start, you can run:
 ```sh
 wget https://atx.github.io/padne/padne-linux-x64
 chmod +x padne-linux-x64
@@ -32,7 +32,7 @@ git clone git@github.com:atx/padne.git
 ./padne-linux-x64 gui padne/tests/kicad/via_tht_4layer/via_tht_4layer.kicad_pro
 ```
 
-This launches a simple GUI that looks like the GIF below.
+This launches a simple GUI that looks like the GIF below:
 
 <p align="center">
 <img src="https://github.com/user-attachments/assets/2f2f0753-b140-4d7a-9dfd-50b160771076">
@@ -58,7 +58,7 @@ pip3 install --user -e .[test] -v
 
 ## Running the solver
 
-Simply do:
+To run the solver and display the solution in one step, do:
 
 ```
 padne gui my_project.kicad_pro
@@ -72,7 +72,7 @@ padne show pdn.padne
 ```
 
 > [!TIP]
-> Run `padne gui --help` to see the exposed solver parameters.
+> Run `padne gui --help` to see the exposed mesher parameters.
 
 ## Usage
 
