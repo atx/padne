@@ -196,3 +196,6 @@ For example:
 ```
 !padne COPPER conductivity=5.97e7
 ```
+
+> [!NOTE]
+> The surface conductivity is computed inside padne by extracting the stackup (copper layer thickness in particular) info from your PCB file. See `File -> Board Setup -> Physical Stackup` inside pcbnew.  
