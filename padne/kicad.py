@@ -1057,12 +1057,9 @@ def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
     plot_options.SetFormat(pcbnew.PLOT_FORMAT_GERBER)
     plot_options.SetUseGerberAttributes(True)
     plot_options.SetCreateGerberJobFile(False)
-    #plot_options.SetExcludeEdgeLayer(False) # TODO: Figure this out
     plot_options.SetUseAuxOrigin(True)
-    # TODO: This is a rather important choice - for now, we make no drill
-    # shapes and later after we get via sim online, we need to include the drill shape
-    # and handle the edge of each hole correctly
-    plot_options.SetDrillMarksType(pcbnew.DRILL_MARKS_FULL_DRILL_SHAPE)
+    # This does not apply to Gerbers anyway, but we set it for completeness
+    plot_options.SetDrillMarksType(pcbnew.DRILL_MARKS_NO_DRILL_SHAPE)
 
     # Set up layer list to plot
     gerber_layers = {}
