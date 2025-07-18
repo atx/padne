@@ -16,7 +16,7 @@ import tempfile
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Iterator, List, ClassVar
+from typing import Any, Mapping, Optional, Iterator, List, ClassVar, Iterable
 
 from . import problem, units
 
@@ -1019,7 +1019,7 @@ class PlottedGerberLayer:
     geometry: shapely.geometry.MultiPolygon
 
 
-def render_gerbers_from_kicad(board: pcbnew.BOARD) -> list[PlottedGerberLayer]:
+def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> list[PlottedGerberLayer]:
     """
     Generate Gerber files from a KiCad PCB file and convert them to PlottedGerberLayer objects.
 
@@ -1031,13 +1031,19 @@ def render_gerbers_from_kicad(board: pcbnew.BOARD) -> list[PlottedGerberLayer]:
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         # Plot gerbers and get paths to generated files
-        gerber_layers = plot_board_to_gerbers(board, Path(tmpdir))
+        gerber_layers = {}
+        for layer_id in layer_ids:
+            layer_path = Path(tmpdir) / f"{board.GetLayerName(layer_id)}.gbr"
+
+            plot_board_layer_to_gerber(board, layer_id, layer_path)
+
+            gerber_layers[layer_id] = layer_path
 
         # Extract geometry from gerber files
         return extract_layers_from_gerbers(board, gerber_layers)
 
 
-def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
+def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: Path):
     """
     Plot copper layers of a KiCad board to Gerber files.
 
@@ -1049,43 +1055,42 @@ def plot_board_to_gerbers(board, output_dir: Path) -> dict[int, Path]:
         Dictionary mapping layer IDs to paths of generated Gerber files
     """
     # Create plot controller and options
-    plot_controller = pcbnew.PLOT_CONTROLLER(board)
-    plot_options = plot_controller.GetPlotOptions()
 
-    # Configure plot options for Gerber output
-    plot_options.SetOutputDirectory(str(output_dir))
-    plot_options.SetFormat(pcbnew.PLOT_FORMAT_GERBER)
-    plot_options.SetUseGerberAttributes(True)
-    plot_options.SetCreateGerberJobFile(False)
-    plot_options.SetUseAuxOrigin(True)
-    # This does not apply to Gerbers anyway, but we set it for completeness
-    plot_options.SetDrillMarksType(pcbnew.DRILL_MARKS_NO_DRILL_SHAPE)
+    # Unfortunately, we cannot direct the resulting gerber to a specific _file path_,
+    # we can only specify the output directory and then acquire the file name
+    # for the specific layer. The cleanest way to have nice API for this function
+    # is just create another temporary directory and then move the resulting
+    # file into wherever the caller specified it to be. At the moment, this
+    # is going to be inside another directory, which is a bit dumb...
+    with tempfile.TemporaryDirectory() as tmpdir:
+        plot_controller = pcbnew.PLOT_CONTROLLER(board)
+        plot_options = plot_controller.GetPlotOptions()
 
-    # Set up layer list to plot
-    gerber_layers = {}
-
-    # Plot each copper layer
-    for layer_id in copper_layers(board):
-        # Get layer name first
-        layer_name = board.GetLayerName(layer_id)
+        # Configure plot options for Gerber output
+        plot_options.SetOutputDirectory(str(Path(tmpdir)))
+        plot_options.SetFormat(pcbnew.PLOT_FORMAT_GERBER)
+        plot_options.SetUseGerberAttributes(True)
+        plot_options.SetCreateGerberJobFile(False)
+        plot_options.SetUseAuxOrigin(True)
+        # This does not apply to Gerbers anyway, but we set it for completeness
+        plot_options.SetDrillMarksType(pcbnew.DRILL_MARKS_NO_DRILL_SHAPE)
 
         # Open plot file
         plot_controller.SetLayer(layer_id)
+        # This just sets the suffix for the file name. Not quite sure if it is
+        # necessary to set it, since we are plotting only a single layer here...
+        layer_name = board.GetLayerName(layer_id)
         plot_controller.OpenPlotfile(layer_name, pcbnew.PLOT_FORMAT_GERBER, "")
 
         # Plot the layer
         assert plot_controller.PlotLayer(), f"Failed to plot layer {layer_name}"
 
         gerber_path = Path(plot_controller.GetPlotFileName())
-
         assert gerber_path.exists(), f"Gerber file {gerber_path} does not exist"
+        gerber_path.rename(output_path)
 
-        gerber_layers[layer_id] = gerber_path
-
-    # Close the plot
-    plot_controller.ClosePlot()
-
-    return gerber_layers
+        # Close the plot
+        plot_controller.ClosePlot()
 
 
 def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile
@@ -1357,7 +1362,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Load metadata and geometry from the PCB file
     log.info("Plotting layers to gerbers")
     board = pcbnew.LoadBoard(str(project.pcb_path))
-    plotted_layers = render_gerbers_from_kicad(board)
+    plotted_layers = render_gerbers_from_kicad(board, copper_layers(board))
     # Build schematic hierarchy first, then extract directives
     schema_hierarchy = build_schema_hierarchy(project.sch_path)
     directives = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
