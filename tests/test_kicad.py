@@ -123,7 +123,7 @@ def test_gerber_render_outputs_something(kicad_test_projects):
     # Skip if the PCB file doesn't exist
     # Render gerbers from the PCB file
     board = pcbnew.LoadBoard(str(project.pcb_path))
-    layers = kicad.render_gerbers_from_kicad(board)
+    layers = kicad.render_gerbers_from_kicad(board, kicad.copper_layers(board))
 
     # Check that we got some layers back
     assert len(layers) > 0, "No layers were rendered from the PCB file"
