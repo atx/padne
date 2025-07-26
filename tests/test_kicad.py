@@ -817,6 +817,31 @@ class TestLoadKicadProject:
                     f"Expected non-empty intersection but found empty geometry"
                 )
 
+    def test_via_hole_punching_overlapping(self, kicad_test_projects):
+        """Test that overlapping vias have proper hole punching with 1.8mm radius circles."""
+        project = kicad_test_projects["overlapping_vias"]
+
+        # Load the project
+        result = kicad.load_kicad_project(project.pro_path)
+
+        centers = [
+            (101.2, 100, 1.8),
+            (122.5, 100, 1.3),
+            (148.7, 100, 1.8),
+        ]
+
+        # Test that a 1.8mm radius circle doesn't intersect any layer shapes
+        for x, y, r in centers:
+            circle_center = shapely.geometry.Point(x, y)
+            test_circle = circle_center.buffer(r)
+
+            for layer in result.layers:
+                intersection = layer.shape.intersection(test_circle)
+                assert intersection.is_empty, (
+                    f"{r}mm radius circle at ({x}, {y}) should not intersect layer {layer.name}. "
+                    f"Expected empty intersection but found geometry"
+                )
+
     def test_copper_directive_custom_conductivity(self, kicad_test_projects):
         """Test that COPPER directive overrides default conductivity."""
         project = kicad_test_projects["long_trace_current_custom_conductivity"]
