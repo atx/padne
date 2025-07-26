@@ -1170,6 +1170,62 @@ def extract_layers_from_gerbers(board,
     return plotted_layers
 
 
+def extract_board_outline(board: pcbnew.BOARD) -> Optional[shapely.geometry.MultiPolygon]:
+    """Extract board outline from a KiCad PCB. This uses the internal KiCad outline processing."""
+
+    outline_set = pcbnew.SHAPE_POLY_SET()
+
+    if not board.GetBoardPolygonOutlines(outline_set):
+        # No outline defined or it is malformed in some way
+        return None
+
+    polygons = []
+
+    def line_chain_to_coords(lch: pcbnew.SHAPE_LINE_CHAIN) -> list[tuple[float, float]]:
+        # This comes either from an outline_set.Outline or an outline_set.Hole
+        ret = []
+        for i in range(lch.PointCount()):
+            pt = lch.CPoint(i)
+            x_mm = nm_to_mm(pt.x)
+            y_mm = nm_to_mm(pt.y)
+            ret.append((x_mm, y_mm))
+        return ret
+
+    if outline_set.OutlineCount() == 0:
+        # I suspect that this should not happen and we should always fail
+        # with False above.
+        log.warning("Got outline set with no outlines")
+        return None
+
+    for outline_i in range(outline_set.OutlineCount()):
+        outline = outline_set.Outline(outline_i)
+
+        exterior_coords = line_chain_to_coords(outline)
+        if len(exterior_coords) < 3:
+            # I do not think this should ever happen
+            log.warning(f"Outline {outline_i} has less than 3 points, skipping")
+            continue
+
+        holes_coords = []
+        for hole_idx in range(outline_set.HoleCount(outline_i)):
+            hole = outline_set.Hole(outline_i, hole_idx)
+            hole_coords = line_chain_to_coords(hole)
+            if len(hole_coords) < 3:
+                # Again, probably should not happen
+                log.warning(f"Hole {hole_idx} in outline {outline_i} has less than 3 points, skipping")
+                continue
+
+            holes_coords.append(hole_coords)
+
+        poly = shapely.geometry.Polygon(
+            exterior_coords,
+            holes=holes_coords
+        )
+        polygons.append(poly)
+
+    return shapely.geometry.MultiPolygon(polygons) if polygons else None
+
+
 def process_via_spec(via_spec: ViaSpec,
                      layer_dict: dict[str, problem.Layer],
                      stackup: Stackup) -> list[problem.Network]:
@@ -1343,6 +1399,24 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
     return layer_dict
 
 
+def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
+                            outline: shapely.geometry.MultiPolygon) -> PlottedGerberLayer:
+    """Clip a plotted layer's geometry with the board outline."""
+    clipped_geometry = plotted_layer.geometry.intersection(outline)
+    if clipped_geometry.is_empty:
+        # TODO: We should remove this from the list of plotted layers
+        log.warning(f"Clipped geometry for layer {plotted_layer.name} is empty after applying outline")
+
+    if clipped_geometry.geom_type == "Polygon":
+        clipped_geometry = shapely.geometry.MultiPolygon([clipped_geometry])
+
+    return PlottedGerberLayer(
+        name=plotted_layer.name,
+        layer_id=plotted_layer.layer_id,
+        geometry=clipped_geometry
+    )
+
+
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
@@ -1363,6 +1437,13 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     log.info("Plotting layers to gerbers")
     board = pcbnew.LoadBoard(str(project.pcb_path))
     plotted_layers = render_gerbers_from_kicad(board, copper_layers(board))
+    outline = extract_board_outline(board)
+    if outline is not None:
+        plotted_layers = [
+            clip_layer_with_outline(plotted_layer, outline)
+            for plotted_layer in plotted_layers
+        ]
+
     # Build schematic hierarchy first, then extract directives
     schema_hierarchy = build_schema_hierarchy(project.sch_path)
     directives = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
