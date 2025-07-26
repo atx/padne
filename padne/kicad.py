@@ -283,10 +283,14 @@ class PadIndex:
                     self.mapping[endpoint] = []
                 self.mapping[endpoint].append(layer_point)
 
-    def insert_via_specs(self, via_specs: list["ViaSpec"]) -> None:
+    def insert_via_specs(self, via_specs: list["ViaSpec"], layer_dict: dict[str, problem.Layer]) -> None:
         """
         Insert via specifications into the mapping.
         Uses all boundary points of the via shape for all layers it connects.
+
+        Args:
+            via_specs: List of via specifications to insert
+            layer_dict: Dictionary of final layer geometries for validation
         """
         for via_spec in via_specs:
             # Only process vias that have an endpoint (THT pads)
@@ -304,6 +308,12 @@ class PadIndex:
                 # Do not forget that boundary_cords[0] == boundary_coords[-1]
                 for x, y in boundary_coords[:-1]:
                     point = shapely.geometry.Point(x, y)
+
+                    # Do not add if the point does not actually exist in the geometry
+                    layer = layer_dict[layer_name]
+                    if not layer.shape.intersects(point):
+                        continue
+
                     layer_point = LayerPoint(layer=layer_name, point=point)
 
                     # Add to mapping (initialize list if endpoint doesn't exist)
@@ -1288,6 +1298,13 @@ def process_via_spec(via_spec: ViaSpec,
 
         for x, y in boundary_coords:
             point = shapely.geometry.Point(x, y)
+
+            # Validate that the point is within the layer shapes
+            # This is probably going to suck for buried or blind vias, but
+            # we do not support those anyway yet.
+            if not layer_a.shape.intersects(point) or not layer_b.shape.intersects(point):
+                continue
+
             conn_a = problem.Connection(layer=layer_a, point=point)
             conn_b = problem.Connection(layer=layer_b, point=point)
 
@@ -1468,11 +1485,13 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
 
     log.info("Processing vias and through hole pads")
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
-    pad_index.insert_via_specs(via_specs)
+
     plotted_layers = punch_via_holes(plotted_layers, via_specs)
+    layer_dict = construct_layer_dict(plotted_layers, stackup)
+
+    pad_index.insert_via_specs(via_specs, layer_dict)
     # Note that we have to create the layer dict _after_ punching the holes,
     # since otherwise it would contain the original objects!
-    layer_dict = construct_layer_dict(plotted_layers, stackup)
     for via_spec in via_specs:
         networks.extend(process_via_spec(via_spec, layer_dict, stackup))
 

@@ -1078,7 +1078,8 @@ class TestSolverEndToEnd:
                                      "nested_schematic_twoinstances",
                                      "long_trace_current_custom_conductivity",
                                      "castellated_vias",
-                                     "castellated_vias_internal_cutout"])
+                                     "castellated_vias_internal_cutout",
+                                     "overlapping_vias"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)

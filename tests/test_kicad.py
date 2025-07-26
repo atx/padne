@@ -682,9 +682,6 @@ class TestLoadKicadProject:
         # Load the KiCad project
         kicad_problem = kicad.load_kicad_project(project.pro_path)
 
-        if "castellated_vias" in project.name:
-            pytest.xfail("Proper filtering not yet implemented")
-
         # For each lumped element network, verify that its connection points are inside the layers
         for i, network in enumerate(kicad_problem.networks):
             for j, connection in enumerate(network.connections):
