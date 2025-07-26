@@ -10,8 +10,26 @@ from pathlib import Path
 from padne.kicad import KiCadProject
 
 
+def _load_excluded_projects():
+    """Load excluded project names from excluded_kicad_projects.txt"""
+    excluded_file = Path(__file__).absolute().parent / "excluded_kicad_projects.txt"
+    excluded = set()
+
+    if not excluded_file.exists():
+        return excluded
+
+    with open(excluded_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                excluded.add(line)
+
+    return excluded
+
+
 def _kicad_test_projects():
     kicad_dir = Path(__file__).parent / "kicad"
+    excluded_projects = _load_excluded_projects()
 
     # Dictionary to store all discovered projects
     projects = {}
@@ -26,6 +44,10 @@ def _kicad_test_projects():
             continue
 
         project_name = project_dir.name
+
+        # Check if project is in the excluded list
+        if any(excluded in project_name for excluded in excluded_projects):
+            continue
 
         # Find .kicad_pro file
         pro_files = list(project_dir.glob("*.kicad_pro"))

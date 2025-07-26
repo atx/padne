@@ -170,3 +170,6 @@ cython_debug/
 .pypirc
 
 compile_commands.json
+
+# Test configuration
+tests/excluded_kicad_projects.txt
