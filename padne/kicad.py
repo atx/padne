@@ -507,33 +507,19 @@ class VoltageSourceSpec(BaseLumpedSpec):
     default_values = {"esr": 0.0}
     lumped_type = problem.VoltageSource
 
-    def construct(self,
-                  pad_index: PadIndex,
-                  layer_dict: dict[str, problem.Layer]
-                  ) -> problem.Network:
-        """
-        Custom construct method for voltage sources that properly handles
-        multiple endpoints without introducing coupling resistance.
-
-        Strategy:
-        1. Create main voltage source between first positive and first negative endpoints
-        2. Create 0V voltage sources to connect additional endpoints to the first ones
-        """
-        elements = []
-
-        # Get endpoint lists
+    def _construct_connections(self,
+                               pad_index: PadIndex,
+                               layer_dict: dict[str, problem.Layer]
+                               ) -> tuple[list[problem.Connection], list[problem.Connection]]:
         p_endpoints = self.endpoints["p"]
         n_endpoints = self.endpoints["n"]
-
         if not p_endpoints:
             raise ValueError("No positive endpoints specified for voltage source")
         if not n_endpoints:
             raise ValueError("No negative endpoints specified for voltage source")
 
-        # Create connections for all endpoints
         p_connections = []
         n_connections = []
-
         for endpoints, connections in zip([p_endpoints, n_endpoints],
                                           [p_connections, n_connections]):
             layerpoints = [
@@ -547,48 +533,80 @@ class VoltageSourceSpec(BaseLumpedSpec):
                 conn = problem.Connection(layer=layer, point=lp.point)
                 connections.append(conn)
 
-        # Create main voltage source between first positive and first negative
+        return p_connections, n_connections
+
+    def _construct_source(self,
+                          p_connection: problem.Connection,
+                          n_connection: problem.Connection
+                          ) -> list[problem.BaseLumped]:
         if self.values.get("esr", 0.0) > 0.0:
             internal_node = problem.NodeID()
             esr_resistor = problem.Resistor(
-                a=p_connections[0].node_id,
+                a=p_connection.node_id,
                 b=internal_node,
                 resistance=self.values["esr"]
             )
-            elements.append(esr_resistor)
-            main_voltage_source = problem.VoltageSource(
+            voltage_source = problem.VoltageSource(
                 p=internal_node,
-                n=n_connections[0].node_id,
-                voltage=self.values["v"]
+                n=n_connection.node_id,
+                voltage=self.values["v"],
             )
-            elements.append(main_voltage_source)
+            return [esr_resistor, voltage_source]
         else:
-            main_voltage_source = problem.VoltageSource(
-                p=p_connections[0].node_id,
-                n=n_connections[0].node_id,
+            voltage_source = problem.VoltageSource(
+                p=p_connection.node_id,
+                n=n_connection.node_id,
                 voltage=self.values["v"]
             )
-            elements.append(main_voltage_source)
+            return [voltage_source]
 
-        # TODO: It is not exactly clear if we want to do this even for non-zero
-        # ESR
-        # Create 0V voltage sources to connect additional positive terminals to first positive
-        for i in range(1, len(p_connections)):
+    def _glue_with_zero_voltage_sources(self,
+                                        main_connection: problem.Connection,
+                                        aux_connections: list[problem.Connection]
+                                        ) -> Iterable[problem.VoltageSource]:
+        # Create 0V voltage sources to connect additional terminals to the
+        # primary terminal
+        for ac in aux_connections:
             zero_v_source = problem.VoltageSource(
-                p=p_connections[i].node_id,
-                n=p_connections[0].node_id,
+                p=ac.node_id,
+                n=main_connection.node_id,
                 voltage=0.0
             )
-            elements.append(zero_v_source)
+            yield zero_v_source
 
-        # Create 0V voltage sources to connect additional negative terminals to first negative
-        for i in range(1, len(n_connections)):
-            zero_v_source = problem.VoltageSource(
-                p=n_connections[i].node_id,
-                n=n_connections[0].node_id,
-                voltage=0.0
-            )
-            elements.append(zero_v_source)
+    def construct(self,
+                  pad_index: PadIndex,
+                  layer_dict: dict[str, problem.Layer]
+                  ) -> problem.Network:
+        """
+        Custom construct method for voltage sources that properly handles
+        multiple endpoints without introducing coupling resistance.
+
+        Strategy:
+        1. Create main voltage source between first positive and first negative endpoints
+        2. Create 0V voltage sources to connect additional endpoints to the first ones
+        """
+        # First, construct the Connection objects for the positive and negative
+        # terminal
+        p_connections, n_connections = \
+            self._construct_connections(pad_index, layer_dict)
+
+        elements = []
+
+        main_source_elements = self._construct_source(p_connections[0], n_connections[0])
+        elements.extend(main_source_elements)
+
+        p_glue_sources = self._glue_with_zero_voltage_sources(
+            main_connection=p_connections[0],
+            aux_connections=p_connections[1:]
+        )
+        elements.extend(p_glue_sources)
+
+        n_glue_sources = self._glue_with_zero_voltage_sources(
+            main_connection=n_connections[0],
+            aux_connections=n_connections[1:]
+        )
+        elements.extend(n_glue_sources)
 
         return problem.Network(
             connections=(p_connections + n_connections),
