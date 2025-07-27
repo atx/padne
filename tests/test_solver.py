@@ -1079,7 +1079,8 @@ class TestSolverEndToEnd:
                                      "long_trace_current_custom_conductivity",
                                      "castellated_vias",
                                      "castellated_vias_internal_cutout",
-                                     "overlapping_vias"])
+                                     "overlapping_vias",
+                                     "long_trace_esr"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
@@ -1157,6 +1158,27 @@ class TestSolverEndToEnd:
         voltage_diff = abs(voltage_from - voltage_to)
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
             f"Voltage difference for {current_source_element} does not match expected value (diff={voltage_diff})"
+
+    def test_long_trace_esr(self, kicad_test_projects):
+        project = kicad_test_projects["long_trace_esr"]
+        # Load the problem and solve it
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob)
+
+        assert len(prob.networks) == 1, "Expected exactly one network in this test project"
+        conn_a = prob.networks[0].connections[0]
+        conn_b = prob.networks[0].connections[1]
+        if conn_a.point.x > conn_b.point.x:
+            # Ensure conn_a is always the left one
+            conn_a, conn_b = conn_b, conn_a
+
+        v_a = find_vertex_value(solution, conn_a)
+        v_b = find_vertex_value(solution, conn_b)
+
+        # The trace has resistance of 0.24 ohm and the ESR is 0.24 ohm,
+        # with voltage of 1V we should have 0.5V across the trace
+        assert v_a - v_b == pytest.approx(0.5, abs=0.01), \
+            "Voltage difference for ESR test does not match expected value"
 
     def test_complicated_trace_current_source(self, kicad_test_projects):
         project = kicad_test_projects["complicated_trace_current"]

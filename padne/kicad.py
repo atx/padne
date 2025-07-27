@@ -351,6 +351,7 @@ class BaseLumpedSpec:
     endpoint_names: ClassVar[dict[str, str]] = {}
     value_names: ClassVar[dict[str, str]] = {}
     lumped_type: ClassVar[type] = None
+    default_values: ClassVar[dict[str, float]] = {}
 
     @classmethod
     def from_directive(cls, directive: Directive) -> 'BaseLumpedSpec':
@@ -373,9 +374,14 @@ class BaseLumpedSpec:
             )
 
         for name in cls.value_names.keys():
-            if name not in directive.params:
+            if name in directive.params:
+                spec.values[name] = units.Value.parse(directive.params[name]).value
+            elif name in cls.default_values:
+                # Use default value if specified in the class
+                spec.values[name] = cls.default_values[name]
+            else:
+                # A subclass can construct default values in the values dict
                 raise ValueError(f"Missing value parameter: {name} for {directive.name}")
-            spec.values[name] = units.Value.parse(directive.params[name]).value
 
         # Parse optional coupling parameter
         if "coupling" in directive.params:
@@ -396,6 +402,7 @@ class BaseLumpedSpec:
         kwargs.update({
             arg_name: self.values[name]
             for name, arg_name in self.value_names.items()
+            if arg_name is not None  # This way, subclasses can specify parameters that are not used to construct the lumped element
         })
         return self.lumped_type(**kwargs)
 
@@ -496,7 +503,8 @@ class ResistorSpec(BaseLumpedSpec):
 class VoltageSourceSpec(BaseLumpedSpec):
 
     endpoint_names = {"p": "p", "n": "n"}
-    value_names = {"v": "voltage"}
+    value_names = {"v": "voltage", "esr": None}
+    default_values = {"esr": 0.0}
     lumped_type = problem.VoltageSource
 
     def construct(self,
@@ -540,13 +548,30 @@ class VoltageSourceSpec(BaseLumpedSpec):
                 connections.append(conn)
 
         # Create main voltage source between first positive and first negative
-        main_voltage_source = problem.VoltageSource(
-            p=p_connections[0].node_id,
-            n=n_connections[0].node_id,
-            voltage=self.values["v"]
-        )
-        elements.append(main_voltage_source)
+        if self.values.get("esr", 0.0) > 0.0:
+            internal_node = problem.NodeID()
+            esr_resistor = problem.Resistor(
+                a=p_connections[0].node_id,
+                b=internal_node,
+                resistance=self.values["esr"]
+            )
+            elements.append(esr_resistor)
+            main_voltage_source = problem.VoltageSource(
+                p=internal_node,
+                n=n_connections[0].node_id,
+                voltage=self.values["v"]
+            )
+            elements.append(main_voltage_source)
+        else:
+            main_voltage_source = problem.VoltageSource(
+                p=p_connections[0].node_id,
+                n=n_connections[0].node_id,
+                voltage=self.values["v"]
+            )
+            elements.append(main_voltage_source)
 
+        # TODO: It is not exactly clear if we want to do this even for non-zero
+        # ESR
         # Create 0V voltage sources to connect additional positive terminals to first positive
         for i in range(1, len(p_connections)):
             zero_v_source = problem.VoltageSource(
