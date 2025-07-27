@@ -383,25 +383,30 @@ class BaseLumpedSpec:
 
         return spec
 
-    def construct(self,
-                  pad_index: PadIndex,
-                  layer_dict: dict[str, problem.Layer]
-                  ) -> problem.BaseLumped:
-        """
-        Constructs a problem.BaseLumped element from the current specification.
-        This method should be implemented in subclasses to create the specific
-        type of lumped element.
-        """
-        # First, we construct the NodeID object that are connected to the endpoints
-        # of the internal lumped element we are going to create
-        internal_nodes = {
+    def _construct_internal_nodes(self) -> dict[str, problem.NodeID]:
+        return {
             internal_arg_name: problem.NodeID()
             for internal_arg_name in self.endpoint_names.values()
         }
 
-        # Next, we walk through the endpoint lists for every endpoint name
+    def _create_lumped_element(self, internal_nodes: dict[str, problem.NodeID]) -> problem.BaseLumped:
+        if not self.lumped_type:
+            raise NotImplementedError("lumped_type must be defined in subclasses")
+        kwargs = internal_nodes.copy()
+        kwargs.update({
+            arg_name: self.values[name]
+            for name, arg_name in self.value_names.items()
+        })
+        return self.lumped_type(**kwargs)
+
+    def _construct_wiring(self,
+                          pad_index: PadIndex,
+                          layer_dict: dict[str, problem.Layer],
+                          internal_nodes: dict[str, problem.NodeID]
+                          ) -> tuple[list[problem.Connection], list[problem.BaseLumped]]:
         connections = []
         elements = []
+
         for directive_param_name, endpoints_list in self.endpoints.items():
             if not endpoints_list:
                 raise ValueError(f"No endpoints specified for {directive_param_name} in {self.__class__.__name__}")
@@ -415,6 +420,7 @@ class BaseLumpedSpec:
             ]
 
             if len(layerpoints) == 1:
+                # Optimize by wiring directly to the internal node
                 lp = layerpoints[0]
                 layer = layer_dict[lp.layer]
                 conn = problem.Connection(
@@ -427,6 +433,10 @@ class BaseLumpedSpec:
                 # If there are multiple endpoints, we create a "star"
                 # shaped resistor network leading from the endpoints to the
                 # internal node
+                # Note: using a V=0 voltage sources instead of resistors
+                # may work, but I have observed weird numerical stability
+                # issues, so we do this by default and optimize in subclasses
+                # if needed
                 for lp in layerpoints:
                     layer = layer_dict[lp.layer]
                     resistor = problem.Resistor(
@@ -441,16 +451,31 @@ class BaseLumpedSpec:
                     )
                     elements.append(resistor)
                     connections.append(conn)
+        return connections, elements
 
-        # Now we can create the internal lumped element
-        if not self.lumped_type:
-            raise NotImplementedError("lumped_type must be defined in subclasses")
-        kwargs = internal_nodes.copy()
-        kwargs.update({
-            arg_name: self.values[name]
-            for name, arg_name in self.value_names.items()
-        })
-        internal_lumped = self.lumped_type(**kwargs)
+    def construct(self,
+                  pad_index: PadIndex,
+                  layer_dict: dict[str, problem.Layer]
+                  ) -> problem.BaseLumped:
+        """
+        Constructs a problem.BaseLumped element from the current specification.
+        This method should be implemented in subclasses to create the specific
+        type of lumped element.
+        """
+        # First, we construct the NodeID object that are connected to the endpoints
+        # of the internal lumped element we are going to create
+        internal_nodes = self._construct_internal_nodes()
+
+        # Next, we wire up every internal node to the actual physical pads
+        # on the PCB.
+        connections, elements = self._construct_wiring(
+            pad_index=pad_index,
+            layer_dict=layer_dict,
+            internal_nodes=internal_nodes
+        )
+
+        # Now we can create the actual internal lumped element
+        internal_lumped = self._create_lumped_element(internal_nodes)
 
         elements.append(internal_lumped)
 
