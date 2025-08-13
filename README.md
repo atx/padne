@@ -11,7 +11,7 @@ padne is a KiCad-native power delivery network analysis tool. It uses the finite
 ## Features
  - **KiCad Native** - Loads KiCad projects directly
  - **2.5D FEM Solver** - Uses the finite element method to quickly solve the Laplace equation
- - **Easy to integrate** - Control via ext directives in your schematic files
+ - **Easy to integrate** - Control via text directives in your schematic files
  - **Interactive GUI** - Contains an interactive Qt GUI for exploring the computed solution (ParaView export is also available)
 
 ## Installation
@@ -206,4 +206,4 @@ For example:
 ```
 
 > [!NOTE]
-> The surface conductivity is computed inside padne by extracting the stackup (copper layer thickness in particular) info from your PCB file. See `File -> Board Setup -> Physical Stackup` inside pcbnew.  
+> The surface conductivity is computed inside padne by extracting the stackup (copper layer thickness in particular) info from your PCB file. See `File -> Board Setup -> Physical Stackup` inside pcbnew.
