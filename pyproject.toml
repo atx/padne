@@ -24,6 +24,7 @@ authors = [
 
 # Add your runtime dependencies here
 dependencies = [
+    "lxml>=5.0.0",
     "numpy>=2.0.0",
     "pygerber>=2.4.3",
     "PySide6>=6.8.0",
