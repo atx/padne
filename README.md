@@ -12,7 +12,7 @@ padne is a KiCad-native power delivery network analysis tool. It uses the finite
  - **KiCad Native** - Loads KiCad projects directly
  - **2.5D FEM Solver** - Uses the finite element method to quickly solve the Laplace equation
  - **Easy to integrate** - Control via ext directives in your schematic files
- - **Interactive GUI** - Contains an interactive Qt GUI for exploring the computed solution
+ - **Interactive GUI** - Contains an interactive Qt GUI for exploring the computed solution (ParaView export is also available)
 
 ## Installation
 
@@ -70,6 +70,14 @@ There is also a capability for saving a solution and displaying it later:
 padne solve my_project.kicad_pro pdn.padne
 padne show pdn.padne
 ```
+
+For advanced visualization, you can export solutions to ParaView/VTK format:
+
+```
+padne paraview pdn.padne output_directory/
+```
+
+This creates separate `.vtu` files for each layer that can be opened in ParaView for visualization and analysis.
 
 > [!TIP]
 > Run `padne gui --help` to see the exposed mesher parameters.
