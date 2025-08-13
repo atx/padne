@@ -66,6 +66,75 @@ class TestFilenameSanitization:
         assert "In1-Cu.2" in used_names
 
 
+class TestDataArrayCreation:
+    def test_create_data_array_basic(self):
+        parent = lxml.etree.Element("TestParent")
+        values = [1.0, 2.0, 3.0]
+
+        result = paraview.create_data_array(parent, "Float64", values)
+
+        assert result.tag == "DataArray"
+        assert result.get("type") == "Float64"
+        assert result.get("format") == "ascii"
+        assert result.get("Name") is None
+        assert result.get("NumberOfComponents") is None
+        assert result.text == "1.0 2.0 3.0"
+
+        # Verify it was added to parent
+        assert len(parent) == 1
+        assert parent[0] == result
+
+    def test_create_data_array_with_name(self):
+        parent = lxml.etree.Element("TestParent")
+        values = [10, 20, 30]
+
+        result = paraview.create_data_array(parent, "Int32", values, name="test_array")
+
+        assert result.get("type") == "Int32"
+        assert result.get("Name") == "test_array"
+        assert result.text == "10 20 30"
+
+    def test_create_data_array_with_components(self):
+        parent = lxml.etree.Element("TestParent")
+        values = [1.0, 2.0, 0.0, 4.0, 5.0, 0.0]
+
+        result = paraview.create_data_array(parent, "Float64", values, number_of_components=3)
+
+        assert result.get("NumberOfComponents") == "3"
+        assert result.text == "1.0 2.0 0.0 4.0 5.0 0.0"
+
+    def test_create_data_array_with_name_and_components(self):
+        parent = lxml.etree.Element("TestParent")
+        values = [1, 2, 3]
+
+        result = paraview.create_data_array(
+            parent, "UInt8", values,
+            name="triangle_types",
+            number_of_components=1
+        )
+
+        assert result.get("type") == "UInt8"
+        assert result.get("Name") == "triangle_types"
+        assert result.get("NumberOfComponents") == "1"
+        assert result.text == "1 2 3"
+
+    def test_create_data_array_mixed_numeric_types(self):
+        parent = lxml.etree.Element("TestParent")
+        values = [1, 2.5, 3, 4.0]  # Mix of int and float
+
+        result = paraview.create_data_array(parent, "Float64", values)
+
+        assert result.text == "1 2.5 3 4.0"
+
+    def test_create_data_array_empty_values(self):
+        parent = lxml.etree.Element("TestParent")
+        values = []
+
+        result = paraview.create_data_array(parent, "Float64", values)
+
+        assert result.text == ""
+
+
 class TestVTKRootCreation:
     def test_create_vtk_root(self):
         root = paraview.create_vtk_root()

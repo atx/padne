@@ -9,7 +9,7 @@ visualization tools.
 import logging
 import re
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import Iterable, List, Set, Tuple
 
 import lxml.etree
 from lxml.etree import Element, SubElement
@@ -58,6 +58,41 @@ def _sanitize_filename(name: str, used_names: Set[str], fallback_prefix: str = "
     return result
 
 
+def create_data_array(
+    parent: Element,
+    data_type: str,
+    values: Iterable[int | float],
+    name: str | None = None,
+    number_of_components: int | None = None
+) -> Element:
+    """Create a DataArray element with specified type and values.
+
+    Args:
+        parent: Parent element to attach the DataArray to
+        data_type: VTK data type (e.g., "Float64", "Int32", "UInt8")
+        values: Numeric values to store in the array
+        name: Optional name attribute for the DataArray
+        number_of_components: Optional NumberOfComponents attribute
+
+    Returns:
+        Created DataArray element
+    """
+    data_array = SubElement(parent, "DataArray")
+    data_array.set("type", data_type)
+    data_array.set("format", "ascii")
+
+    if name is not None:
+        data_array.set("Name", name)
+
+    if number_of_components is not None:
+        data_array.set("NumberOfComponents", str(number_of_components))
+
+    # Convert all values to strings and join with spaces
+    data_array.text = " ".join(str(value) for value in values)
+
+    return data_array
+
+
 def create_vtk_root() -> Element:
     """Create the root VTKFile element with standard attributes.
 
@@ -83,18 +118,10 @@ def create_point_data(potentials: mesh.ZeroForm) -> Element:
     point_data = Element("PointData")
     point_data.set("Scalars", "voltage")
 
-    data_array = SubElement(point_data, "DataArray")
-    data_array.set("type", "Float64")
-    data_array.set("Name", "voltage")
-    data_array.set("format", "ascii")
-
     # Extract values in vertex index order
-    vertex_values = []
-    for vertex in potentials.mesh.vertices:
-        value = potentials[vertex]
-        vertex_values.append(str(value))
+    vertex_values = [potentials[vertex] for vertex in potentials.mesh.vertices]
 
-    data_array.text = " ".join(vertex_values)
+    create_data_array(point_data, "Float64", vertex_values, name="voltage")
     return point_data
 
 
@@ -109,17 +136,13 @@ def create_points(mesh_obj: mesh.Mesh) -> Element:
         Note: Y coordinates are negated for ParaView orientation
     """
     points = Element("Points")
-    data_array = SubElement(points, "DataArray")
-    data_array.set("type", "Float64")
-    data_array.set("NumberOfComponents", "3")
-    data_array.set("format", "ascii")
 
     # Extract coordinates in vertex index order with Y-axis negated
     coordinates = []
     for vertex in mesh_obj.vertices:
-        coordinates.extend([str(vertex.p.x), str(-vertex.p.y), "0.0"])
+        coordinates.extend([vertex.p.x, -vertex.p.y, 0.0])
 
-    data_array.text = " ".join(coordinates)
+    create_data_array(points, "Float64", coordinates, number_of_components=3)
     return points
 
 
@@ -167,35 +190,18 @@ def create_cells(mesh_obj: mesh.Mesh) -> Element:
     triangles = _extract_triangle_connectivity(mesh_obj)
 
     # Connectivity array
-    connectivity = SubElement(cells, "DataArray")
-    connectivity.set("type", "Int32")
-    connectivity.set("Name", "connectivity")
-    connectivity.set("format", "ascii")
-
     connectivity_values = []
     for tri in triangles:
-        connectivity_values.extend([str(tri[0]), str(tri[1]), str(tri[2])])
-    connectivity.text = " ".join(connectivity_values)
+        connectivity_values.extend([tri[0], tri[1], tri[2]])
+    create_data_array(cells, "Int32", connectivity_values, name="connectivity")
 
     # Offsets array
-    offsets = SubElement(cells, "DataArray")
-    offsets.set("type", "Int32")
-    offsets.set("Name", "offsets")
-    offsets.set("format", "ascii")
-
-    offset_values = []
-    for i in range(len(triangles)):
-        offset_values.append(str(3 * (i + 1)))
-    offsets.text = " ".join(offset_values)
+    offset_values = [3 * (i + 1) for i in range(len(triangles))]
+    create_data_array(cells, "Int32", offset_values, name="offsets")
 
     # Types array (all triangles = type 5)
-    types = SubElement(cells, "DataArray")
-    types.set("type", "UInt8")
-    types.set("Name", "types")
-    types.set("format", "ascii")
-
-    type_values = ["5"] * len(triangles)
-    types.text = " ".join(type_values)
+    type_values = [5] * len(triangles)
+    create_data_array(cells, "UInt8", type_values, name="types")
 
     return cells
 
