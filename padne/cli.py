@@ -10,6 +10,7 @@ import padne.kicad
 import padne.solver
 import padne.ui
 import padne.mesh
+import padne.paraview
 
 
 def setup_logging(debug_mode: bool):
@@ -99,6 +100,22 @@ def parse_args():
     )
     add_mesher_args(parser_solve)
 
+    parser_paraview = subparsers.add_parser(
+        "paraview",
+        help="Export solution to ParaView VTK format",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser_paraview.add_argument(
+        "solution_file",
+        type=Path,
+        help="Path to the pickled solution file",
+    )
+    parser_paraview.add_argument(
+        "output_dir",
+        type=Path,
+        help="Directory to save the VTU files (one per layer)",
+    )
+
     return parser.parse_args()
 
 
@@ -152,6 +169,16 @@ def do_show(args):
     return padne.ui.main(solution, project_name)
 
 
+def do_paraview(args):
+    with handle_errors():
+        log = logging.getLogger(__name__)
+        log.info(f"Loading solution from: {args.solution_file}")
+        with open(args.solution_file, "rb") as f:
+            solution = pickle.load(f)
+        padne.paraview.export_solution(solution, args.output_dir)
+        log.info(f"ParaView export completed: {args.output_dir}")
+
+
 def main():
     args = parse_args()
     setup_logging(args.debug)
@@ -163,6 +190,7 @@ def main():
         "gui": do_gui,
         "solve": do_solve,
         "show": do_show,
+        "paraview": do_paraview,
     }[args.command]
     result = command_func(args)
 
