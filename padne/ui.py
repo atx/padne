@@ -46,7 +46,7 @@ out float frag_value;
 uniform mat4 mvp;
 
 void main() {
-    gl_Position = mvp * vec4(position, 0.0, 1.0);  // Explicitly set z=0.0
+    gl_Position = mvp * vec4(position, 0.0, 1.0);
     frag_value = color;
 }
 """
@@ -89,15 +89,15 @@ in vec3 frag_color;
 out vec4 out_color;
 
 void main() {
-    out_color = vec4(frag_color, 1.0);  // Pass through the color (white)
+    out_color = vec4(frag_color, 1.0);
 }
 """
 
 VERTEX_SHADER_POINTS = """
 #version 330 core
 layout(location = 0) in vec2 position;
-layout(location = 1) in vec3 vertex_color; // Added color attribute
-out vec3 frag_color;                       // Added varying for fragment shader
+layout(location = 1) in vec3 vertex_color;
+out vec3 frag_color;
 uniform mat4 mvp;
 uniform float point_size = 5.0;
 
@@ -112,10 +112,9 @@ FRAGMENT_SHADER_POINTS = """
 #version 330 core
 in vec3 frag_color; // Input color from vertex shader
 out vec4 out_color;
-// uniform vec3 point_color = vec3(1.0, 0.0, 0.0); // Removed uniform color
 
 void main() {
-    out_color = vec4(frag_color, 1.0); // Use varying color
+    out_color = vec4(frag_color, 1.0);
 }
 """
 
@@ -131,13 +130,10 @@ class BaseSpatialIndex:
         raise NotImplementedError("This method should be implemented in subclasses")
 
     @classmethod
-    def from_layer_data(cls, layer: solver.problem.Layer, layer_solution: solver.LayerSolution):
-        if not layer_solution.meshes:
-            # Empty layer
-            return cls(None, [], layer.shape)
-
+    def from_layer_data(cls, layer: solver.problem.Layer, layer_solution: solver.LayerSolution) -> "BaseSpatialIndex":
         vertices, values = cls._extract_points_and_values(layer_solution)
 
+        # cKDTree is not happy with empty arrays, so we just return an empty index
         if not vertices:
             return cls(None, [], layer.shape)
 
@@ -226,10 +222,11 @@ class BaseTool(abc.ABC):
         pass
 
     @property
-    def shortcut(self) -> tuple[Qt.Key, Qt.KeyboardModifier] | None:
+    def shortcut(self) -> Optional[tuple[Qt.Key, Qt.KeyboardModifier]]:
         return None
 
     def on_shortcut_press(self, world_point: mesh.Point):
+        """Handles a shortcut press event."""
         pass
 
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
@@ -316,18 +313,18 @@ class ToolManager(QtCore.QObject):
             SetMaxValueTool(self.mesh_viewer, self)
         ]
 
-        self.active_tool: Optional[BaseTool] = None
-        if self.available_tools:
-            # Activate the first tool by default, but don't call on_activate yet
-            # as the tool might not be fully ready (e.g. UI elements)
-            # on_activate will be called by the first explicit activate_tool call
-            self.active_tool = self.available_tools[0]
+        # Activate the first tool by default, but don't call on_activate yet
+        # as the tool might not be fully ready (e.g. UI elements)
+        # on_activate will be called by the first explicit activate_tool call
+        self.active_tool: Optional[BaseTool] = self.available_tools[0]
 
     @Slot(BaseTool)
-    def activate_tool(self, tool_to_activate: BaseTool):
+    def activate_tool(self, tool_to_activate: Optional[BaseTool]):
         if self.active_tool == tool_to_activate:
             return
 
+        # At the moment, there should always be an active tool we are switching
+        # away from. But let's be safe and check.
         if self.active_tool:
             log.debug(f"Deactivating Tool: {self.active_tool.name}")
             self.active_tool.on_deactivate()
@@ -350,6 +347,7 @@ class ToolManager(QtCore.QObject):
     def handle_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
         if not self.active_tool:
             return
+
         log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name}. Buttons: {event.buttons()}")
         self.active_tool.on_screen_drag(dx, dy, event)
 
@@ -380,7 +378,8 @@ class AppToolBar(QToolBar):
         self.addSeparator()
         self._setupViewMenu()
         self.addSeparator()
-        self._setupLayersAndModesButtons()
+        self._setupLayersButton()
+        self._setupModesButton()
         self.addSeparator()
         self._setupViewControlActions()
 
@@ -402,7 +401,7 @@ class AppToolBar(QToolBar):
             self.addAction(action)
             tool_action_group.addAction(action)
 
-            # Set the default tool (first tool in the list) as checked
+            # Set the default tool as checked
             if self.tool_manager.active_tool == tool_instance:
                 action.setChecked(True)
 
@@ -439,9 +438,8 @@ class AppToolBar(QToolBar):
         view_menu_button.setMenu(view_menu)
         self.addWidget(view_menu_button)
 
-    def _setupLayersAndModesButtons(self):
-        """Setup the Layers and Modes dropdown buttons."""
-        # Create the "Layers" QToolButton
+    def _setupLayersButton(self):
+        """Setup the Layers dropdown button."""
         self.layers_button = QToolButton(self)
         self.layers_button.setText("Layers")
         self.layers_button.setToolTip("Select active layer (V/Shift+V)")
@@ -454,7 +452,8 @@ class AppToolBar(QToolBar):
         self.layers_button.setMenu(self.layers_menu)
         self.addWidget(self.layers_button)
 
-        # Create the "Modes" QToolButton
+    def _setupModesButton(self):
+        """Setup the Modes dropdown button."""
         self.modes_button = QToolButton(self)
         self.modes_button.setText("Modes")
         self.modes_button.setToolTip("Select rendering mode")
@@ -519,10 +518,10 @@ class AppToolBar(QToolBar):
             self.layer_action_group.addAction(action)
 
         # Ensure the currently active layer in mesh_viewer is checked
-        if self.mesh_viewer.visible_layers and self.mesh_viewer.current_layer_index < len(self.mesh_viewer.visible_layers):
-            active_layer_name = self.mesh_viewer.visible_layers[self.mesh_viewer.current_layer_index]
+        if self.mesh_viewer.visible_layers and \
+                self.mesh_viewer.current_layer_index < len(self.mesh_viewer.visible_layers):
+            active_layer_name = self.mesh_viewer.current_layer_name
             self.updateActiveLayerInMenu(active_layer_name)
-
 
     @Slot(str)
     def updateActiveLayerInMenu(self, active_layer_name: str):
@@ -942,24 +941,42 @@ class MeshViewer(QOpenGLWidget):
         return self.modes[self.current_mode_index]
 
     @property
-    def min_value(self) -> float:
-        """Get the minimum value for the current rendering mode."""
-        return self.current_rendering_mode.min_value
-
-    @min_value.setter
-    def min_value(self, value: float):
-        """Set the minimum value for the current rendering mode."""
-        self.current_rendering_mode.min_value = value
+    def current_layer_name(self) -> str:
+        """Get the name of the currently active layer."""
+        return self.visible_layers[self.current_layer_index]
 
     @property
-    def max_value(self) -> float:
-        """Get the maximum value for the current rendering mode."""
-        return self.current_rendering_mode.max_value
+    def aspect_ratio(self) -> float:
+        """Get the current aspect ratio (width/height)."""
+        return self.width() / self.height() if self.height() > 0 else 1.0
 
-    @max_value.setter
-    def max_value(self, value: float):
-        """Set the maximum value for the current rendering mode."""
-        self.current_rendering_mode.max_value = value
+    def _compute_mesh_bounds(self) -> tuple[float, float, float, float] | None:
+        """
+        Compute the bounding box of all meshes across all layers.
+
+        Returns:
+            A tuple of (min_x, min_y, max_x, max_y) or None if no vertices found.
+        """
+        if not self.solution or not self.solution.layer_solutions:
+            return None
+
+        min_x, min_y = float('inf'), float('inf')
+        max_x, max_y = float('-inf'), float('-inf')
+
+        for layer_solution in self.solution.layer_solutions:
+            for msh in layer_solution.meshes:
+                for vertex in msh.vertices:
+                    x, y = vertex.p.x, vertex.p.y
+                    min_x = min(min_x, x)
+                    min_y = min(min_y, y)
+                    max_x = max(max_x, x)
+                    max_y = max(max_y, y)
+
+        # Check if we found any vertices
+        if min_x == float('inf'):
+            return None
+
+        return min_x, min_y, max_x, max_y
 
     def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
         """
@@ -978,7 +995,7 @@ class MeshViewer(QOpenGLWidget):
         if not self.solution or not self.visible_layers:
             return None
 
-        current_layer_name = self.visible_layers[self.current_layer_index]
+        current_layer_name = self.current_layer_name
 
         # Delegate to current rendering mode
         return self.current_rendering_mode.pick_nearest_value(current_layer_name, world_x, world_y)
@@ -994,7 +1011,7 @@ class MeshViewer(QOpenGLWidget):
         self.current_rendering_mode.autoscale_values(self.solution)
 
         # Emit signal to notify about the new value range
-        self.valueRangeChanged.emit(self.min_value, self.max_value)
+        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
         self.update()
 
     def autoscaleXY(self):
@@ -1002,26 +1019,11 @@ class MeshViewer(QOpenGLWidget):
         Automatically adjust the offset and scale to fit all meshes in the view.
         Sets the view to display all meshes with a small margin around them.
         """
-        if not self.solution or not self.solution.layer_solutions:
-            return  # Nothing to scale if no solution is loaded
-
-        # Find the bounds of all meshes across all layers
-        min_x, min_y = float('inf'), float('inf')
-        max_x, max_y = float('-inf'), float('-inf')
-
-        for layer_solution in self.solution.layer_solutions:
-            # Iterate through all meshes in the layer solution
-            for msh in layer_solution.meshes:
-                for vertex in msh.vertices:
-                    x, y = vertex.p.x, vertex.p.y
-                    min_x = min(min_x, x)
-                    min_y = min(min_y, y)
-                    max_x = max(max_x, x)
-                    max_y = max(max_y, y)
-
-        # Check if we found any vertices
-        if min_x == float('inf'):
+        bounds = self._compute_mesh_bounds()
+        if bounds is None:
             return  # No vertices found
+
+        min_x, min_y, max_x, max_y = bounds
 
         # Calculate center point and dimensions
         center_x = (max_x + min_x) / 2
@@ -1037,11 +1039,8 @@ class MeshViewer(QOpenGLWidget):
         self.offset_x = -center_x
         self.offset_y = -center_y
 
-        window_width = self.width()
-        window_height = self.height()
-
         margin_factor = 0.9
-        aspect = self.width() / self.height() if self.height() > 0 else 1.0
+        aspect = self.aspect_ratio
 
         # Okay, so:
         # * the y axis is scaled to 1.0
@@ -1068,7 +1067,7 @@ class MeshViewer(QOpenGLWidget):
 
         # Emit signal with initial layer
         if self.visible_layers:
-            self.currentLayerChanged.emit(self.visible_layers[self.current_layer_index])
+            self.currentLayerChanged.emit(self.current_layer_name)
 
         # Initialize all modes and emit mode signals
         current_mode = self.current_rendering_mode
@@ -1082,7 +1081,9 @@ class MeshViewer(QOpenGLWidget):
         self.currentModeChanged.emit(current_mode.name)
         self.unitChanged.emit(current_mode.unit)
         self.colorMapChanged.emit(current_mode.color_map)
-        self.valueRangeChanged.emit(self.min_value, self.max_value)
+        self.valueRangeChanged.emit(
+            self.current_rendering_mode.min_value, self.current_rendering_mode.max_value
+        )
 
         # We can't just do autoscaleXY here, since we may be in some
         # semi-initialized state and the widget may not have reached a valid
@@ -1174,7 +1175,7 @@ class MeshViewer(QOpenGLWidget):
             self.update()
 
     def _computeMVP(self):
-        aspect = self.width() / self.height() if self.height() > 0 else 1.0
+        aspect = self.aspect_ratio
 
         # Create a 2D orthographic projection matrix
         ortho_scale = 1.0 / self.scale
@@ -1217,11 +1218,11 @@ class MeshViewer(QOpenGLWidget):
             # Set the min/max value uniforms for color scaling
             gl.glUniform1f(
                 self.mesh_shader.shader_program.uniformLocation("v_min"),
-                self.min_value
+                self.current_rendering_mode.min_value
             )
             gl.glUniform1f(
                 self.mesh_shader.shader_program.uniformLocation("v_max"),
-                self.max_value
+                self.current_rendering_mode.max_value
             )
 
             # Draw triangles for current layer only
@@ -1244,12 +1245,12 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_edges()
 
-    def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: Optional[RenderedPoints]):
+    def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: RenderedPoints):
         """Renders the connection points for the current layer."""
         if not self.connection_points_visible or not self.points_shader:
             return
 
-        if not rendered_points_obj or rendered_points_obj.point_count == 0:
+        if rendered_points_obj.point_count == 0:
             return
 
         with self.points_shader.use():
@@ -1274,16 +1275,19 @@ class MeshViewer(QOpenGLWidget):
         mvp = self._computeMVP()
 
         # Get current layer name
-        current_layer_name = self.visible_layers[self.current_layer_index]
+        current_layer_name = self.current_layer_name
 
         # Get rendered meshes directly from current mode
-        current_layer_mesh_list = self.current_rendering_mode.get_rendered_meshes_for_layer(current_layer_name)
+        current_layer_mesh_list = \
+            self.current_rendering_mode.get_rendered_meshes_for_layer(current_layer_name)
         self._renderMeshTriangles(mvp, current_layer_mesh_list)
         self._renderMeshEdges(mvp, current_layer_mesh_list)
 
-        # Use .get() for safer access, as a layer might not have connection points
-        rendered_points_obj = self.rendered_connection_points.get(current_layer_name)
-        self._renderConnectionPoints(mvp, rendered_points_obj)
+        # Do note that layers that do not have any rendered points are not
+        # represented in the rendered_connection_points dict.
+        if current_layer_name in self.rendered_connection_points:
+            rendered_points = self.rendered_connection_points[current_layer_name]
+            self._renderConnectionPoints(mvp, rendered_points)
 
         gl.glBindVertexArray(0)
 
@@ -1301,7 +1305,7 @@ class MeshViewer(QOpenGLWidget):
         ndc_x = (2.0 * viewport_x / self.width()) - 1.0
         ndc_y = (2.0 * viewport_y / self.height()) - 1.0
 
-        aspect = self.width() / self.height()
+        aspect = self.aspect_ratio
 
         # Inverse transformation based on the projection and view matrices
         # These formulas were implicitly used in _getValueFromCursor and worked for picking.
@@ -1364,7 +1368,7 @@ class MeshViewer(QOpenGLWidget):
         # User manually panned - disable automatic scaling
         self.needs_initial_autoscale = False
 
-        aspect = self.width() / self.height()
+        aspect = self.aspect_ratio
 
         # Convert screen delta to world delta
         # Horizontal movement (adjusted for aspect ratio)
@@ -1392,12 +1396,12 @@ class MeshViewer(QOpenGLWidget):
         if value is None:
             return
 
-        if value > self.max_value:
-            self.min_value = value
-            self.max_value = value
-        else:
-            self.min_value = value
-        self.valueRangeChanged.emit(self.min_value, self.max_value)
+        self.current_rendering_mode.min_value = value
+        # Enforce min_value <= max_value
+        if value > self.current_rendering_mode.max_value:
+            self.current_rendering_mode.max_value = value
+
+        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
         self.update()
 
     def setMaxValueFromWorldPoint(self, world_point: mesh.Point):
@@ -1414,12 +1418,12 @@ class MeshViewer(QOpenGLWidget):
         if value is None:
             return
 
-        if value < self.min_value:
-            self.max_value = value
-            self.min_value = value
-        else:
-            self.max_value = value
-        self.valueRangeChanged.emit(self.min_value, self.max_value)
+        self.current_rendering_mode.max_value = value
+        # Enforce min_value <= max_value
+        if value < self.current_rendering_mode.min_value:
+            self.current_rendering_mode.min_value = value
+
+        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
         self.update()
 
     def wheelEvent(self, event):
@@ -1448,7 +1452,7 @@ class MeshViewer(QOpenGLWidget):
 
         if event.key() == Qt.Key_V:
             direction = -1 if event.modifiers() & Qt.ShiftModifier else 1
-            self.switchLayer(direction)
+            self.switchLayerBy(direction)
         elif event.key() == Qt.Key_E:
             self.setEdgesVisible(not self.edges_visible)
         elif event.key() == Qt.Key_C:
@@ -1457,15 +1461,11 @@ class MeshViewer(QOpenGLWidget):
             self.autoscaleXY()
         elif event.key() == Qt.Key_A:
             self.autoscaleValue()
-        # else: # Allow other key events to be processed if not handled by shortcuts or specific keys
-            # super().keyPressEvent(event) # This might not be needed if all keys are handled via signal or specific checks
-
-        # If the event was not accepted by any tool via the signal or specific key checks,
-        # then call superclass implementation.
-        if not event.isAccepted():
+        else:
+            # Allow other key events to be processed if not handled by shortcuts or specific keys
             super().keyPressEvent(event)
 
-    def switchLayer(self, direction: int = 1):
+    def switchLayerBy(self, direction: int = 1):
         """Switch to the next or previous layer in the cycle.
 
         Args:
@@ -1476,7 +1476,7 @@ class MeshViewer(QOpenGLWidget):
 
         # Move to next/previous layer index
         self.current_layer_index = (self.current_layer_index + direction) % len(self.visible_layers)
-        current_layer = self.visible_layers[self.current_layer_index]
+        current_layer = self.current_layer_name
 
         # Emit signal with the current layer name
         self.currentLayerChanged.emit(current_layer)
@@ -1486,11 +1486,11 @@ class MeshViewer(QOpenGLWidget):
 
     def switchToNextLayer(self):
         """Switch to the next layer in the cycle."""
-        self.switchLayer(1)
+        self.switchLayerBy(1)
 
     def switchToPreviousLayer(self):
         """Switch to the previous layer in the cycle."""
-        self.switchLayer(-1)
+        self.switchLayerBy(-1)
 
     @Slot(bool)
     def setEdgesVisible(self, visible: bool):
@@ -1514,30 +1514,31 @@ class MeshViewer(QOpenGLWidget):
             self.currentLayerChanged.emit(layer_name)
             self.update()
         else:
-            log.warning(f"Attempted to set current layer to unknown layer: {layer_name}")
+            log.error(f"Attempted to set current layer to unknown layer: {layer_name}")
 
     @Slot(str)
     def setCurrentModeByName(self, mode_name: str):
         """Sets the current rendering mode by its name."""
         for index, mode in enumerate(self.modes):
-            if mode.name == mode_name:
-                old_mode_index = self.current_mode_index
-                self.current_mode_index = index
+            if mode.name != mode_name:
+                continue
 
-                # Update rendered meshes and emit signals if mode changed
-                if old_mode_index != index:
-                    # Update shader color map for new mode
-                    self._updateShaderColorMap()
+            old_mode_index = self.current_mode_index
+            self.current_mode_index = index
 
-                    # Emit signals
-                    self.currentModeChanged.emit(mode.name)
-                    self.unitChanged.emit(mode.unit)
-                    self.colorMapChanged.emit(mode.color_map)
-                    self.valueRangeChanged.emit(self.min_value, self.max_value)
-                    self.update()
+            if old_mode_index == index:
+                # Note that this is a _return_
                 return
 
-        log.warning(f"Attempted to set current mode to unknown mode: {mode_name}")
+            # Update shader color map for new mode
+            self._updateShaderColorMap()
+
+            # Emit signals
+            self.currentModeChanged.emit(mode.name)
+            self.unitChanged.emit(mode.unit)
+            self.colorMapChanged.emit(mode.color_map)
+            self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
+            self.update()
 
     def _updateShaderColorMap(self):
         """Update the shader color map uniform with the current mode's color map."""
@@ -1790,14 +1791,13 @@ class MainWindow(QMainWindow):
             self.value_label.setText(f"{current_unit}: {value_str}")
 
             # Calculate delta from the minimum value of the color scale
-            delta_value = value - self.mesh_viewer.min_value
+            delta_value = value - self.mesh_viewer.current_rendering_mode.min_value
             delta_str = units.Value(delta_value, current_unit).pretty_format(3)
             self.delta_label.setText(f"Δ: {delta_str}")
         else:
             current_unit = self.mesh_viewer.current_rendering_mode.unit
             self.value_label.setText(f"{current_unit}: ?")
             self.delta_label.setText("Δ: ?")
-
 
 
 def configure_opengl():
