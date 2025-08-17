@@ -1744,3 +1744,46 @@ class TestSolverEndToEnd:
         )
 
         voltage_check.validate(prob, solution)
+
+    def test_floating_copper_on_different_layer_gets_discarded(self, kicad_test_projects):
+        """
+        Test that floating copper on B.Cu layer is properly discarded by the solver.
+        The main idea of this test is to verify that nothing crashes if there is a layer
+        that does not have an electrically active geometry at all.
+
+        The floating_copper_on_different_layer project contains copper geometry on B.Cu
+        that is not connected to any electrical networks. The solver should:
+        1. Load the B.Cu geometry (2 polygons)
+        2. Discard it during solving since it's not electrically connected
+        3. Result in no meshes for B.Cu in the solution
+        """
+        project = kicad_test_projects["floating_copper_on_different_layer"]
+
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+
+        # Verify B.Cu layer has geometry before solving
+        b_cu_layer = None
+        for layer in prob.layers:
+            if layer.name == "B.Cu":
+                b_cu_layer = layer
+                break
+
+        assert b_cu_layer is not None, "B.Cu layer not found in project"
+        assert len(list(b_cu_layer.shape.geoms)) == 2, \
+            f"Expected 2 polygons in B.Cu geometry, got {len(list(b_cu_layer.shape.geoms))}"
+
+        # Solve the problem
+        solution = solver.solve(prob)
+
+        assert solution is not None, "Solver failed to produce a solution"
+
+        # Find the layer solution index for B.Cu
+        b_cu_layer_index = prob.layers.index(b_cu_layer)
+        b_cu_solution = solution.layer_solutions[b_cu_layer_index]
+
+        # Verify that B.Cu has no meshes in the solution (floating copper was discarded)
+        assert len(b_cu_solution.meshes) == 0, \
+            f"Expected 0 meshes for floating B.Cu layer, got {len(b_cu_solution.meshes)}"
+        assert len(b_cu_solution.potentials) == 0, \
+            f"Expected 0 potential solutions for floating B.Cu layer, got {len(b_cu_solution.potentials)}"
