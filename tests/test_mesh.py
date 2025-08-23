@@ -4,7 +4,7 @@ import pickle
 import shapely.geometry
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
-        Mesher, ZeroForm, OneForm, TwoForm
+        Mesher, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap
 
 
 class TestVector:
@@ -2418,3 +2418,155 @@ class TestTwoForm:
         # Boundary faces should still return 0.0
         for boundary in simple_mesh.boundaries:
             assert tf[boundary] == 0.0
+
+
+class TestPolyBoundaryDistanceMap:
+    """Test suite for PolyBoundaryDistanceMap functionality."""
+
+    def test_basic_rectangle_distance_map(self):
+        """Test distance map for simple rectangle."""
+        poly = shapely.geometry.box(0, 0, 10, 10)
+        dist_map = PolyBoundaryDistanceMap(poly, 0.2)
+
+        # Center should be ~5.0 (distance to nearest boundary)
+        center_dist = dist_map.query(5.0, 5.0)
+        assert 4.9 <= center_dist <= 5.1, f"Center distance {center_dist} not ~5.0"
+
+        # Point near edge should be ~1.0
+        near_edge = dist_map.query(1.0, 5.0)
+        assert 0.8 <= near_edge <= 1.2, f"Near edge distance {near_edge} not ~1.0"
+
+        # Outside points should be 0
+        assert dist_map.query(-1.0, 5.0) == 0.0, "Outside point should return 0"
+        assert dist_map.query(15.0, 5.0) == 0.0, "Outside point should return 0"
+
+        # Boundary points should be small due to quantization
+        boundary_dist = dist_map.query(0.0, 5.0)
+        assert boundary_dist < 0.25, f"Boundary point distance {boundary_dist} too large"
+
+    def test_rectangle_with_hole(self):
+        """Test distance map for rectangle with rectangular hole."""
+        outer_box = shapely.geometry.box(0, 0, 10, 10)
+        inner_box = shapely.geometry.box(3, 3, 7, 7)
+        poly = outer_box.difference(inner_box)
+
+        dist_map = PolyBoundaryDistanceMap(poly, 0.2)
+
+        # Center of hole should be 0 (outside)
+        hole_center = dist_map.query(5.0, 5.0)
+        assert hole_center == 0.0, f"Hole center should be 0, got {hole_center}"
+        hole_center = dist_map.query(5.0, 6.0)
+        assert hole_center == 0.0, f"Hole should be 0, got {hole_center}"
+
+        # Point between boundaries should have reasonable distance
+        between = dist_map.query(1.0, 5.0)
+        assert 0.5 <= between <= 2.5, f"Distance between boundaries {between} unreasonable"
+
+        # Outside outer boundary should be 0
+        assert dist_map.query(-1.0, 5.0) == 0.0, "Outside outer boundary should be 0"
+
+        # On hole boundary should be small
+        hole_boundary = dist_map.query(3.0, 5.0)
+        assert hole_boundary < 0.5, f"Hole boundary distance {hole_boundary} too large"
+
+    def test_circle_distance_map(self):
+        """Test distance map for circular polygon."""
+        center_pt = shapely.geometry.Point(5, 5)
+        circle = center_pt.buffer(3)  # Radius 3 circle at (5,5)
+
+        dist_map = PolyBoundaryDistanceMap(circle, 0.1)
+
+        # Center should be ~3.0 (radius)
+        center_dist = dist_map.query(5.0, 5.0)
+        assert 2.9 <= center_dist <= 3.1, f"Circle center distance {center_dist} not ~3.0"
+
+        # Point at radius 1 should have distance ~2.0 to boundary
+        inner_point = dist_map.query(6.0, 5.0)  # 1 unit from center
+        assert 1.5 <= inner_point <= 2.5, f"Inner point distance {inner_point} not ~2.0"
+
+        # Outside circle should be 0
+        outside = dist_map.query(10.0, 5.0)
+        assert outside == 0.0, f"Outside circle should be 0, got {outside}"
+
+    def test_circle_with_hole(self):
+        """Test distance map for circle with circular hole."""
+        outer_circle = shapely.geometry.Point(5, 5).buffer(4)
+        inner_circle = shapely.geometry.Point(5, 5).buffer(2)
+        annulus = outer_circle.difference(inner_circle)
+
+        dist_map = PolyBoundaryDistanceMap(annulus, 0.1)
+
+        # Center should be 0 (in hole)
+        center = dist_map.query(5.0, 5.0)
+        assert center == 0.0, f"Center of hole should be 0, got {center}"
+
+        # Point in annulus should have reasonable distance
+        annulus_point = dist_map.query(8.0, 5.0)  # Between inner and outer
+        assert annulus_point > 0.5, f"Annulus point distance {annulus_point} too small"
+
+        # Outside outer circle should be 0
+        outside = dist_map.query(15.0, 5.0)
+        assert outside == 0.0, f"Outside should be 0, got {outside}"
+
+    def test_distance_continuity(self):
+        """Test that distance values are continuous (no wild discontinuities)."""
+        poly = shapely.geometry.box(0, 0, 10, 10)
+        quantization = 0.5
+        dist_map = PolyBoundaryDistanceMap(poly, quantization)
+
+        # Sample along horizontal line at 10x finer resolution
+        sample_step = quantization / 10
+        y = 5.0  # Middle of rectangle
+
+        distances = []
+        x_values = []
+
+        # Sample from x=1 to x=9 (staying inside)
+        x = 1.0
+        while x <= 9.0:
+            dist = dist_map.query(x, y)
+            distances.append(dist)
+            x_values.append(x)
+            x += sample_step
+
+        # Check for wild discontinuities
+        # Even without the bilinear interpolation, jumps should be limited
+        # by `quantization`, since walking away by a single quantization should
+        # not change distance more than quantization.
+        max_allowed_jump = quantization * 0.2  # Allow some reasonable variation
+
+        for i in range(1, len(distances)):
+            diff = abs(distances[i] - distances[i-1])
+            assert diff < max_allowed_jump, \
+                f"Wild discontinuity at x={x_values[i]:.3f}: " \
+                f"distance jumped from {distances[i-1]:.3f} to {distances[i]:.3f}"
+
+        # Distances should be symmetric around center for this rectangle
+        center_idx = len(distances) // 2
+        left_dists = distances[:center_idx]
+        right_dists = list(reversed(distances[center_idx+1:]))
+
+        # Allow some tolerance for symmetry due to quantization
+        for i, (left, right) in enumerate(zip(left_dists, right_dists)):
+            diff = abs(left - right)
+            assert diff < quantization, \
+                f"Asymmetric distances at offset {i}: left={left:.3f}, right={right:.3f}"
+
+    def test_quantization_effects(self):
+        """Test that finer quantization gives more accurate results."""
+        poly = shapely.geometry.box(0, 0, 10, 10)
+
+        coarse_map = PolyBoundaryDistanceMap(poly, 1.0)
+        fine_map = PolyBoundaryDistanceMap(poly, 0.1)
+
+        # Test center point - fine should be closer to expected 5.0
+        coarse_center = coarse_map.query(5.0, 5.0)
+        fine_center = fine_map.query(5.0, 5.0)
+
+        expected = 5.0
+        coarse_error = abs(coarse_center - expected)
+        fine_error = abs(fine_center - expected)
+
+        assert 0 < fine_error < coarse_error, \
+            f"Fine quantization should be more accurate: " \
+            f"coarse_error={coarse_error:.3f}, fine_error={fine_error:.3f}"

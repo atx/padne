@@ -1,7 +1,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/iostream.h>
+#include <pybind11/embed.h>
+#include <pybind11/operators.h>
 #include <iterator>
+#include <cmath>
+#include <algorithm>
 
 //#define CGAL_USE_BASIC_VIEWER
 
@@ -10,6 +14,8 @@
 #include <CGAL/Constrained_Delaunay_triangulation_2.h>
 #include <CGAL/Delaunay_mesher_2.h>
 #include <CGAL/Delaunay_mesh_face_base_2.h>
+#include <CGAL/Mesh_2/Face_badness.h>
+#include <CGAL/Delaunay_mesh_criteria_2.h>
 
 #ifdef CGAL_USE_BASIC_VIEWER
 #include <CGAL/draw_triangulation_2.h>
@@ -17,20 +23,268 @@
 #endif
 
 namespace py = pybind11;
+using namespace pybind11::literals;
 
 // Helper macro (often used with version info passed from CMake)
 #define MACRO_STRINGIFY(x) #x
+
+// PolyBoundaryDistanceMap class for computing distance-based variable density
+class PolyBoundaryDistanceMap {
+private:
+    double min_x, max_x, min_y, max_y;
+    double quantization;
+    int width, height;
+    std::vector<double> distances;  // Flat 2D array storage
+
+    py::object shapely_polygon;  // Store original shapely polygon for queries
+
+    void compute_distances();
+
+    // Coordinate transformation methods
+    std::pair<double, double> world_to_grid(double world_x, double world_y) const;
+    std::pair<double, double> grid_to_world(int grid_i, int grid_j) const;
+    int grid_to_index(int grid_i, int grid_j) const;
+
+public:
+    PolyBoundaryDistanceMap(py::object polygon, double quantization);
+    double query(double x, double y) const;  // Bilinear interpolation
+
+    // Property accessors
+    double get_min_x() const { return min_x; }
+    double get_max_x() const { return max_x; }
+    double get_min_y() const { return min_y; }
+    double get_max_y() const { return max_y; }
+    double get_quantization() const { return quantization; }
+    int get_width() const { return width; }
+    int get_height() const { return height; }
+};
+
+// Variable density mesh size criteria implementation
+template <class CDT>
+class Variable_density_mesh_size_criteria_2 :
+    public virtual CGAL::Delaunay_mesh_criteria_2<CDT>
+{
+protected:
+  typedef typename CDT::Geom_traits Geom_traits;
+  double sizebound;
+  const PolyBoundaryDistanceMap* distance_map_ptr;
+  double min_distance;
+  double max_distance;
+  double size_factor;
+
+public:
+  typedef CGAL::Delaunay_mesh_criteria_2<CDT> Base;
+
+  // Do note that for CGAL compatibility, we require an operational
+  // constructor that takes no arguments
+  Variable_density_mesh_size_criteria_2(const double aspect_bound = 0.125,
+                                        const double size_bound = 0,
+                                        const PolyBoundaryDistanceMap* dist_map_ptr = nullptr,
+                                        const double min_dist = 0.0,
+                                        const double max_dist = 0.0,
+                                        const double sz_factor = 1.0,
+                                        const Geom_traits& traits = Geom_traits())
+    : Base(aspect_bound, traits), sizebound(size_bound), distance_map_ptr(dist_map_ptr),
+      min_distance(min_dist), max_distance(max_dist), size_factor(sz_factor) {}
+
+  inline
+  double size_bound() const { return sizebound; }
+
+  inline
+  void set_size_bound(const double sb) { sizebound = sb; }
+
+  // first: squared_minimum_sine
+  // second: size
+  struct Quality : public std::pair<double, double>
+  {
+    typedef std::pair<double, double> Base;
+
+    Quality() : Base() {};
+    Quality(double _sine, double _size) : Base(_sine, _size) {}
+
+    const double& size() const { return second; }
+    const double& sine() const { return first; }
+
+    // q1<q2 means q1 is prioritized over q2
+    // ( q1 == *this, q2 == q )
+    bool operator<(const Quality& q) const
+    {
+      if( size() > 1 )
+        if( q.size() > 1 )
+          return ( size() > q.size() );
+        else
+          return true; // *this is big but not q
+      else
+        if( q.size() >  1 )
+          return false; // q is big but not *this
+      return( sine() < q.sine() );
+    }
+
+    std::ostream& operator<<(std::ostream& out) const
+    {
+      return out << "(size=" << size()
+                 << ", sine=" << sine() << ")";
+    }
+  };
+
+  class Is_bad: public Base::Is_bad
+  {
+  protected:
+    const double base_size_bound; // base size bound for variable scaling
+    const PolyBoundaryDistanceMap* distance_map_ptr;
+    const double min_distance;
+    const double max_distance;
+    const double size_factor;
+
+  public:
+    typedef typename Base::Is_bad::Point_2 Point_2;
+
+    Is_bad(const double aspect_bound,
+           const double size_bound,
+           const PolyBoundaryDistanceMap* dist_map_ptr,
+           const double min_dist,
+           const double max_dist,
+           const double sz_factor,
+           const Geom_traits& traits)
+      : Base::Is_bad(aspect_bound, traits),
+        base_size_bound(size_bound), distance_map_ptr(dist_map_ptr),
+        min_distance(min_dist), max_distance(max_dist), size_factor(sz_factor) {}
+
+    CGAL::Mesh_2::Face_badness operator()(const Quality q) const
+    {
+      if( q.size() > 1 )
+        return CGAL::Mesh_2::IMPERATIVELY_BAD;
+      if( q.sine() < this->B )
+        return CGAL::Mesh_2::BAD;
+      else
+        return CGAL::Mesh_2::NOT_BAD;
+    }
+
+    CGAL::Mesh_2::Face_badness operator()(const typename CDT::Face_handle& fh,
+                                         Quality& q) const
+    {
+      typedef typename CDT::Geom_traits Geom_traits;
+      typedef typename Geom_traits::Compute_area_2 Compute_area_2;
+      typedef typename Geom_traits::Compute_squared_distance_2
+        Compute_squared_distance_2;
+
+      Compute_squared_distance_2 squared_distance =
+        this->traits.compute_squared_distance_2_object();
+
+      const Point_2& pa = fh->vertex(0)->point();
+      const Point_2& pb = fh->vertex(1)->point();
+      const Point_2& pc = fh->vertex(2)->point();
+
+      // Compute triangle centroid using helper method
+      auto [cx, cy] = compute_triangle_centroid(pa, pb, pc);
+
+      // Compute distance to polygon boundary using distance map
+      double boundary_distance = distance_map_ptr ? distance_map_ptr->query(cx, cy) : 0.0;
+
+      // Compute effective size bound using piecewise linear scaling
+      double effective_size_bound = compute_effective_size_bound(boundary_distance);
+      double squared_size_bound = effective_size_bound * effective_size_bound;
+
+      double
+        a = CGAL::to_double(squared_distance(pb, pc)),
+        b = CGAL::to_double(squared_distance(pc, pa)),
+        c = CGAL::to_double(squared_distance(pa, pb));
+
+      double max_sq_length; // squared max edge length
+      double second_max_sq_length;
+
+      if(a<b)
+        {
+          if(b<c) {
+            max_sq_length = c;
+            second_max_sq_length = b;
+          }
+          else { // c<=b
+            max_sq_length = b;
+            second_max_sq_length = ( a < c ? c : a );
+          }
+        }
+      else // b<=a
+        {
+          if(a<c) {
+            max_sq_length = c;
+            second_max_sq_length = a;
+          }
+          else { // c<=a
+            max_sq_length = a;
+            second_max_sq_length = ( b < c ? c : b );
+          }
+        }
+
+      q.second = 0;
+      if( squared_size_bound != 0 )
+        {
+          q.second = max_sq_length / squared_size_bound;
+            // normalized by size bound to deal
+            // with size field
+          if( q.size() > 1 )
+            {
+              q.first = 1; // (do not compute sine)
+              return CGAL::Mesh_2::IMPERATIVELY_BAD;
+            }
+        }
+
+      Compute_area_2 area_2 = this->traits.compute_area_2_object();
+
+      double area = 2*CGAL::to_double(area_2(pa, pb, pc));
+
+      q.first = (area * area) / (max_sq_length * second_max_sq_length); // (sine)
+
+      if( q.sine() < this->B )
+        return CGAL::Mesh_2::BAD;
+      else
+        return CGAL::Mesh_2::NOT_BAD;
+    }
+
+  private:
+    // Helper method to compute triangle centroid
+    std::pair<double, double> compute_triangle_centroid(const Point_2& pa, const Point_2& pb, const Point_2& pc) const {
+      double cx = (CGAL::to_double(pa.x()) + CGAL::to_double(pb.x()) + CGAL::to_double(pc.x())) / 3.0;
+      double cy = (CGAL::to_double(pa.y()) + CGAL::to_double(pb.y()) + CGAL::to_double(pc.y())) / 3.0;
+      return std::make_pair(cx, cy);
+    }
+
+    // Helper method for piecewise linear scaling
+    double compute_effective_size_bound(double boundary_distance) const {
+      // If no distance map, use uniform sizing
+      if (!distance_map_ptr) {
+        return base_size_bound;
+      }
+
+      if (boundary_distance <= min_distance) {
+        return base_size_bound;
+      } else if (boundary_distance >= max_distance) {
+        return base_size_bound * size_factor;
+      } else {
+        // Linear interpolation between min_distance and max_distance
+        double t = (boundary_distance - min_distance) / (max_distance - min_distance);
+        return base_size_bound * (1.0 + t * (size_factor - 1.0));
+      }
+    }
+  };
+
+  Is_bad is_bad_object() const
+  { return Is_bad(this->bound(), size_bound(), distance_map_ptr,
+                  min_distance, max_distance, size_factor,
+                  this->traits /* from the bad class */); }
+};
 
 typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
 typedef CGAL::Triangulation_vertex_base_2<K> Vb;
 typedef CGAL::Delaunay_mesh_face_base_2<K> Fb;
 typedef CGAL::Triangulation_data_structure_2<Vb, Fb> Tds;
 typedef CGAL::Constrained_Delaunay_triangulation_2<K, Tds> CDT;
-typedef CGAL::Delaunay_mesh_size_criteria_2<CDT> Criteria;
+typedef Variable_density_mesh_size_criteria_2<CDT> Criteria;
 typedef CGAL::Delaunay_mesher_2<CDT, Criteria> Mesher;
 
 typedef CDT::Vertex_handle Vertex_handle;
 typedef CDT::Point Point;
+
 
 static void setup_cdt(CDT& cdt,
                       const std::vector<std::pair<double, double>>& vertices,
@@ -80,13 +334,20 @@ static void set_mesher_seeds(Mesher& mesher,
 
 void setup_mesher(Mesher& mesher,
                   const py::object& py_config,
-                  const std::vector<std::pair<double, double>>& seeds) {
-    // TODO: We probably want to have the b value in the python object directly...
+                  const std::vector<std::pair<double, double>>& seeds,
+                  const PolyBoundaryDistanceMap& distance_map) {
+    // Extract standard parameters
     auto minimum_angle = py_config.attr("minimum_angle").cast<float>();
     auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
     auto b = 1 / (4*B*B);
     auto maximum_size = py_config.attr("maximum_size").cast<float>();
-    mesher.set_criteria(Criteria(b, maximum_size));
+
+    // Extract variable density parameters
+    auto min_distance = py_config.attr("variable_density_min_distance").cast<double>();
+    auto max_distance = py_config.attr("variable_density_max_distance").cast<double>();
+    auto size_factor = py_config.attr("variable_size_maximum_factor").cast<double>();
+
+    mesher.set_criteria(Criteria(b, maximum_size, &distance_map, min_distance, max_distance, size_factor, K()));
 
     // Now we insert the seeds
     // Theoretically, it should not be necessary to insert _all_ the seeds,
@@ -134,7 +395,8 @@ std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
 py::dict mesh(const py::object& py_config,
               const std::vector<std::pair<double, double>>& vertices,
               const std::vector<std::pair<int, int>>& segments,
-              const std::vector<std::pair<double, double>>& seeds) {
+              const std::vector<std::pair<double, double>>& seeds,
+              const PolyBoundaryDistanceMap& distance_map) {
 
     // Redirect via python during the scope of this function
     py::scoped_ostream_redirect stream_redirect;
@@ -143,7 +405,7 @@ py::dict mesh(const py::object& py_config,
     setup_cdt(cdt, vertices, segments, seeds);
 
     Mesher mesher(cdt);
-    setup_mesher(mesher, py_config, seeds);
+    setup_mesher(mesher, py_config, seeds, distance_map);
 
     mesher.refine_mesh();
 
@@ -157,6 +419,125 @@ py::dict mesh(const py::object& py_config,
     result["vertices"] = py_vertices;
     result["triangles"] = py_triangles;
     return result;
+}
+
+// PolyBoundaryDistanceMap implementation
+PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(py::object polygon, double quantization)
+    : shapely_polygon(polygon), quantization(quantization) {
+
+    // Extract bounding box from polygon.bounds
+    // Also add a margin such that coordinates "too far out" are reliably zero
+    auto margin = 2 * quantization;
+    py::tuple bounds = polygon.attr("bounds");
+    min_x = bounds[0].cast<double>() - margin;
+    min_y = bounds[1].cast<double>() - margin;
+    max_x = bounds[2].cast<double>() + margin;
+    max_y = bounds[3].cast<double>() + margin;
+
+    // Calculate grid dimensions
+    width = static_cast<int>(std::ceil((max_x - min_x) / quantization));
+    height = static_cast<int>(std::ceil((max_y - min_y) / quantization));
+
+    // Initialize distance array
+    distances.resize(width * height);
+
+    // Compute distances
+    compute_distances();
+}
+
+void PolyBoundaryDistanceMap::compute_distances() {
+    // Import shapely.geometry module
+    py::module shapely_geom = py::module::import("shapely.geometry");
+
+    // Get boundary object once
+    py::object boundary = shapely_polygon.attr("boundary");
+
+    for (int j = 0; j < height; ++j) {
+        for (int i = 0; i < width; ++i) {
+            // Compute world coordinates of pixel center using transformation method
+            auto [world_x, world_y] = grid_to_world(i, j);
+
+            // Create shapely Point
+            py::object point = shapely_geom.attr("Point")(world_x, world_y);
+
+            // Test containment (use covers to include boundary points)
+            bool is_inside = shapely_polygon.attr("covers")(point).cast<bool>();
+
+            double distance;
+            if (is_inside) {
+                // Compute distance to boundary
+                distance = point.attr("distance")(boundary).cast<double>();
+            } else {
+                // Outside polygon, distance = 0
+                distance = 0.0;
+            }
+
+            // Store distance in flat array using index transformation
+            distances[grid_to_index(i, j)] = distance;
+        }
+    }
+}
+
+double PolyBoundaryDistanceMap::query(double x, double y) const {
+    // Check if point is outside the polygon bounds - return 0 immediately
+    if (x < min_x || x > max_x || y < min_y || y > max_y) {
+        return 0.0;
+    }
+
+    // Convert world coordinates to grid coordinates using transformation method
+    auto [gx, gy] = world_to_grid(x, y);
+
+    // Find integer grid coordinates
+    int i0 = static_cast<int>(std::floor(gx));
+    int i1 = i0 + 1;
+    int j0 = static_cast<int>(std::floor(gy));
+    int j1 = j0 + 1;
+
+    // Clamp to valid ranges (should not be needed now due to bounds check)
+    i0 = std::max(0, std::min(width-1, i0));
+    i1 = std::max(0, std::min(width-1, i1));
+    j0 = std::max(0, std::min(height-1, j0));
+    j1 = std::max(0, std::min(height-1, j1));
+
+    // Get fractional parts for interpolation
+    double fx = gx - std::floor(gx);
+    double fy = gy - std::floor(gy);
+
+    // Handle boundary cases where we're exactly on grid lines
+    if (i1 >= width) i1 = width - 1;
+    if (j1 >= height) j1 = height - 1;
+    if (fx < 0) fx = 0;
+    if (fy < 0) fy = 0;
+
+    // Sample 4 corners using index transformation
+    double v00 = distances[grid_to_index(i0, j0)];
+    double v10 = distances[grid_to_index(i1, j0)];
+    double v01 = distances[grid_to_index(i0, j1)];
+    double v11 = distances[grid_to_index(i1, j1)];
+
+    // Bilinear interpolation
+    double v0 = v00 * (1.0 - fx) + v10 * fx;
+    double v1 = v01 * (1.0 - fx) + v11 * fx;
+    return v0 * (1.0 - fy) + v1 * fy;
+}
+
+// Coordinate transformation methods
+std::pair<double, double> PolyBoundaryDistanceMap::world_to_grid(double world_x, double world_y) const {
+    double grid_x = (world_x - min_x) / quantization;
+    double grid_y = (world_y - min_y) / quantization;
+    return std::make_pair(grid_x, grid_y);
+}
+
+std::pair<double, double> PolyBoundaryDistanceMap::grid_to_world(int grid_i, int grid_j) const {
+    // Convert grid indices to world coordinates of pixel center
+    double world_x = min_x + (grid_i + 0.5) * quantization;
+    double world_y = min_y + (grid_j + 0.5) * quantization;
+    return std::make_pair(world_x, world_y);
+}
+
+int PolyBoundaryDistanceMap::grid_to_index(int grid_i, int grid_j) const {
+    // Convert 2D grid coordinates to flat array index
+    return grid_j * width + grid_i;
 }
 
 // PYBIND11_MODULE defines the module initialization function.
@@ -184,6 +565,20 @@ PYBIND11_MODULE(_cgal, m) {
             A dictionary containing the results of the meshing process.
     )pbdoc");
 
+    py::class_<PolyBoundaryDistanceMap>(m, "PolyBoundaryDistanceMap")
+        .def(py::init<py::object, double>(),
+             "polygon"_a, "quantization"_a,
+             "Create distance map from shapely polygon")
+        .def("query", &PolyBoundaryDistanceMap::query,
+             "x"_a, "y"_a,
+             "Query distance at point using bilinear interpolation")
+        .def_property_readonly("min_x", &PolyBoundaryDistanceMap::get_min_x)
+        .def_property_readonly("max_x", &PolyBoundaryDistanceMap::get_max_x)
+        .def_property_readonly("min_y", &PolyBoundaryDistanceMap::get_min_y)
+        .def_property_readonly("max_y", &PolyBoundaryDistanceMap::get_max_y)
+        .def_property_readonly("quantization", &PolyBoundaryDistanceMap::get_quantization)
+        .def_property_readonly("width", &PolyBoundaryDistanceMap::get_width)
+        .def_property_readonly("height", &PolyBoundaryDistanceMap::get_height);
 
     m.attr("cgal_version") = CGAL_VERSION_STR;
 
