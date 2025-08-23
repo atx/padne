@@ -2,6 +2,7 @@
 import collections
 import numpy as np
 import shapely.geometry
+import padne._cgal as cgal
 
 from dataclasses import dataclass, field
 from typing import Optional, Iterable, Hashable
@@ -656,6 +657,9 @@ class TwoForm:
         return result
 
 
+PolyBoundaryDistanceMap = cgal.PolyBoundaryDistanceMap
+
+
 class Mesher:
     """
     This class is responsible for generating a mesh from a Shapely polygon.
@@ -667,6 +671,11 @@ class Mesher:
         """Configuration parameters for mesh generation."""
         minimum_angle: float = 20.0
         maximum_size: float = 0.6
+        # Variable density parameters
+        variable_density_min_distance: float = 0.5
+        variable_density_max_distance: float = 3.0
+        variable_size_maximum_factor: float = 3.0
+        distance_map_quantization: float = 1.0
 
         # Static relaxed configuration for disconnected copper triangulation
         RELAXED = None  # Will be initialized after class definition
@@ -687,6 +696,8 @@ class Mesher:
         Returns:
             Tuple of (vertices, segments, seeds) for CGAL functions
         """
+        # This serves to deduplicate vertices.
+        # In theory, deduplication should not be needed
         vertices = []
         segments = []
         seeds = [
@@ -732,7 +743,11 @@ class Mesher:
         import padne._cgal as cgal
 
         vertices, segments, seeds = self._prepare_polygon_for_cgal(poly, seed_points)
-        cgal_output = cgal.mesh(self.config, vertices, segments, seeds)
+
+        # Create distance map for variable density meshing
+        distance_map = cgal.PolyBoundaryDistanceMap(poly, self.config.distance_map_quantization)
+
+        cgal_output = cgal.mesh(self.config, vertices, segments, seeds, distance_map)
 
         mesh = Mesh.from_triangle_soup(
             [Point(*p) for p in cgal_output['vertices']],
