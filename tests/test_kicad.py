@@ -16,6 +16,86 @@ from padne import kicad, problem
 from conftest import for_all_kicad_projects
 
 
+class Utils:
+    """Utility functions for KiCad test operations."""
+
+    @staticmethod
+    def setup_layer_dict_and_pad_index(board):
+        """
+        Set up layer dictionary and pad index from a KiCad board.
+
+        This utility method encapsulates the common pattern of:
+        1. Rendering gerbers from KiCad
+        2. Extracting and applying board outline clipping
+        3. Extracting via specs and punching holes
+        4. Creating stackup and layer dictionary
+        5. Creating and loading PadIndex with SMD pads
+
+        Args:
+            board: A KiCad board object loaded via pcbnew.LoadBoard()
+
+        Returns:
+            tuple: (layer_dict, pad_index) where layer_dict contains processed
+                   layer geometry and pad_index contains SMD pad locations
+        """
+        # TODO: I am not particularly fond of this method being here,
+        # since it mostly replicates the code in kicad.py
+        # Render gerbers from the KiCad board
+        plotted_layers = kicad.render_gerbers_from_kicad(board, kicad.copper_layers(board))
+
+        # Extract board outline and clip layers if outline exists
+        outline = kicad.extract_board_outline(board)
+        if outline is not None:
+            plotted_layers = [
+                kicad.clip_layer_with_outline(plotted_layer, outline)
+                for plotted_layer in plotted_layers
+            ]
+
+        # Get via specs (both via and THT pad specs) and punch holes
+        via_specs = kicad.extract_via_specs_from_pcb(board) + kicad.extract_tht_pad_specs_from_pcb(board)
+        plotted_layers = kicad.punch_via_holes(plotted_layers, via_specs)
+
+        # Create stackup and layer dictionary
+        stackup = kicad.extract_stackup_from_kicad_pcb(board)
+        layer_dict = kicad.construct_layer_dict(plotted_layers, stackup)
+
+        # Create PadIndex and load SMD pads
+        pad_index = kicad.PadIndex()
+        pad_index.load_smd_pads(board, layer_dict)
+
+        return layer_dict, pad_index
+
+    @staticmethod
+    def find_first_network_with_element_type(kicad_problem, element_type, assert_only_one=False):
+        """
+        Find the first network containing an element of the specified type.
+
+        Args:
+            kicad_problem: A Problem object containing networks and elements
+            element_type: The type class to search for (e.g., problem.VoltageSource)
+            assert_only_one: If True, assert that exactly one element of this type exists
+
+        Returns:
+            tuple: (element, network) where element is the found element and network is its containing network
+
+        Raises:
+            AssertionError: If no element is found or if assert_only_one=True and multiple elements exist
+        """
+        found_elements = []
+
+        for network in kicad_problem.networks:
+            for element in network.elements:
+                if isinstance(element, element_type):
+                    found_elements.append((element, network))
+
+        assert found_elements, f"No element of type {element_type.__name__} found in any network"
+
+        if assert_only_one:
+            assert len(found_elements) == 1, f"Expected exactly one element of type {element_type.__name__}, found {len(found_elements)}"
+
+        return found_elements[0]
+
+
 class TestKiCadProject:
 
     def test_from_pro_file_success(self):
@@ -148,27 +228,8 @@ class TestPadFinder:
         # Load the KiCad board from the PCB file
         board = pcbnew.LoadBoard(str(project.pcb_path))
 
-        # We need to create layer_dict for the new API
-        # For this test, we just need the geometry, so let's get it properly
-        plotted_layers = kicad.render_gerbers_from_kicad(board, kicad.copper_layers(board))
-        outline = kicad.extract_board_outline(board)
-        if outline is not None:
-            plotted_layers = [
-                kicad.clip_layer_with_outline(plotted_layer, outline)
-                for plotted_layer in plotted_layers
-            ]
-
-        # Get via specs and punch holes
-        via_specs = kicad.extract_via_specs_from_pcb(board) + kicad.extract_tht_pad_specs_from_pcb(board)
-        plotted_layers = kicad.punch_via_holes(plotted_layers, via_specs)
-
-        # Create stackup and layer_dict
-        stackup = kicad.extract_stackup_from_kicad_pcb(board)
-        layer_dict = kicad.construct_layer_dict(plotted_layers, stackup)
-
-        # Create PadIndex and load SMD pads
-        pad_index = kicad.PadIndex()
-        pad_index.load_smd_pads(board, layer_dict)
+        # Set up layer dictionary and pad index using utility function
+        layer_dict, pad_index = Utils.setup_layer_dict_and_pad_index(board)
 
         # Try to find the pad R3.1
         endpoint = kicad.Endpoint(designator="R3", pad="1")
@@ -437,18 +498,8 @@ class TestDirectiveParse:
         assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
 
         # Extract the voltage source and resistor by type
-        voltage_source_element = None
-        resistor_element = None
-
-        for network in kicad_problem.networks:
-            for element in network.elements:
-                if isinstance(element, problem.VoltageSource):
-                    voltage_source_element = element
-                elif isinstance(element, problem.Resistor):
-                    resistor_element = element
-
-        assert voltage_source_element is not None, "VOLTAGE directive from root schematic not found"
-        assert resistor_element is not None, "RESISTANCE directive from nested schematic not found"
+        voltage_source_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.VoltageSource)
+        resistor_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.Resistor)
 
         # Verify the voltage source properties (from root schematic)
         assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
@@ -471,18 +522,8 @@ class TestDirectiveParse:
         assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
 
         # Extract the voltage source and resistor by type
-        voltage_source_element = None
-        resistor_element = None
-
-        for network in kicad_problem.networks:
-            for element in network.elements:
-                if isinstance(element, problem.VoltageSource):
-                    voltage_source_element = element
-                elif isinstance(element, problem.Resistor):
-                    resistor_element = element
-
-        assert voltage_source_element is not None, "VOLTAGE directive from root schematic not found"
-        assert resistor_element is not None, "RESISTANCE directive from nested schematic not found"
+        voltage_source_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.VoltageSource)
+        resistor_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.Resistor)
 
         # Verify the voltage source properties (from root schematic)
         assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
@@ -628,57 +669,19 @@ class TestLoadKicadProject:
         result = kicad.load_kicad_project(project.pro_path)
 
         # Find the voltage source and resistor by searching through networks
-        voltage_source_element = None
-        voltage_source_connections = []
-        resistor_element = None
-        resistor_connections = []
+        voltage_source_element, voltage_source_network = Utils.find_first_network_with_element_type(result, problem.VoltageSource)
+        resistor_element, resistor_network = Utils.find_first_network_with_element_type(result, problem.Resistor)
 
-        for network in result.networks:
-            for element in network.elements:
-                if isinstance(element, problem.VoltageSource):
-                    voltage_source_element = element
-                    voltage_source_connections = network.connections
-                    break
-            if voltage_source_element:
-                break
-
-        for network in result.networks:
-            for element in network.elements:
-                if isinstance(element, problem.Resistor):
-                    resistor_element = element
-                    resistor_connections = network.connections
-                    break
-            if resistor_element:
-                break
-
-        assert voltage_source_element is not None, "Voltage source element not found"
-        assert resistor_element is not None, "Resistor element not found"
+        voltage_source_connections = voltage_source_network.connections
+        resistor_connections = resistor_network.connections
 
         # Check voltage source properties
         assert voltage_source_element.voltage == 1.0
         # Check that it's connected to component R2, pads 1 and 2
         board = pcbnew.LoadBoard(str(project.pcb_path))
 
-        # We need to create layer_dict for the new API
-        plotted_layers = kicad.render_gerbers_from_kicad(board, kicad.copper_layers(board))
-        outline = kicad.extract_board_outline(board)
-        if outline is not None:
-            plotted_layers = [
-                kicad.clip_layer_with_outline(plotted_layer, outline)
-                for plotted_layer in plotted_layers
-            ]
-
-        # Get via specs and punch holes
-        via_specs = kicad.extract_via_specs_from_pcb(board) + kicad.extract_tht_pad_specs_from_pcb(board)
-        plotted_layers = kicad.punch_via_holes(plotted_layers, via_specs)
-
-        # Create stackup and layer_dict
-        stackup = kicad.extract_stackup_from_kicad_pcb(board)
-        layer_dict = kicad.construct_layer_dict(plotted_layers, stackup)
-
-        # Create PadIndex and load SMD pads
-        pad_index = kicad.PadIndex()
-        pad_index.load_smd_pads(board, layer_dict)
+        # Set up layer dictionary and pad index using utility function
+        layer_dict, pad_index = Utils.setup_layer_dict_and_pad_index(board)
 
         r2_1_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "1"))[0].point
         r2_2_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "2"))[0].point
