@@ -148,9 +148,27 @@ class TestPadFinder:
         # Load the KiCad board from the PCB file
         board = pcbnew.LoadBoard(str(project.pcb_path))
 
+        # We need to create layer_dict for the new API
+        # For this test, we just need the geometry, so let's get it properly
+        plotted_layers = kicad.render_gerbers_from_kicad(board, kicad.copper_layers(board))
+        outline = kicad.extract_board_outline(board)
+        if outline is not None:
+            plotted_layers = [
+                kicad.clip_layer_with_outline(plotted_layer, outline)
+                for plotted_layer in plotted_layers
+            ]
+
+        # Get via specs and punch holes
+        via_specs = kicad.extract_via_specs_from_pcb(board) + kicad.extract_tht_pad_specs_from_pcb(board)
+        plotted_layers = kicad.punch_via_holes(plotted_layers, via_specs)
+
+        # Create stackup and layer_dict
+        stackup = kicad.extract_stackup_from_kicad_pcb(board)
+        layer_dict = kicad.construct_layer_dict(plotted_layers, stackup)
+
         # Create PadIndex and load SMD pads
         pad_index = kicad.PadIndex()
-        pad_index.load_smd_pads(board)
+        pad_index.load_smd_pads(board, layer_dict)
 
         # Try to find the pad R3.1
         endpoint = kicad.Endpoint(designator="R3", pad="1")
@@ -641,9 +659,26 @@ class TestLoadKicadProject:
         # Check that it's connected to component R2, pads 1 and 2
         board = pcbnew.LoadBoard(str(project.pcb_path))
 
+        # We need to create layer_dict for the new API
+        plotted_layers = kicad.render_gerbers_from_kicad(board, kicad.copper_layers(board))
+        outline = kicad.extract_board_outline(board)
+        if outline is not None:
+            plotted_layers = [
+                kicad.clip_layer_with_outline(plotted_layer, outline)
+                for plotted_layer in plotted_layers
+            ]
+
+        # Get via specs and punch holes
+        via_specs = kicad.extract_via_specs_from_pcb(board) + kicad.extract_tht_pad_specs_from_pcb(board)
+        plotted_layers = kicad.punch_via_holes(plotted_layers, via_specs)
+
+        # Create stackup and layer_dict
+        stackup = kicad.extract_stackup_from_kicad_pcb(board)
+        layer_dict = kicad.construct_layer_dict(plotted_layers, stackup)
+
         # Create PadIndex and load SMD pads
         pad_index = kicad.PadIndex()
-        pad_index.load_smd_pads(board)
+        pad_index.load_smd_pads(board, layer_dict)
 
         r2_1_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "1"))[0].point
         r2_2_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "2"))[0].point
@@ -678,6 +713,10 @@ class TestLoadKicadProject:
         Test that for all test projects, the start and end points of lumped elements
         are located inside their respective layer shapes.
         """
+        # Some projects of note:
+        # via_in_pad:
+        #    has a THT pad inside a via. This test should check that the connection point
+        #    of that particular pad gets eliminated
 
         # Load the KiCad project
         kicad_problem = kicad.load_kicad_project(project.pro_path)
@@ -691,6 +730,41 @@ class TestLoadKicadProject:
                     f"Project {project.name}, network {i}, connection {j} "
                     f"point {connection.point} is not inside its layer shape {connection.layer.name}"
                 )
+
+    def test_via_in_pad_no_floating_connections(self, kicad_test_projects):
+        """
+        Test that when a THT pad is placed inside an SMD pad,
+        the SMD pad's connection point that would fall in the hole is eliminated.
+        Specific test for the via_in_pad project where THT TP1 at (150, 100)
+        overlaps with SMD TP3 at the same location.
+        """
+        project = kicad_test_projects["via_in_pad"]
+
+        # Load the KiCad project with our fix applied
+        kicad_problem = kicad.load_kicad_project(project.pro_path)
+
+        # Check that no connection point exists at exactly (150, 100)
+        # This is where the SMD pad center would be, but it should be eliminated
+        # because it falls inside the THT pad's drill hole
+        target_point = shapely.geometry.Point(150, 100)
+        exclusion_zone = target_point.buffer(0.5)
+
+        connections_at_target = []
+        for network in kicad_problem.networks:
+            for connection in network.connections:
+                # Check if this connection is at the problematic location
+                if exclusion_zone.intersects(connection.point):
+                    connections_at_target.append({
+                        'layer': connection.layer.name,
+                        'point': connection.point,
+                        'in_geometry': connection.layer.shape.intersects(connection.point)
+                    })
+
+        # There should be NO connections at exactly (150, 100) since it's in a hole
+        assert len(connections_at_target) == 0, (
+            f"Found {len(connections_at_target)} connection(s) at (150, 100) which should be in a hole. "
+            f"Connections: {connections_at_target}"
+        )
 
     @for_all_kicad_projects(exclude=["nested_schematic_twoinstances"])
     def test_all_layer_shapes_are_multipolygons(self, project):

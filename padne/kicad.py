@@ -237,11 +237,22 @@ class PadIndex:
     mapping: dict[Endpoint, list[LayerPoint]] = field(default_factory=dict)
 
     def find_by_endpoint(self, ep: Endpoint) -> list[LayerPoint]:
-        return self.mapping[ep]
+        # Note that we return an empty list if the endpoint does not exist
+        # This can totally happen if it gets eliminated due to falling outside
+        # of the layer geometry.
+        # This can break the network construction in case we lose all endpoints
+        # for a given terminal, but this is unlikely to happen in well-formed
+        # simulations.
+        return self.mapping.get(ep, [])
 
-    def load_smd_pads(self, board: pcbnew.BOARD) -> None:
+    def load_smd_pads(self, board: pcbnew.BOARD, layer_dict: dict[str, problem.Layer]) -> None:
         """
         Load all SMD pads from the given PCB board into the mapping.
+        Validates that connection points fall within the final layer geometry.
+
+        Args:
+            board: The PCB board to extract SMD pads from
+            layer_dict: Dictionary of final layer geometries for validation
         """
         for footprint in board.GetFootprints():
             designator = footprint.GetReference()
@@ -276,6 +287,26 @@ class PadIndex:
 
                 layer_name = board.GetLayerName(layer_id)
                 point = shapely.geometry.Point(x_mm, y_mm)
+
+                # Validate that the point falls within the layer geometry
+                layer = layer_dict.get(layer_name)
+                if layer is None:
+                    # I do not think this should ever happen. That said, in theory,
+                    # it is possible to have a SMD pad that spans internal layers
+                    # in our footprint and then the user does not include that layer
+                    # in the PCB
+                    log.warning(f"SMD pad {endpoint} references unknown layer {layer_name}")
+                    continue
+
+                if not layer.shape.intersects(point):
+                    # At the moment, we just reject those pads
+                    log.warning(
+                        f"SMD pad {endpoint} connection point at ({x_mm}, {y_mm}) "
+                        f"on layer {layer_name} falls outside the layer geometry (likely in a hole). "
+                        f"Skipping this connection point."
+                    )
+                    continue
+
                 layer_point = LayerPoint(layer=layer_name, point=point)
 
                 # Add to mapping (initialize list if endpoint doesn't exist)
@@ -1546,7 +1577,6 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         raise ValueError("Stackup does not contain all plotted layers")
 
     pad_index = PadIndex()
-    pad_index.load_smd_pads(board)
 
     # Convert Spec objects to Network objects
     networks = []
@@ -1556,6 +1586,9 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
 
     plotted_layers = punch_via_holes(plotted_layers, via_specs)
     layer_dict = construct_layer_dict(plotted_layers, stackup)
+
+    # Load SMD pads AFTER hole punching so we can validate against final geometry
+    pad_index.load_smd_pads(board, layer_dict)
 
     pad_index.insert_via_specs(via_specs, layer_dict)
     # Note that we have to create the layer dict _after_ punching the holes,
