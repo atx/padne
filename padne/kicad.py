@@ -1045,6 +1045,33 @@ def flatten_schema_hierarchy(schema_instance: SchemaInstance) -> list[SchemaInst
     return result
 
 
+def extract_directives_from_text(text: str) -> list[Directive]:
+    """
+    Extract directives from a text string that may contain multiple lines.
+
+    Each line is stripped of whitespace and checked if it starts with '!padne'.
+    Lines that don't start with '!padne' are ignored.
+
+    Note: KiCad standardizes newlines to '\n' in .kicad_sch files regardless of the
+    platform, so we can safely use splitlines() without worrying about mixed endings.
+
+    Args:
+        text: The text string to parse for directives
+
+    Returns:
+        List of Directive objects found in the text
+    """
+    directives = []
+
+    for line in text.splitlines():
+        stripped_line = line.strip()
+
+        if stripped_line.startswith("!padne"):
+            directives.append(Directive.parse(stripped_line))
+
+    return directives
+
+
 def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
 
     def find_text_elements(sexp_data):
@@ -1074,11 +1101,11 @@ def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
         for text_element in find_text_elements(instance.parsed_sexp)
     ]
 
-    return [
-        Directive.parse(text)
-        for text in all_texts
-        if text.startswith("!padne")
-    ]
+    directives = []
+    for text in all_texts:
+        directives.extend(extract_directives_from_text(text))
+
+    return directives
 
 
 def extract_directives_from_hierarchy(schema_instance: SchemaInstance) -> list[Directive]:

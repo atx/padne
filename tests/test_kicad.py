@@ -440,6 +440,54 @@ class TestDirectiveParse:
         with pytest.raises(ValueError, match="Empty parameter key"):
             kicad.Directive.parse("!padne VOLTAGE =12V p=R1.1 n=R1.2")
 
+    def test_multiline_directive_parsing(self):
+        """Test parsing multiple directives from a single text block with newlines."""
+        text = '!padne VOLTAGE v=1.0V p=R2.1 n=R2.2\n!padne RESISTANCE r=0.01 a=R3.1 b=R3.2'
+
+        directives = kicad.extract_directives_from_text(text)
+
+        assert len(directives) == 2
+        assert directives[0].name == 'VOLTAGE'
+        assert directives[0].params == {'v': '1.0V', 'p': 'R2.1', 'n': 'R2.2'}
+        assert directives[1].name == 'RESISTANCE'
+        assert directives[1].params == {'r': '0.01', 'a': 'R3.1', 'b': 'R3.2'}
+
+    def test_multiline_directive_with_whitespace(self):
+        """Test that directives with leading/trailing whitespace are properly stripped."""
+        text = '  !padne VOLTAGE v=3.3V p=U1.VCC n=U1.GND  \n\t!padne CURRENT i=1.0A f=R1.1 t=R1.2\t'
+
+        directives = kicad.extract_directives_from_text(text)
+
+        assert len(directives) == 2
+        assert directives[0].name == 'VOLTAGE'
+        assert directives[0].params == {'v': '3.3V', 'p': 'U1.VCC', 'n': 'U1.GND'}
+        assert directives[1].name == 'CURRENT'
+        assert directives[1].params == {'i': '1.0A', 'f': 'R1.1', 't': 'R1.2'}
+
+    def test_multiline_directive_ignore_non_padne_lines(self):
+        """Test that non-!padne lines in multiline text blocks are ignored."""
+        text = 'This is a comment\n!padne VOLTAGE v=5V p=VCC n=GND\nAnother comment\n!padne RESISTANCE r=10 a=R1.1 b=R1.2\n'
+
+        directives = kicad.extract_directives_from_text(text)
+
+        assert len(directives) == 2
+        assert directives[0].name == 'VOLTAGE'
+        assert directives[0].params == {'v': '5V', 'p': 'VCC', 'n': 'GND'}
+        assert directives[1].name == 'RESISTANCE'
+        assert directives[1].params == {'r': '10', 'a': 'R1.1', 'b': 'R1.2'}
+
+    def test_multiline_directive_empty_lines(self):
+        """Test that empty lines in multiline text blocks are ignored."""
+        text = '\n\n!padne VOLTAGE v=12V p=PWR n=GND\n\n\n!padne CURRENT i=2A f=J1.1 t=J1.2\n\n'
+
+        directives = kicad.extract_directives_from_text(text)
+
+        assert len(directives) == 2
+        assert directives[0].name == 'VOLTAGE'
+        assert directives[0].params == {'v': '12V', 'p': 'PWR', 'n': 'GND'}
+        assert directives[1].name == 'CURRENT'
+        assert directives[1].params == {'i': '2A', 'f': 'J1.1', 't': 'J1.2'}
+
     def test_parse_directives_from_simple_geometry(self, kicad_test_projects):
         # Get the simple_geometry project's schematic file
         project = kicad_test_projects["simple_geometry"]
@@ -506,6 +554,28 @@ class TestDirectiveParse:
 
         # Verify the resistor properties (from nested schematic)
         assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
+
+    def test_multiline_directives_from_project(self, kicad_test_projects):
+        """Test that the multiline_directive project loads correctly with multiple directives."""
+        project = kicad_test_projects["multiline_directive"]
+
+        # Load the entire project - this tests the full integration
+        problem = kicad.load_kicad_project(project.pro_path)
+
+        # Should have both a voltage source and a resistor from the multiline directive
+        from padne.problem import VoltageSource, Resistor
+
+        voltage_sources = [e for network in problem.networks for e in network.elements if isinstance(e, VoltageSource)]
+        resistors = [e for network in problem.networks for e in network.elements if isinstance(e, Resistor)]
+
+        assert len(voltage_sources) == 1
+        assert len(resistors) == 1
+
+        # Check the voltage source parameters
+        assert voltage_sources[0].voltage == 1.0
+
+        # Check the resistor parameters
+        assert resistors[0].resistance == 0.01
 
     def test_nested_schematic_twoinstances_directive_deduplication(self, kicad_test_projects):
         """Test that directives from multiple instances of the same file are deduplicated."""
