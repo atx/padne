@@ -70,6 +70,27 @@ void main() {
 }
 """
 
+VERTEX_SHADER_DISCONNECTED = """
+#version 330 core
+layout(location = 0) in vec2 position;
+layout(location = 1) in float color;  // We still have the color attribute but ignore it
+uniform mat4 mvp;
+
+void main() {
+    gl_Position = mvp * vec4(position, 0.0, 1.0);
+}
+"""
+
+FRAGMENT_SHADER_DISCONNECTED = """
+#version 330 core
+out vec4 out_color;
+
+void main() {
+    // Render disconnected copper in a subdued gray
+    out_color = vec4(0.1, 0.1, 0.1, 1.0);
+}
+"""
+
 VERTEX_SHADER_EDGES = """
 #version 330 core
 layout(location = 0) in vec2 position;
@@ -703,6 +724,18 @@ class RenderedMesh:
         gl.glBindVertexArray(self.vao_edges)
         gl.glDrawArrays(gl.GL_LINES, 0, self.edge_count)
 
+    @classmethod
+    def from_mesh(cls, msh: mesh.Mesh) -> 'RenderedMesh':
+        """Create a RenderedMesh from a mesh with zero values.
+        Used for disconnected copper regions that will be rendered in gray."""
+        # Create a ZeroForm with all values set to zero
+        zero_values = mesh.ZeroForm(msh)
+        for vertex in msh.vertices:
+            zero_values[vertex] = 0.0
+
+        # Use the existing from_zero_form method
+        return cls.from_zero_form(msh, zero_values)
+
 
 @dataclass
 class RenderedPoints:
@@ -770,6 +803,7 @@ class MeshViewer(QOpenGLWidget):
         solution: Optional[solver.Solution] = None
         spatial_indices: dict[str, BaseSpatialIndex] = field(default_factory=dict)
         rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
+        disconnected_rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
 
         def _compute_min_max(self) -> tuple[float, float]:
             """Compute min and max values across all spatial indices."""
@@ -804,6 +838,7 @@ class MeshViewer(QOpenGLWidget):
             self._build_spatial_indices()
             # We have to delay this until the OpenGL context is properly initialized.
             self.rendered_meshes.clear()
+            self.disconnected_rendered_meshes.clear()
 
         def _create_rendered_meshes_for_layer(self, layer_name) -> list[RenderedMesh]:
             """Create RenderedMesh objects for a specific layer."""
@@ -824,6 +859,28 @@ class MeshViewer(QOpenGLWidget):
                 self.rendered_meshes[layer_name] = \
                     self._create_rendered_meshes_for_layer(layer_name)
             return self.rendered_meshes[layer_name]
+
+        def _create_disconnected_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+            """Create RenderedMesh objects for disconnected copper on a specific layer."""
+            rendered_meshes = []
+            if not self.solution:
+                return rendered_meshes
+
+            for layer, layer_solution in zip(self.solution.problem.layers,
+                                             self.solution.layer_solutions):
+                if layer.name != layer_name:
+                    continue
+                for msh in layer_solution.disconnected_meshes:
+                    rendered_meshes.append(RenderedMesh.from_mesh(msh))
+            return rendered_meshes
+
+        def get_disconnected_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+            """Get pre-built disconnected rendered meshes for a layer."""
+            if layer_name not in self.disconnected_rendered_meshes:
+                # If not already built, create them
+                self.disconnected_rendered_meshes[layer_name] = \
+                    self._create_disconnected_rendered_meshes_for_layer(layer_name)
+            return self.disconnected_rendered_meshes[layer_name]
 
     @dataclass
     class VoltageRenderingMode(BaseRenderingMode):
@@ -1150,6 +1207,10 @@ class MeshViewer(QOpenGLWidget):
             VERTEX_SHADER_MESH, FRAGMENT_SHADER_MESH
         )
 
+        self.disconnected_shader = ShaderProgram.from_source(
+            VERTEX_SHADER_DISCONNECTED, FRAGMENT_SHADER_DISCONNECTED
+        )
+
         self.edge_shader = ShaderProgram.from_source(
             VERTEX_SHADER_EDGES, FRAGMENT_SHADER_EDGES
         )
@@ -1245,6 +1306,26 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_edges()
 
+    def _renderDisconnectedMeshes(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+        """Renders disconnected copper meshes in gray."""
+        if not self.disconnected_shader or not rendered_mesh_list:
+            return
+
+        with self.disconnected_shader.use():
+            # Set the MVP uniform
+            gl.glUniformMatrix4fv(
+                self.disconnected_shader.shader_program.uniformLocation("mvp"),
+                1, gl.GL_TRUE, mvp.flatten()
+            )
+
+            # Draw triangles for disconnected meshes
+            for rmesh in rendered_mesh_list:
+                rmesh.render_triangles()
+
+            # Notably we do not render edges for disconnected meshes.
+            # They provide no additional information and look messy anyway...
+            # It can be useful to render them when debugging the code
+
     def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: RenderedPoints):
         """Renders the connection points for the current layer."""
         if not self.connection_points_visible or not self.points_shader:
@@ -1276,6 +1357,11 @@ class MeshViewer(QOpenGLWidget):
 
         # Get current layer name
         current_layer_name = self.current_layer_name
+
+        # Render disconnected copper first (behind everything else)
+        disconnected_mesh_list = \
+            self.current_rendering_mode.get_disconnected_rendered_meshes_for_layer(current_layer_name)
+        self._renderDisconnectedMeshes(mvp, disconnected_mesh_list)
 
         # Get rendered meshes directly from current mode
         current_layer_mesh_list = \

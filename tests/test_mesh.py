@@ -1266,6 +1266,50 @@ class TestMesher:
             # outside of the bounds due to floating point error
             assert y <= -x + 1 + 1e-6  # This is the line connecting (0,1) and (1,0)
 
+    def test_triangulate_simple_polygon(self):
+        """Test triangulation without mesh refinement."""
+        # Create a simple L-shaped polygon
+        coords = [(0, 0), (2, 0), (2, 1), (1, 1), (1, 2), (0, 2), (0, 0)]
+        polygon = shapely.geometry.Polygon(coords)
+
+        mesher = Mesher()
+        mesh = mesher.triangulate(polygon)
+
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+
+        # Since it's just triangulation without refinement,
+        # we should have minimal triangles
+        # An L-shape needs at least 4 triangles to cover
+        assert len(mesh.faces) >= 4
+
+        # All vertices should be within the polygon
+        for _, vertex in mesh.vertices.items():
+            point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
+            assert polygon.contains(point) or polygon.boundary.contains(point)
+
+    def test_triangulate_with_hole(self):
+        """Test triangulation of a polygon with a hole."""
+        # Create a square with a square hole
+        exterior = [(0, 0), (3, 0), (3, 3), (0, 3), (0, 0)]
+        interior = [(1, 1), (2, 1), (2, 2), (1, 2), (1, 1)]
+        polygon = shapely.geometry.Polygon(exterior, [interior])
+
+        mesher = Mesher()
+        mesh = mesher.triangulate(polygon)
+
+        # Verify mesh properties
+        assert isinstance(mesh, Mesh)
+        assert len(mesh.vertices) > 0
+        assert len(mesh.faces) > 0
+
+        # All vertices should be within the polygon (but not in the hole)
+        for _, vertex in mesh.vertices.items():
+            point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
+            assert polygon.contains(point) or polygon.boundary.contains(point)
+
     def test_polygon_with_hole(self):
         """Test meshing a polygon with a hole."""
         # Create a square with a square hole

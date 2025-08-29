@@ -35,6 +35,7 @@ class LayerSolution:
     meshes: list[mesh.Mesh]
     potentials: list[mesh.ZeroForm]
     power_densities: list[mesh.TwoForm] = field(default_factory=list)
+    disconnected_meshes: list[mesh.Mesh] = field(default_factory=list)
 
 
 @dataclass
@@ -240,9 +241,10 @@ def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
                                 connected_layer_mesh_pairs: set[tuple[int, int]],
                                 strtrees: list[shapely.strtree.STRtree]
-                                ) -> list[list[mesh.Mesh], list[int]]:
+                                ) -> tuple[list[mesh.Mesh], list[int], list[list[mesh.Mesh]]]:
     meshes: list[mesh.Mesh] = []
     mesh_index_to_layer_index: list[int] = []
+    disconnected_meshes_by_layer: list[list[mesh.Mesh]] = [[] for _ in prob.layers]
 
     for layer_i, layer in enumerate(prob.layers):
         # TODO: collect_seed_points should just return a list
@@ -271,9 +273,10 @@ def generate_meshes_for_problem(prob: problem.Problem,
 
         for geom_i, geom in enumerate(layer.shape.geoms):
             if (layer_i, geom_i) not in connected_layer_mesh_pairs:
-                # This layer is not connected to any lumped elements, skip it
-                # for now. Eventually, we may want to just simply triangulate
-                # it and pass it to the UI for rendering
+                # This layer is not connected to any lumped elements
+                # Triangulate it for display as disconnected copper
+                m = mesher.triangulate(layer.shape.geoms[geom_i])
+                disconnected_meshes_by_layer[layer_i].append(m)
                 continue
             # This layer is connected to at least one lumped element, so we need to mesh it
 
@@ -296,7 +299,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
             meshes.append(m)
             mesh_index_to_layer_index.append(layer_i)
 
-    return meshes, mesh_index_to_layer_index
+    return meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer
 
 
 @dataclass
@@ -531,7 +534,8 @@ def produce_layer_solutions(layers: list[problem.Layer],
                             vindex: VertexIndexer,
                             meshes: list[mesh.Mesh],
                             mesh_index_to_layer_index: list[int],
-                            v: np.array) -> list[LayerSolution]:
+                            v: np.array,
+                            disconnected_meshes_by_layer: list[list[mesh.Mesh]]) -> list[LayerSolution]:
     layer_solutions = []
     for layer_i, layer in enumerate(layers):
         layer_meshes = []
@@ -559,7 +563,8 @@ def produce_layer_solutions(layers: list[problem.Layer],
         layer_solutions.append(LayerSolution(
             meshes=layer_meshes,
             potentials=layer_values,
-            power_densities=layer_power_densities
+            power_densities=layer_power_densities,
+            disconnected_meshes=disconnected_meshes_by_layer[layer_i]
         ))
 
     return layer_solutions
@@ -710,7 +715,7 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     connectivity_graph = ConnectivityGraph.create_from_problem(prob, strtrees)
     connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
     log.info(f"Meshing the connected components")
-    meshes, mesh_index_to_layer_index = \
+    meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer = \
         generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs, strtrees)
 
     # In the next step, we assign a global index to each vertex in every mesh.
@@ -790,7 +795,8 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
         vindex,
         meshes,
         mesh_index_to_layer_index,
-        v
+        v,
+        disconnected_meshes_by_layer
     )
 
     return Solution(problem=prob, layer_solutions=layer_solutions)

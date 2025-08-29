@@ -671,22 +671,19 @@ class Mesher:
     def __init__(self, config: Optional['Mesher.Config'] = None):
         self.config = config if config is not None else Mesher.Config()
 
-    def poly_to_mesh(self,
-                     poly: shapely.geometry.Polygon,
-                     seed_points: list[Point] = []) -> Mesh:
+    def _prepare_polygon_for_cgal(self,
+                                  poly: shapely.geometry.Polygon,
+                                  seed_points: list[Point] = []) -> tuple[list, list, list]:
         """
-        Convert a Shapely polygon to a triangular mesh.
+        Convert a Shapely polygon to vertices, segments, and seeds for CGAL.
 
         Args:
             poly: A Shapely polygon, potentially with holes
+            seed_points: Additional seed points to include
 
         Returns:
-            A Mesh object representing the triangulated polygon
+            Tuple of (vertices, segments, seeds) for CGAL functions
         """
-        import padne._cgal as cgal
-
-        # This serves to deduplicate vertices.
-        # In theory, deduplication should not be needed
         vertices = []
         segments = []
         seeds = [
@@ -715,7 +712,47 @@ class Mesher:
         for hole in poly.interiors:
             insert_linear_ring(hole)
 
+        return vertices, segments, seeds
+
+    def poly_to_mesh(self,
+                     poly: shapely.geometry.Polygon,
+                     seed_points: list[Point] = []) -> Mesh:
+        """
+        Convert a Shapely polygon to a triangular mesh.
+
+        Args:
+            poly: A Shapely polygon, potentially with holes
+
+        Returns:
+            A Mesh object representing the triangulated polygon
+        """
+        import padne._cgal as cgal
+
+        vertices, segments, seeds = self._prepare_polygon_for_cgal(poly, seed_points)
         cgal_output = cgal.mesh(self.config, vertices, segments, seeds)
+
+        mesh = Mesh.from_triangle_soup(
+            [Point(*p) for p in cgal_output['vertices']],
+            cgal_output['triangles']
+        )
+
+        return mesh
+
+    def triangulate(self, poly: shapely.geometry.Polygon) -> Mesh:
+        """
+        Simple triangulation of a polygon without mesh refinement.
+        Used for disconnected copper regions that don't need quality meshing.
+
+        Args:
+            poly: A Shapely polygon to triangulate
+
+        Returns:
+            A Mesh object representing the triangulated polygon
+        """
+        import padne._cgal as cgal
+
+        vertices, segments, seeds = self._prepare_polygon_for_cgal(poly, [])
+        cgal_output = cgal.triangulate(vertices, segments, seeds)
 
         mesh = Mesh.from_triangle_soup(
             [Point(*p) for p in cgal_output['vertices']],
