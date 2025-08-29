@@ -300,7 +300,7 @@ class TestSolverMeshLayer:
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
 
         # Call the function under test with the required argument
-        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
+        meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer = solver.generate_meshes_for_problem(
             prob, mesher, connected_layer_mesh_pairs, strtrees)
 
         # Check that we got the expected result
@@ -355,7 +355,7 @@ class TestSolverMeshLayer:
                 assert isinstance(point, mesh.Point), "Seed point should be a mesh.Point instance"
 
         # Call generate_meshes_for_problem with the required argument
-        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
+        meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer = solver.generate_meshes_for_problem(
             prob, mesher, connected_layer_mesh_pairs, strtrees)
 
         # For each connection point in the problem, verify there's a mesh vertex very close to its location
@@ -1788,3 +1788,48 @@ class TestSolverEndToEnd:
             f"Expected 0 meshes for floating B.Cu layer, got {len(b_cu_solution.meshes)}"
         assert len(b_cu_solution.potentials) == 0, \
             f"Expected 0 potential solutions for floating B.Cu layer, got {len(b_cu_solution.potentials)}"
+
+    def test_floating_copper_disconnected_regions_count(self, kicad_test_projects):
+        """
+        Test that the floating_copper project correctly identifies 4 disconnected copper regions
+        in the F.Cu layer that are not electrically connected to any networks.
+
+        This test verifies that the solver properly triangulates disconnected copper regions
+        for visualization purposes while excluding them from electrical analysis.
+        """
+        project = kicad_test_projects["floating_copper"]
+
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+
+        # Solve the problem
+        solution = solver.solve(prob)
+
+        assert solution is not None, "Solver failed to produce a solution"
+
+        # Find the F.Cu layer
+        f_cu_layer = None
+        f_cu_layer_index = None
+        for i, layer in enumerate(prob.layers):
+            if layer.name == "F.Cu":
+                f_cu_layer = layer
+                f_cu_layer_index = i
+                break
+
+        assert f_cu_layer is not None, "F.Cu layer not found in floating_copper project"
+
+        # Get the layer solution for F.Cu
+        f_cu_solution = solution.layer_solutions[f_cu_layer_index]
+
+        # Verify that F.Cu has exactly 4 disconnected copper regions
+        assert len(f_cu_solution.disconnected_meshes) == 4, \
+            f"Expected 4 disconnected copper regions in F.Cu layer, got {len(f_cu_solution.disconnected_meshes)}"
+
+        # Verify each disconnected mesh has vertices (i.e., was properly triangulated)
+        for i, disconnected_mesh in enumerate(f_cu_solution.disconnected_meshes):
+            assert isinstance(disconnected_mesh, mesh.Mesh), \
+                f"Disconnected region {i} should be a Mesh instance"
+            assert len(disconnected_mesh.vertices) > 0, \
+                f"Disconnected mesh {i} should have vertices"
+            assert len(disconnected_mesh.faces) > 0, \
+                f"Disconnected mesh {i} should have faces"

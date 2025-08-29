@@ -67,6 +67,16 @@ static void setup_cdt(CDT& cdt,
     }
 }
 
+static void set_mesher_seeds(Mesher& mesher,
+                             const std::vector<std::pair<double, double>>& seeds,
+                             bool mark = true) {
+    std::vector<Point> seed_points;
+    for (const auto& seed : seeds) {
+        Point p(seed.first, seed.second);
+        seed_points.push_back(p);
+    }
+    mesher.set_seeds(seed_points.begin(), seed_points.end(), mark);
+}
 
 void setup_mesher(Mesher& mesher,
                   const py::object& py_config,
@@ -83,12 +93,7 @@ void setup_mesher(Mesher& mesher,
     // since we have a single connected component. The python code
     // should just give us a single representative_point to use instead
     // TODO
-    std::vector<Point> seed_points;
-    for (const auto& seed : seeds) {
-        Point p(seed.first, seed.second);
-        seed_points.push_back(p);
-    }
-    mesher.set_seeds(seed_points.begin(), seed_points.end(), true);
+    set_mesher_seeds(mesher, seeds);
 }
 
 
@@ -121,6 +126,39 @@ std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
     }
 
     return std::make_pair(py_vertices, py_triangles);
+}
+
+
+py::dict triangulate(const std::vector<std::pair<double, double>>& vertices,
+                     const std::vector<std::pair<int, int>>& segments,
+                     const std::vector<std::pair<double, double>>& seeds) {
+    // Use a no-op Mesher with very relaxed criteria to properly mark domains
+    // as being inside or outside. There is probably a canonical way to do this
+    // without running a mesher, but this suffices for now.
+    // Redirect via python during the scope of this function
+    py::scoped_ostream_redirect stream_redirect;
+
+    CDT cdt;
+    setup_cdt(cdt, vertices, segments, seeds);
+
+    // Create a Mesher with very relaxed criteria for fast operation
+    Mesher mesher(cdt);
+    // Hard code some very relaxed criteria
+    mesher.set_criteria(Criteria(0.001, 0));
+
+    // Set seeds for domain marking (mark=true means include regions with seeds)
+    set_mesher_seeds(mesher, seeds);
+
+    // Run the mesher to trigger domain marking (minimal refinement due to relaxed criteria)
+    mesher.refine_mesh();
+
+    // Now is_in_domain() will work correctly
+    auto [py_vertices, py_triangles] = convert_meshing_result_to_python(cdt);
+
+    py::dict result;
+    result["vertices"] = py_vertices;
+    result["triangles"] = py_triangles;
+    return result;
 }
 
 
@@ -175,6 +213,17 @@ PYBIND11_MODULE(_cgal, m) {
             seeds: A list of seed points for the meshing process.
         Returns:
             A dictionary containing the results of the meshing process.
+    )pbdoc");
+
+    m.def("triangulate", &triangulate, R"pbdoc(
+        Triangulates a set of points and segments using CGAL without mesh refinement.
+        Used for disconnected copper regions that don't need quality meshing.
+        Args:
+            vertices: A list of vertices (points).
+            segments: A list of segments (edges).
+            seeds: A list of seed points for the triangulation.
+        Returns:
+            A dictionary containing the triangulated vertices and triangles.
     )pbdoc");
 
     m.attr("cgal_version") = CGAL_VERSION_STR;
