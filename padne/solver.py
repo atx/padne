@@ -773,6 +773,7 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
         node_indexer.internal_node_count + \
         len(node_indexer.extra_source_to_global_index) + \
         1  # +1 for the ground node
+    log.info(f"System matrix size: {N}x{N} variables")
     L = scipy.sparse.lil_matrix((N, N), dtype=DTYPE)
     r = np.zeros(N, dtype=DTYPE)
 
