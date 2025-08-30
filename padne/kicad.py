@@ -1289,6 +1289,13 @@ def extract_layers_from_gerbers(board,
         # Again, it would be nice to fix this in pygerber, but that
         # is a task for another day...
         geometry = geometry.simplify(tolerance=1e-4, preserve_topology=True)
+        # Unfortunately, the above simplification can sometimes miss issues
+        # with the polygon. Setting preserve_topology=False fixes it, but
+        # who knows what other issues it may cause. Running a dedicated
+        # point deduplication step seems to fix the issue, but again,
+        # could potentially break the geometry. The "degenerate_hole_geometry"
+        # test project exhibits this issue.
+        geometry = shapely.remove_repeated_points(geometry, tolerance=1e-8)
 
         # If the layer has only a single connected component, convert it to a MultiPolygon
         if geometry.geom_type == "Polygon":

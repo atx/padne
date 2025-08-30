@@ -1019,6 +1019,27 @@ class TestLoadKicadProject:
         # Ensure we found at least one copper layer
         assert copper_layers_found > 0, "No copper layers found in the project"
 
+    def test_degenerate_hole_geometry(self, kicad_test_projects):
+        """Test that polygons with degenerate holes are loaded successfully."""
+        project = kicad_test_projects["degenerate_hole_geometry"]
+
+        # Load the project
+        result = kicad.load_kicad_project(project.pro_path)
+
+        # Find the In2.Cu layer
+        in2_cu_layer = next((layer for layer in result.layers if layer.name == "In2.Cu"), None)
+        assert in2_cu_layer is not None, "In2.Cu layer should exist in the degenerate_hole_geometry project"
+
+        # Verify the layer shape is a MultiPolygon
+        assert isinstance(in2_cu_layer.shape, shapely.geometry.MultiPolygon), \
+            f"In2.Cu layer shape should be MultiPolygon, got {type(in2_cu_layer.shape)}"
+
+        # Verify we have a single polygon
+        assert len(in2_cu_layer.shape.geoms) == 1
+
+        # Next, check its area is at least 20 mm²
+        assert in2_cu_layer.shape.area >= 20.0, "In2.Cu layer area should be at least 20 mm²"
+
 
 class TestCopperDirective:
     """Tests for COPPER directive parsing and validation."""
