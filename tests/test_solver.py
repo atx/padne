@@ -1081,7 +1081,8 @@ class TestSolverEndToEnd:
                                      "castellated_vias_internal_cutout",
                                      "overlapping_vias",
                                      "long_trace_esr",
-                                     "via_in_pad"])
+                                     "via_in_pad",
+                                     "degenerate_hole_geometry"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
