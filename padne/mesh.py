@@ -668,6 +668,9 @@ class Mesher:
         minimum_angle: float = 20.0
         maximum_size: float = 0.6
 
+        # Static relaxed configuration for disconnected copper triangulation
+        RELAXED = None  # Will be initialized after class definition
+
     def __init__(self, config: Optional['Mesher.Config'] = None):
         self.config = config if config is not None else Mesher.Config()
 
@@ -738,25 +741,6 @@ class Mesher:
 
         return mesh
 
-    def triangulate(self, poly: shapely.geometry.Polygon) -> Mesh:
-        """
-        Simple triangulation of a polygon without mesh refinement.
-        Used for disconnected copper regions that don't need quality meshing.
 
-        Args:
-            poly: A Shapely polygon to triangulate
-
-        Returns:
-            A Mesh object representing the triangulated polygon
-        """
-        import padne._cgal as cgal
-
-        vertices, segments, seeds = self._prepare_polygon_for_cgal(poly, [])
-        cgal_output = cgal.triangulate(vertices, segments, seeds)
-
-        mesh = Mesh.from_triangle_soup(
-            [Point(*p) for p in cgal_output['vertices']],
-            cgal_output['triangles']
-        )
-
-        return mesh
+# Initialize the static RELAXED configuration after class definition
+Mesher.Config.RELAXED = Mesher.Config(minimum_angle=5.0, maximum_size=0)

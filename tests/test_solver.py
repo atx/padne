@@ -300,7 +300,7 @@ class TestSolverMeshLayer:
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
 
         # Call the function under test with the required argument
-        meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer = solver.generate_meshes_for_problem(
+        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
             prob, mesher, connected_layer_mesh_pairs, strtrees)
 
         # Check that we got the expected result
@@ -355,7 +355,7 @@ class TestSolverMeshLayer:
                 assert isinstance(point, mesh.Point), "Seed point should be a mesh.Point instance"
 
         # Call generate_meshes_for_problem with the required argument
-        meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer = solver.generate_meshes_for_problem(
+        meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
             prob, mesher, connected_layer_mesh_pairs, strtrees)
 
         # For each connection point in the problem, verify there's a mesh vertex very close to its location
