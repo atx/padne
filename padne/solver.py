@@ -241,10 +241,9 @@ def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
                                 connected_layer_mesh_pairs: set[tuple[int, int]],
                                 strtrees: list[shapely.strtree.STRtree]
-                                ) -> tuple[list[mesh.Mesh], list[int], list[list[mesh.Mesh]]]:
+                                ) -> tuple[list[mesh.Mesh], list[int]]:
     meshes: list[mesh.Mesh] = []
     mesh_index_to_layer_index: list[int] = []
-    disconnected_meshes_by_layer: list[list[mesh.Mesh]] = [[] for _ in prob.layers]
 
     for layer_i, layer in enumerate(prob.layers):
         # TODO: collect_seed_points should just return a list
@@ -273,10 +272,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
 
         for geom_i, geom in enumerate(layer.shape.geoms):
             if (layer_i, geom_i) not in connected_layer_mesh_pairs:
-                # This layer is not connected to any lumped elements
-                # Triangulate it for display as disconnected copper
-                m = mesher.triangulate(layer.shape.geoms[geom_i])
-                disconnected_meshes_by_layer[layer_i].append(m)
+                # This layer is not connected to any lumped elements, skip it
                 continue
             # This layer is connected to at least one lumped element, so we need to mesh it
 
@@ -299,7 +295,36 @@ def generate_meshes_for_problem(prob: problem.Problem,
             meshes.append(m)
             mesh_index_to_layer_index.append(layer_i)
 
-    return meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer
+    return meshes, mesh_index_to_layer_index
+
+
+def generate_disconnected_meshes(prob: problem.Problem,
+                                 connected_layer_mesh_pairs: set[tuple[int, int]],
+                                 ) -> list[list[mesh.Mesh]]:
+    """
+    Generate simple triangulations for disconnected copper regions.
+
+    Args:
+        prob: The Problem containing layers and geometry
+        connected_layer_mesh_pairs: Set of (layer_i, geom_i) pairs that are electrically connected
+
+    Returns:
+        List of disconnected meshes per layer: disconnected_meshes_by_layer[layer_i] = [mesh1, mesh2, ...]
+    """
+    # Use relaxed mesher for fast triangulation without quality constraints
+    relaxed_mesher = mesh.Mesher(mesh.Mesher.Config.RELAXED)
+    disconnected_meshes_by_layer: list[list[mesh.Mesh]] = [[] for _ in prob.layers]
+
+    for layer_i, layer in enumerate(prob.layers):
+        for geom_i, geom in enumerate(layer.shape.geoms):
+            if (layer_i, geom_i) in connected_layer_mesh_pairs:
+                continue
+            # This layer is not connected to any lumped elements
+            # Triangulate it for display as disconnected copper
+            m = relaxed_mesher.poly_to_mesh(layer.shape.geoms[geom_i])
+            disconnected_meshes_by_layer[layer_i].append(m)
+
+    return disconnected_meshes_by_layer
 
 
 @dataclass
@@ -715,8 +740,12 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     connectivity_graph = ConnectivityGraph.create_from_problem(prob, strtrees)
     connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
     log.info(f"Meshing the connected components")
-    meshes, mesh_index_to_layer_index, disconnected_meshes_by_layer = \
+    meshes, mesh_index_to_layer_index = \
         generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs, strtrees)
+
+    log.info("Meshing the disconnected components")
+    disconnected_meshes_by_layer = \
+        generate_disconnected_meshes(prob, connected_layer_mesh_pairs)
 
     # In the next step, we assign a global index to each vertex in every mesh.
     # This is needed since we need to somehow map the vertex indices to the
