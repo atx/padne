@@ -6,6 +6,8 @@
 #include <iterator>
 #include <cmath>
 #include <algorithm>
+#include <limits>
+
 
 //#define CGAL_USE_BASIC_VIEWER
 
@@ -16,6 +18,10 @@
 #include <CGAL/Delaunay_mesh_face_base_2.h>
 #include <CGAL/Mesh_2/Face_badness.h>
 #include <CGAL/Delaunay_mesh_criteria_2.h>
+#include <CGAL/Polygon_2.h>
+#include <CGAL/Polygon_with_holes_2.h>
+#include <CGAL/squared_distance_2.h>
+#include <CGAL/enum.h>
 
 #ifdef CGAL_USE_BASIC_VIEWER
 #include <CGAL/draw_triangulation_2.h>
@@ -25,8 +31,33 @@
 namespace py = pybind11;
 using namespace pybind11::literals;
 
+// Type definitions
+typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
+typedef CGAL::Polygon_2<K> Polygon_2;
+typedef CGAL::Polygon_with_holes_2<K> Polygon_with_holes_2;
+typedef CGAL::Triangulation_vertex_base_2<K> Vb;
+typedef CGAL::Delaunay_mesh_face_base_2<K> Fb;
+typedef CGAL::Triangulation_data_structure_2<Vb, Fb> Tds;
+typedef CGAL::Constrained_Delaunay_triangulation_2<K, Tds> CDT;
+typedef K::Point_2 Point;
+typedef K::Segment_2 Segment_2;
+
 // Helper macro (often used with version info passed from CMake)
 #define MACRO_STRINGIFY(x) #x
+
+// CGALPolygon class - wraps CGAL::Polygon_with_holes_2 for Python interface
+class CGALPolygon {
+private:
+    Polygon_with_holes_2 polygon_with_holes;
+    std::vector<Segment_2> all_edges;  // All edges for distance calculations
+
+    void extract_polygon_from_shapely(py::object shapely_polygon);
+
+public:
+    CGALPolygon(py::object shapely_polygon);
+    bool contains(double x, double y) const;
+    double distance_to_boundary(double x, double y) const;
+};
 
 // PolyBoundaryDistanceMap class for computing distance-based variable density
 class PolyBoundaryDistanceMap {
@@ -36,7 +67,7 @@ private:
     int width, height;
     std::vector<double> distances;  // Flat 2D array storage
 
-    py::object shapely_polygon;  // Store original shapely polygon for queries
+    CGALPolygon cgal_polygon;  // Use CGALPolygon for all operations
 
     void compute_distances();
 
@@ -171,9 +202,9 @@ public:
       Compute_squared_distance_2 squared_distance =
         this->traits.compute_squared_distance_2_object();
 
-      const Point_2& pa = fh->vertex(0)->point();
-      const Point_2& pb = fh->vertex(1)->point();
-      const Point_2& pc = fh->vertex(2)->point();
+      const Point& pa = fh->vertex(0)->point();
+      const Point& pb = fh->vertex(1)->point();
+      const Point& pc = fh->vertex(2)->point();
 
       // Compute triangle centroid using helper method
       auto [cx, cy] = compute_triangle_centroid(pa, pb, pc);
@@ -243,7 +274,7 @@ public:
 
   private:
     // Helper method to compute triangle centroid
-    std::pair<double, double> compute_triangle_centroid(const Point_2& pa, const Point_2& pb, const Point_2& pc) const {
+    std::pair<double, double> compute_triangle_centroid(const Point& pa, const Point& pb, const Point& pc) const {
       double cx = (CGAL::to_double(pa.x()) + CGAL::to_double(pb.x()) + CGAL::to_double(pc.x())) / 3.0;
       double cy = (CGAL::to_double(pa.y()) + CGAL::to_double(pb.y()) + CGAL::to_double(pc.y())) / 3.0;
       return std::make_pair(cx, cy);
@@ -274,16 +305,9 @@ public:
                   this->traits /* from the bad class */); }
 };
 
-typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
-typedef CGAL::Triangulation_vertex_base_2<K> Vb;
-typedef CGAL::Delaunay_mesh_face_base_2<K> Fb;
-typedef CGAL::Triangulation_data_structure_2<Vb, Fb> Tds;
-typedef CGAL::Constrained_Delaunay_triangulation_2<K, Tds> CDT;
 typedef Variable_density_mesh_size_criteria_2<CDT> Criteria;
 typedef CGAL::Delaunay_mesher_2<CDT, Criteria> Mesher;
-
 typedef CDT::Vertex_handle Vertex_handle;
-typedef CDT::Point Point;
 
 
 static void setup_cdt(CDT& cdt,
@@ -423,7 +447,7 @@ py::dict mesh(const py::object& py_config,
 
 // PolyBoundaryDistanceMap implementation
 PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(py::object polygon, double quantization)
-    : shapely_polygon(polygon), quantization(quantization) {
+    : quantization(quantization), cgal_polygon(polygon) {
 
     // Extract bounding box from polygon.bounds
     // Also add a margin such that coordinates "too far out" are reliably zero
@@ -445,34 +469,24 @@ PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(py::object polygon, double quan
     compute_distances();
 }
 
-void PolyBoundaryDistanceMap::compute_distances() {
-    // Import shapely.geometry module
-    py::module shapely_geom = py::module::import("shapely.geometry");
 
-    // Get boundary object once
-    py::object boundary = shapely_polygon.attr("boundary");
+void PolyBoundaryDistanceMap::compute_distances() {
 
     for (int j = 0; j < height; ++j) {
         for (int i = 0; i < width; ++i) {
-            // Compute world coordinates of pixel center using transformation method
+            // Compute world coordinates of pixel center
             auto [world_x, world_y] = grid_to_world(i, j);
 
-            // Create shapely Point
-            py::object point = shapely_geom.attr("Point")(world_x, world_y);
-
-            // Test containment (use covers to include boundary points)
-            bool is_inside = shapely_polygon.attr("covers")(point).cast<bool>();
-
             double distance;
-            if (is_inside) {
-                // Compute distance to boundary
-                distance = point.attr("distance")(boundary).cast<double>();
+            if (cgal_polygon.contains(world_x, world_y)) {
+                // Point is inside polygon - compute distance to boundary
+                distance = cgal_polygon.distance_to_boundary(world_x, world_y);
             } else {
                 // Outside polygon, distance = 0
                 distance = 0.0;
             }
 
-            // Store distance in flat array using index transformation
+            // Store distance in flat array
             distances[grid_to_index(i, j)] = distance;
         }
     }
@@ -540,6 +554,100 @@ int PolyBoundaryDistanceMap::grid_to_index(int grid_i, int grid_j) const {
     return grid_j * width + grid_i;
 }
 
+// CGALPolygon implementation
+CGALPolygon::CGALPolygon(py::object shapely_polygon) {
+    extract_polygon_from_shapely(shapely_polygon);
+}
+
+void CGALPolygon::extract_polygon_from_shapely(py::object shapely_polygon) {
+    // Extract exterior coordinates
+    py::object exterior = shapely_polygon.attr("exterior");
+    py::object coords = exterior.attr("coords");
+
+    // Convert exterior to CGAL polygon
+    Polygon_2 outer_boundary;
+    for (auto coord : coords) {
+        py::tuple pt = coord.cast<py::tuple>();
+        double x = pt[0].cast<double>();
+        double y = pt[1].cast<double>();
+        outer_boundary.push_back(Point(x, y));
+    }
+
+    // Make sure outer boundary is counter-clockwise (CGAL convention)
+    if (outer_boundary.is_clockwise_oriented()) {
+        outer_boundary.reverse_orientation();
+    }
+
+    // Add edges from outer boundary to all_edges
+    for (auto edge = outer_boundary.edges_begin(); edge != outer_boundary.edges_end(); ++edge) {
+        all_edges.push_back(*edge);
+    }
+
+    // Extract holes if any
+    std::vector<Polygon_2> holes;
+    py::object interiors = shapely_polygon.attr("interiors");
+    for (auto interior : interiors) {
+        Polygon_2 hole;
+        py::object hole_coords = interior.attr("coords");
+
+        for (auto coord : hole_coords) {
+            py::tuple pt = coord.cast<py::tuple>();
+            double x = pt[0].cast<double>();
+            double y = pt[1].cast<double>();
+            hole.push_back(Point(x, y));
+        }
+
+        // Make sure holes are clockwise (CGAL convention for holes)
+        if (!hole.is_clockwise_oriented()) {
+            hole.reverse_orientation();
+        }
+
+        // Add edges from hole to all_edges
+        for (auto edge = hole.edges_begin(); edge != hole.edges_end(); ++edge) {
+            all_edges.push_back(*edge);
+        }
+
+        holes.push_back(hole);
+    }
+
+    // Create polygon with holes
+    polygon_with_holes = Polygon_with_holes_2(outer_boundary, holes.begin(), holes.end());
+}
+
+bool CGALPolygon::contains(double x, double y) const {
+    Point point(x, y);
+
+    // Check if point is inside outer boundary
+    auto bounded = polygon_with_holes.outer_boundary().bounded_side(point);
+    if (bounded != CGAL::ON_BOUNDED_SIDE && bounded != CGAL::ON_BOUNDARY) {
+        return false;
+    }
+
+    // Check if point is outside all holes
+    for (auto hole = polygon_with_holes.holes_begin(); hole != polygon_with_holes.holes_end(); ++hole) {
+        if (hole->bounded_side(point) == CGAL::ON_BOUNDED_SIDE) {
+            return false; // Point is inside a hole
+        }
+    }
+
+    return true;
+}
+
+double CGALPolygon::distance_to_boundary(double x, double y) const {
+    Point point(x, y);
+    double min_squared_dist = std::numeric_limits<double>::max();
+
+    // Find minimum distance to all edges (exterior + holes)
+    for (const auto& edge : all_edges) {
+        double sq_dist = CGAL::to_double(CGAL::squared_distance(point, edge));
+        if (sq_dist < min_squared_dist) {
+            min_squared_dist = sq_dist;
+        }
+    }
+
+    return std::sqrt(min_squared_dist);
+}
+
 // PYBIND11_MODULE defines the module initialization function.
 // The first argument (R"_core") MUST match the first argument of pybind11_add_module in CMakeLists.txt.
 // The 'm' variable is the module object.
@@ -564,6 +672,15 @@ PYBIND11_MODULE(_cgal, m) {
         Returns:
             A dictionary containing the results of the meshing process.
     )pbdoc");
+
+    py::class_<CGALPolygon>(m, "CGALPolygon")
+        .def(py::init<py::object>(), "shapely_polygon"_a,
+             "Create CGAL polygon from Shapely polygon")
+        .def("contains", &CGALPolygon::contains, "x"_a, "y"_a,
+             "Check if point (x,y) is inside polygon")
+        .def("distance_to_boundary", &CGALPolygon::distance_to_boundary,
+             "x"_a, "y"_a,
+             "Compute distance from point to nearest boundary");
 
     py::class_<PolyBoundaryDistanceMap>(m, "PolyBoundaryDistanceMap")
         .def(py::init<py::object, double>(),

@@ -1,10 +1,15 @@
 import pytest
 import numpy as np
 import pickle
+import random
 import shapely.geometry
 
+from padne import kicad
+
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
-        Mesher, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap
+    Mesher, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon
+
+from conftest import for_all_kicad_projects
 
 
 class TestVector:
@@ -2570,3 +2575,80 @@ class TestPolyBoundaryDistanceMap:
         assert 0 < fine_error < coarse_error, \
             f"Fine quantization should be more accurate: " \
             f"coarse_error={coarse_error:.3f}, fine_error={fine_error:.3f}"
+
+
+class TestCGALPolygon:
+    """Test the CGALPolygon class for correctness against Shapely."""
+
+    def test_synthetic_geometry(self):
+        """Test CGALPolygon with synthetic rectangle-with-hole geometry."""
+        import padne._cgal as cgal
+        from shapely.geometry import Polygon, Point
+
+        # Create rectangle with hole: outer (0,0) to (10,10), hole (3,3) to (7,7)
+        outer = [(0, 0), (10, 0), (10, 10), (0, 10)]
+        hole = [(3, 3), (7, 3), (7, 7), (3, 7)]
+        shapely_poly = Polygon(outer, [hole])
+        cgal_poly = cgal.CGALPolygon(shapely_poly)
+
+        # Test predetermined points
+        test_points = [
+            # Points clearly inside outer boundary
+            (1, 1), (9, 9), (2, 5), (8, 2),
+            # Points inside the hole (should return False)
+            (5, 5), (4, 4), (6, 6),
+            # Points on outer boundary
+            (0, 0), (10, 5), (5, 10), (0, 5),
+            # Points on hole boundary
+            (3, 3), (7, 5), (5, 7), (3, 5),
+            # Points outside everything
+            (-1, -1), (11, 11), (-5, 5), (12, 3)
+        ]
+
+        for x, y in test_points:
+            point = Point(x, y)
+
+            # Test contains
+            cgal_contains = cgal_poly.contains(x, y)
+            shapely_contains = shapely_poly.covers(point)
+            assert cgal_contains == shapely_contains, \
+                f"Contains mismatch at ({x}, {y}): CGAL={cgal_contains}, Shapely={shapely_contains}"
+
+            # Test distance (only for inside points)
+            cgal_dist = cgal_poly.distance_to_boundary(x, y)
+            shapely_dist = point.distance(shapely_poly.boundary)
+
+            assert cgal_dist == pytest.approx(shapely_dist, rel=1e-4), \
+                f"Distance mismatch at ({x}, {y}): CGAL={cgal_dist:.6f}, Shapely={shapely_dist:.6f}"
+
+    @for_all_kicad_projects(include=["degenerate_hole_geometry", "simple_geometry", "via_tht_4layer"])
+    def test_real_geometry(self, project):
+        """Test CGALPolygon with real PCB geometries from KiCad test projects."""
+        from shapely.geometry import Point
+
+        random.seed(42)  # Deterministic random sampling
+
+        problem = kicad.load_kicad_project(project.pro_path)
+
+        for layer_idx, layer in enumerate(problem.layers):
+            for poly_idx, polygon in enumerate(layer.shape.geoms):
+                cgal_poly = CGALPolygon(polygon)
+                bounds = polygon.bounds
+
+                # Test 100 random points within bounding box
+                for point_idx in range(100):
+                    x = random.uniform(bounds[0], bounds[2])
+                    y = random.uniform(bounds[1], bounds[3])
+                    point = Point(x, y)
+
+                    # Test contains
+                    cgal_contains = cgal_poly.contains(x, y)
+                    shapely_contains = polygon.covers(point)
+                    assert cgal_contains == shapely_contains, \
+                        f"Contains mismatch, layer {layer_idx}, " \
+                        f"polygon {poly_idx}, point {point_idx} at ({x:.6f}, {y:.6f}): " \
+                        f"CGAL={cgal_contains}, Shapely={shapely_contains}"
+
+                    cgal_dist = cgal_poly.distance_to_boundary(x, y)
+                    shapely_dist = point.distance(polygon.boundary)
+                    assert cgal_dist == pytest.approx(shapely_dist, rel=1e-4)

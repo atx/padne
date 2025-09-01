@@ -658,6 +658,7 @@ class TwoForm:
 
 
 PolyBoundaryDistanceMap = cgal.PolyBoundaryDistanceMap
+CGALPolygon = cgal.CGALPolygon
 
 
 class Mesher:
