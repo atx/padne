@@ -91,213 +91,201 @@ public:
 };
 
 // Variable density mesh size criteria implementation
+// This is effectively a reimplementation of CGAL::Delaunay_mesh_size_criteria_2,
+// except it supports a variable size field based on a distance from boundary map
 template <class CDT>
 class Variable_density_mesh_size_criteria_2 :
-    public virtual CGAL::Delaunay_mesh_criteria_2<CDT>
-{
+    public virtual CGAL::Delaunay_mesh_criteria_2<CDT> {
 protected:
-  typedef typename CDT::Geom_traits Geom_traits;
-  double sizebound;
-  const PolyBoundaryDistanceMap* distance_map_ptr;
-  double min_distance;
-  double max_distance;
-  double size_factor;
+    typedef typename CDT::Geom_traits Geom_traits;
+    double sizebound;
+    const PolyBoundaryDistanceMap* distance_map_ptr;
+    double min_distance;
+    double max_distance;
+    double size_factor;
 
 public:
-  typedef CGAL::Delaunay_mesh_criteria_2<CDT> Base;
+    typedef CGAL::Delaunay_mesh_criteria_2<CDT> Base;
 
-  // Do note that for CGAL compatibility, we require an operational
-  // constructor that takes no arguments
-  Variable_density_mesh_size_criteria_2(const double aspect_bound = 0.125,
-                                        const double size_bound = 0,
-                                        const PolyBoundaryDistanceMap* dist_map_ptr = nullptr,
-                                        const double min_dist = 0.0,
-                                        const double max_dist = 0.0,
-                                        const double sz_factor = 1.0,
-                                        const Geom_traits& traits = Geom_traits())
-    : Base(aspect_bound, traits), sizebound(size_bound), distance_map_ptr(dist_map_ptr),
-      min_distance(min_dist), max_distance(max_dist), size_factor(sz_factor) {}
-
-  inline
-  double size_bound() const { return sizebound; }
-
-  inline
-  void set_size_bound(const double sb) { sizebound = sb; }
-
-  // first: squared_minimum_sine
-  // second: size
-  struct Quality : public std::pair<double, double>
-  {
-    typedef std::pair<double, double> Base;
-
-    Quality() : Base() {};
-    Quality(double _sine, double _size) : Base(_sine, _size) {}
-
-    const double& size() const { return second; }
-    const double& sine() const { return first; }
-
-    // q1<q2 means q1 is prioritized over q2
-    // ( q1 == *this, q2 == q )
-    bool operator<(const Quality& q) const
-    {
-      if( size() > 1 )
-        if( q.size() > 1 )
-          return ( size() > q.size() );
-        else
-          return true; // *this is big but not q
-      else
-        if( q.size() >  1 )
-          return false; // q is big but not *this
-      return( sine() < q.sine() );
-    }
-
-    std::ostream& operator<<(std::ostream& out) const
-    {
-      return out << "(size=" << size()
-                 << ", sine=" << sine() << ")";
-    }
-  };
-
-  class Is_bad: public Base::Is_bad
-  {
-  protected:
-    const double base_size_bound; // base size bound for variable scaling
-    const PolyBoundaryDistanceMap* distance_map_ptr;
-    const double min_distance;
-    const double max_distance;
-    const double size_factor;
-
-  public:
-    typedef typename Base::Is_bad::Point_2 Point_2;
-
-    Is_bad(const double aspect_bound,
-           const double size_bound,
-           const PolyBoundaryDistanceMap* dist_map_ptr,
-           const double min_dist,
-           const double max_dist,
-           const double sz_factor,
-           const Geom_traits& traits)
-      : Base::Is_bad(aspect_bound, traits),
-        base_size_bound(size_bound), distance_map_ptr(dist_map_ptr),
+    // Do note that for CGAL compatibility, we require an operational
+    // constructor that takes no arguments
+    Variable_density_mesh_size_criteria_2(const double aspect_bound = 0.125,
+                                          const double size_bound = 0,
+                                          const PolyBoundaryDistanceMap* dist_map_ptr = nullptr,
+                                          const double min_dist = 0.0,
+                                          const double max_dist = 0.0,
+                                          const double sz_factor = 1.0,
+                                          const Geom_traits& traits = Geom_traits())
+      : Base(aspect_bound, traits), sizebound(size_bound), distance_map_ptr(dist_map_ptr),
         min_distance(min_dist), max_distance(max_dist), size_factor(sz_factor) {}
 
-    CGAL::Mesh_2::Face_badness operator()(const Quality q) const
-    {
-      if( q.size() > 1 )
-        return CGAL::Mesh_2::IMPERATIVELY_BAD;
-      if( q.sine() < this->B )
-        return CGAL::Mesh_2::BAD;
-      else
-        return CGAL::Mesh_2::NOT_BAD;
-    }
+    inline double size_bound() const { return sizebound; }
 
-    CGAL::Mesh_2::Face_badness operator()(const typename CDT::Face_handle& fh,
-                                         Quality& q) const
-    {
-      typedef typename CDT::Geom_traits Geom_traits;
-      typedef typename Geom_traits::Compute_area_2 Compute_area_2;
-      typedef typename Geom_traits::Compute_squared_distance_2
-        Compute_squared_distance_2;
+    inline void set_size_bound(const double sb) { sizebound = sb; }
 
-      Compute_squared_distance_2 squared_distance =
-        this->traits.compute_squared_distance_2_object();
+    // first: squared_minimum_sine
+    // second: size
+    struct Quality : public std::pair<double, double> {
+      typedef std::pair<double, double> Base;
 
-      const Point& pa = fh->vertex(0)->point();
-      const Point& pb = fh->vertex(1)->point();
-      const Point& pc = fh->vertex(2)->point();
+      Quality() : Base() {};
+      Quality(double _sine, double _size) : Base(_sine, _size) {}
 
-      // Compute triangle centroid using helper method
-      auto [cx, cy] = compute_triangle_centroid(pa, pb, pc);
+      const double& size() const { return second; }
+      const double& sine() const { return first; }
 
-      // Compute distance to polygon boundary using distance map
-      double boundary_distance = distance_map_ptr ? distance_map_ptr->query(cx, cy) : 0.0;
-
-      // Compute effective size bound using piecewise linear scaling
-      double effective_size_bound = compute_effective_size_bound(boundary_distance);
-      double squared_size_bound = effective_size_bound * effective_size_bound;
-
-      double
-        a = CGAL::to_double(squared_distance(pb, pc)),
-        b = CGAL::to_double(squared_distance(pc, pa)),
-        c = CGAL::to_double(squared_distance(pa, pb));
-
-      double max_sq_length; // squared max edge length
-      double second_max_sq_length;
-
-      if(a<b)
-        {
-          if(b<c) {
-            max_sq_length = c;
-            second_max_sq_length = b;
+      // q1<q2 means q1 is prioritized over q2
+      // ( q1 == *this, q2 == q )
+      bool operator<(const Quality& q) const {
+          if (size() > 1) {
+              if (q.size() > 1) {
+                  return size() > q.size();
+              } else {
+                  return true; // *this is big but not q
+              }
+          } else {
+              if (q.size() > 1) {
+                  return false; // q is big but not *this
+              }
           }
-          else { // c<=b
-            max_sq_length = b;
-            second_max_sq_length = ( a < c ? c : a );
-          }
+          return sine() < q.sine();
+      }
+
+      std::ostream& operator<<(std::ostream& out) const {
+          return out << "(size=" << size()
+                     << ", sine=" << sine() << ")";
+      }
+    };
+
+    class Is_bad: public Base::Is_bad {
+    protected:
+        const double base_size_bound; // base size bound for variable scaling
+        const PolyBoundaryDistanceMap* distance_map_ptr;
+        const double min_distance;
+        const double max_distance;
+        const double size_factor;
+
+    public:
+        typedef typename Base::Is_bad::Point_2 Point_2;
+
+        Is_bad(const double aspect_bound,
+               const double size_bound,
+               const PolyBoundaryDistanceMap* dist_map_ptr,
+               const double min_dist,
+               const double max_dist,
+               const double sz_factor,
+               const Geom_traits& traits)
+          : Base::Is_bad(aspect_bound, traits),
+            base_size_bound(size_bound), distance_map_ptr(dist_map_ptr),
+            min_distance(min_dist), max_distance(max_dist), size_factor(sz_factor) {}
+
+        CGAL::Mesh_2::Face_badness operator()(const Quality q) const {
+            if (q.size() > 1) {
+                return CGAL::Mesh_2::IMPERATIVELY_BAD;
+            }
+            if (q.sine() < this->B) {
+                return CGAL::Mesh_2::BAD;
+            }
+            return CGAL::Mesh_2::NOT_BAD;
         }
-      else // b<=a
-        {
-          if(a<c) {
-            max_sq_length = c;
-            second_max_sq_length = a;
-          }
-          else { // c<=a
-            max_sq_length = a;
-            second_max_sq_length = ( b < c ? c : b );
-          }
-        }
 
-      q.second = 0;
-      if( squared_size_bound != 0 )
-        {
-          q.second = max_sq_length / squared_size_bound;
-            // normalized by size bound to deal
-            // with size field
-          if( q.size() > 1 )
-            {
-              q.first = 1; // (do not compute sine)
-              return CGAL::Mesh_2::IMPERATIVELY_BAD;
+        CGAL::Mesh_2::Face_badness operator()(const typename CDT::Face_handle& fh,
+                                              Quality& q) const {
+            typedef typename CDT::Geom_traits Geom_traits;
+            typedef typename Geom_traits::Compute_area_2 Compute_area_2;
+            typedef typename Geom_traits::Compute_squared_distance_2
+              Compute_squared_distance_2;
+
+            Compute_squared_distance_2 squared_distance =
+              this->traits.compute_squared_distance_2_object();
+
+            const Point& pa = fh->vertex(0)->point();
+            const Point& pb = fh->vertex(1)->point();
+            const Point& pc = fh->vertex(2)->point();
+
+            // Compute triangle centroid using helper method
+            auto [cx, cy] = compute_triangle_centroid(pa, pb, pc);
+
+            // Compute distance to polygon boundary using distance map
+            double boundary_distance = distance_map_ptr ? distance_map_ptr->query(cx, cy) : 0.0;
+
+            // Compute effective size bound using piecewise linear scaling
+            double effective_size_bound = compute_effective_size_bound(boundary_distance);
+            double squared_size_bound = effective_size_bound * effective_size_bound;
+
+            double a = CGAL::to_double(squared_distance(pb, pc));
+            double b = CGAL::to_double(squared_distance(pc, pa));
+            double c = CGAL::to_double(squared_distance(pa, pb));
+
+            double max_sq_length; // squared max edge length
+            double second_max_sq_length;
+
+            if (a < b) {
+                if (b < c) {
+                    max_sq_length = c;
+                    second_max_sq_length = b;
+                } else { // c<=b
+                    max_sq_length = b;
+                    second_max_sq_length = ( a < c ? c : a );
+                }
+            } else {
+                if (a < c) {
+                    max_sq_length = c;
+                    second_max_sq_length = a;
+                } else {
+                    max_sq_length = a;
+                    second_max_sq_length = b < c ? c : b;
+                }
+            }
+
+            q.second = 0;
+            if (squared_size_bound != 0) {
+                q.second = max_sq_length / squared_size_bound;
+                // normalized by size bound to deal
+                // with size field
+                if (q.size() > 1) {
+                    q.first = 1; // (do not compute sine)
+                    return CGAL::Mesh_2::IMPERATIVELY_BAD;
+                }
+            }
+
+            Compute_area_2 area_2 = this->traits.compute_area_2_object();
+
+            double area = 2*CGAL::to_double(area_2(pa, pb, pc));
+
+            q.first = (area * area) / (max_sq_length * second_max_sq_length); // (sine)
+
+            if( q.sine() < this->B ) {
+                return CGAL::Mesh_2::BAD;
+            } else {
+                return CGAL::Mesh_2::NOT_BAD;
             }
         }
 
-      Compute_area_2 area_2 = this->traits.compute_area_2_object();
+    private:
+        // Helper method to compute triangle centroid
+        std::pair<double, double> compute_triangle_centroid(const Point& pa, const Point& pb, const Point& pc) const {
+            double cx = (CGAL::to_double(pa.x()) + CGAL::to_double(pb.x()) + CGAL::to_double(pc.x())) / 3.0;
+            double cy = (CGAL::to_double(pa.y()) + CGAL::to_double(pb.y()) + CGAL::to_double(pc.y())) / 3.0;
+            return std::make_pair(cx, cy);
+        }
 
-      double area = 2*CGAL::to_double(area_2(pa, pb, pc));
-
-      q.first = (area * area) / (max_sq_length * second_max_sq_length); // (sine)
-
-      if( q.sine() < this->B )
-        return CGAL::Mesh_2::BAD;
-      else
-        return CGAL::Mesh_2::NOT_BAD;
-    }
-
-  private:
-    // Helper method to compute triangle centroid
-    std::pair<double, double> compute_triangle_centroid(const Point& pa, const Point& pb, const Point& pc) const {
-      double cx = (CGAL::to_double(pa.x()) + CGAL::to_double(pb.x()) + CGAL::to_double(pc.x())) / 3.0;
-      double cy = (CGAL::to_double(pa.y()) + CGAL::to_double(pb.y()) + CGAL::to_double(pc.y())) / 3.0;
-      return std::make_pair(cx, cy);
-    }
-
-    // Helper method for piecewise linear scaling
-    double compute_effective_size_bound(double boundary_distance) const {
-      // If no distance map, use uniform sizing
-      if (!distance_map_ptr) {
-        return base_size_bound;
-      }
-
-      if (boundary_distance <= min_distance) {
-        return base_size_bound;
-      } else if (boundary_distance >= max_distance) {
-        return base_size_bound * size_factor;
-      } else {
-        // Linear interpolation between min_distance and max_distance
-        double t = (boundary_distance - min_distance) / (max_distance - min_distance);
-        return base_size_bound * (1.0 + t * (size_factor - 1.0));
-      }
-    }
-  };
+        // Helper method for piecewise linear scaling
+        double compute_effective_size_bound(double boundary_distance) const {
+            // If no distance map, use uniform sizing
+            if (!distance_map_ptr) {
+                return base_size_bound;
+            }
+            if (boundary_distance <= min_distance) {
+                return base_size_bound;
+            } else if (boundary_distance >= max_distance) {
+                return base_size_bound * size_factor;
+            }
+            // Linear interpolation between min_distance and max_distance
+            double t = (boundary_distance - min_distance) / (max_distance - min_distance);
+            return base_size_bound * (1.0 + t * (size_factor - 1.0));
+        }
+    };
 
   Is_bad is_bad_object() const
   { return Is_bad(this->bound(), size_bound(), distance_map_ptr,
@@ -371,7 +359,16 @@ void setup_mesher(Mesher& mesher,
     auto max_distance = py_config.attr("variable_density_max_distance").cast<double>();
     auto size_factor = py_config.attr("variable_size_maximum_factor").cast<double>();
 
-    mesher.set_criteria(Criteria(b, maximum_size, &distance_map, min_distance, max_distance, size_factor, K()));
+    mesher.set_criteria(Criteria(
+            b,
+            maximum_size,
+            &distance_map,
+            min_distance,
+            max_distance,
+            size_factor,
+            K()
+        )
+    );
 
     // Now we insert the seeds
     // Theoretically, it should not be necessary to insert _all_ the seeds,
