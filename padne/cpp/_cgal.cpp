@@ -344,7 +344,7 @@ static void set_mesher_seeds(Mesher& mesher,
 void setup_mesher(Mesher& mesher,
                   const py::object& py_config,
                   const std::vector<std::pair<double, double>>& seeds,
-                  const PolyBoundaryDistanceMap& distance_map) {
+                  const PolyBoundaryDistanceMap* distance_map_ptr) {
     // Extract standard parameters
     auto minimum_angle = py_config.attr("minimum_angle").cast<float>();
     auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
@@ -359,7 +359,7 @@ void setup_mesher(Mesher& mesher,
     mesher.set_criteria(Criteria(
             b,
             maximum_size,
-            &distance_map,
+            distance_map_ptr,
             min_distance,
             max_distance,
             size_factor,
@@ -414,7 +414,7 @@ py::dict mesh(const py::object& py_config,
               const std::vector<std::pair<double, double>>& vertices,
               const std::vector<std::pair<int, int>>& segments,
               const std::vector<std::pair<double, double>>& seeds,
-              const PolyBoundaryDistanceMap& distance_map) {
+              const py::object& distance_map_obj) {
 
     // Redirect via python during the scope of this function
     py::scoped_ostream_redirect stream_redirect;
@@ -423,7 +423,14 @@ py::dict mesh(const py::object& py_config,
     setup_cdt(cdt, vertices, segments, seeds);
 
     Mesher mesher(cdt);
-    setup_mesher(mesher, py_config, seeds, distance_map);
+
+    // Check if distance_map_obj is None, and extract pointer if not
+    const PolyBoundaryDistanceMap* distance_map_ptr = nullptr;
+    if (!distance_map_obj.is_none()) {
+        distance_map_ptr = &distance_map_obj.cast<const PolyBoundaryDistanceMap&>();
+    }
+
+    setup_mesher(mesher, py_config, seeds, distance_map_ptr);
 
     mesher.refine_mesh();
 

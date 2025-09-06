@@ -8,6 +8,7 @@ from padne import kicad
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
     Mesher, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon
+from unittest.mock import patch, Mock
 
 from conftest import for_all_kicad_projects
 
@@ -2652,3 +2653,78 @@ class TestCGALPolygon:
                     cgal_dist = cgal_poly.distance_to_boundary(x, y)
                     shapely_dist = point.distance(polygon.boundary)
                     assert cgal_dist == pytest.approx(shapely_dist, rel=1e-4)
+
+
+class TestVariableDensityMeshing:
+    """Test variable density meshing configuration."""
+
+    def test_is_variable_density_property(self):
+        """Test the is_variable_density property correctly identifies variable density mode."""
+        # Default config should have variable density enabled
+        default_config = Mesher.Config()
+        assert default_config.is_variable_density is True
+        assert default_config.variable_size_maximum_factor == 3.0
+
+        # Config with factor=1.0 should disable variable density
+        disabled_config = Mesher.Config(variable_size_maximum_factor=1.0)
+        assert disabled_config.is_variable_density is False
+
+        # Config with factor != 1.0 should enable variable density
+        enabled_config = Mesher.Config(variable_size_maximum_factor=2.5)
+        assert enabled_config.is_variable_density is True
+
+    @patch('padne._cgal.PolyBoundaryDistanceMap')
+    def test_variable_density_disabled_no_distance_map_construction(self, mock_distance_map):
+        """Test that PolyBoundaryDistanceMap is not constructed when variable density is disabled."""
+        # Create a simple rectangle for testing
+        poly = shapely.geometry.box(0, 0, 10, 10)
+
+        # Create mesher with variable density disabled
+        config = Mesher.Config(variable_size_maximum_factor=1.0)
+        assert not config.is_variable_density
+        mesher = Mesher(config)
+
+        # Mock the cgal.mesh function to avoid actual meshing
+        with patch('padne._cgal.mesh') as mock_cgal_mesh:
+            mock_cgal_mesh.return_value = {'vertices': [], 'triangles': []}
+
+            # Call poly_to_mesh
+            mesher.poly_to_mesh(poly)
+
+            # Verify PolyBoundaryDistanceMap was not constructed
+            mock_distance_map.assert_not_called()
+
+            # Verify cgal.mesh was called with None as the distance_map parameter
+            mock_cgal_mesh.assert_called_once()
+            args, kwargs = mock_cgal_mesh.call_args
+            assert args[4] is None  # distance_map should be None
+
+    @patch('padne._cgal.PolyBoundaryDistanceMap')
+    def test_variable_density_enabled_creates_distance_map(self, mock_distance_map):
+        """Test that PolyBoundaryDistanceMap is constructed when variable density is enabled."""
+        # Create a simple rectangle for testing
+        poly = shapely.geometry.box(0, 0, 10, 10)
+
+        # Create mesher with variable density enabled (default behavior)
+        config = Mesher.Config(variable_size_maximum_factor=3.0)
+        assert config.is_variable_density
+        mesher = Mesher(config)
+
+        # Mock the distance map instance
+        mock_distance_map_instance = Mock()
+        mock_distance_map.return_value = mock_distance_map_instance
+
+        # Mock the cgal.mesh function to avoid actual meshing
+        with patch('padne._cgal.mesh') as mock_cgal_mesh:
+            mock_cgal_mesh.return_value = {'vertices': [], 'triangles': []}
+
+            # Call poly_to_mesh
+            mesher.poly_to_mesh(poly)
+
+            # Verify PolyBoundaryDistanceMap was constructed with correct parameters
+            mock_distance_map.assert_called_once_with(poly, config.distance_map_quantization)
+
+            # Verify cgal.mesh was called with the distance map instance
+            mock_cgal_mesh.assert_called_once()
+            args, kwargs = mock_cgal_mesh.call_args
+            assert args[4] is mock_distance_map_instance
