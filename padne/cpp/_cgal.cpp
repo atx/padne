@@ -123,37 +123,34 @@ public:
 
     inline void set_size_bound(const double sb) { sizebound = sb; }
 
-    // first: squared_minimum_sine
-    // second: size
-    struct Quality : public std::pair<double, double> {
-      typedef std::pair<double, double> Base;
+    // Simple struct with public members for size and sine
+    struct Quality {
+      double sine;
+      double size;
 
-      Quality() : Base() {};
-      Quality(double _sine, double _size) : Base(_sine, _size) {}
-
-      const double& size() const { return second; }
-      const double& sine() const { return first; }
+      Quality() : sine(0.0), size(0.0) {}
+      Quality(double _sine, double _size) : sine(_sine), size(_size) {}
 
       // q1<q2 means q1 is prioritized over q2
       // ( q1 == *this, q2 == q )
       bool operator<(const Quality& q) const {
-          if (size() > 1) {
-              if (q.size() > 1) {
-                  return size() > q.size();
+          if (size > 1) {
+              if (q.size > 1) {
+                  return size > q.size;
               } else {
                   return true; // *this is big but not q
               }
           } else {
-              if (q.size() > 1) {
+              if (q.size > 1) {
                   return false; // q is big but not *this
               }
           }
-          return sine() < q.sine();
+          return sine < q.sine;
       }
 
       std::ostream& operator<<(std::ostream& out) const {
-          return out << "(size=" << size()
-                     << ", sine=" << sine() << ")";
+          return out << "(size=" << size
+                     << ", sine=" << sine << ")";
       }
     };
 
@@ -180,10 +177,10 @@ public:
             min_distance(min_dist), max_distance(max_dist), size_factor(sz_factor) {}
 
         CGAL::Mesh_2::Face_badness operator()(const Quality q) const {
-            if (q.size() > 1) {
+            if (q.size > 1) {
                 return CGAL::Mesh_2::IMPERATIVELY_BAD;
             }
-            if (q.sine() < this->B) {
+            if (q.sine < this->B) {
                 return CGAL::Mesh_2::BAD;
             }
             return CGAL::Mesh_2::NOT_BAD;
@@ -238,13 +235,13 @@ public:
                 }
             }
 
-            q.second = 0;
+            q.size = 0;
             if (squared_size_bound != 0) {
-                q.second = max_sq_length / squared_size_bound;
+                q.size = max_sq_length / squared_size_bound;
                 // normalized by size bound to deal
                 // with size field
-                if (q.size() > 1) {
-                    q.first = 1; // (do not compute sine)
+                if (q.size > 1) {
+                    q.sine = 1; // (do not compute sine)
                     return CGAL::Mesh_2::IMPERATIVELY_BAD;
                 }
             }
@@ -253,9 +250,9 @@ public:
 
             double area = 2*CGAL::to_double(area_2(pa, pb, pc));
 
-            q.first = (area * area) / (max_sq_length * second_max_sq_length); // (sine)
+            q.sine = (area * area) / (max_sq_length * second_max_sq_length); // (sine)
 
-            if( q.sine() < this->B ) {
+            if( q.sine < this->B ) {
                 return CGAL::Mesh_2::BAD;
             } else {
                 return CGAL::Mesh_2::NOT_BAD;
