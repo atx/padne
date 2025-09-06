@@ -766,5 +766,8 @@ class Mesher:
         return mesh
 
 
-# Initialize the static RELAXED configuration after class definition
-Mesher.Config.RELAXED = Mesher.Config(minimum_angle=5.0, maximum_size=0)
+Mesher.Config.RELAXED = Mesher.Config(
+    minimum_angle=5.0,
+    maximum_size=0,
+    variable_size_maximum_factor=1.0
+)
