@@ -3,7 +3,12 @@ project(padne_cpp_cgal LANGUAGES CXX) # Name for the C++ part of the project
 
 # Find the pybind11 package. scikit-build-core helps CMake find it.
 find_package(pybind11 REQUIRED)
-# Find the CGAL package using its CMake config files
+
+# Use bundled CGAL instead of system CGAL
+set(CGAL_DIR "${CMAKE_SOURCE_DIR}/../../third_party/cgal")
+list(APPEND CMAKE_PREFIX_PATH "${CGAL_DIR}")
+
+# Find the CGAL package using its CMake config files (now using bundled version)
 find_package(CGAL REQUIRED COMPONENTS Core)
 
 # Define the source file(s) for our extension module.
