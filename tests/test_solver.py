@@ -615,7 +615,11 @@ class TestSyntheticProblems:
 
         # Create the Problem and solve
         prob_coaxial = problem.Problem(layers=[layer], networks=networks)
-        solution = solver.solve(prob_coaxial)
+        # Disable variable density meshing for consistent test results
+        mesher_config = mesh.Mesher.Config(
+            variable_size_maximum_factor=1.0  # Disable variable density
+        )
+        solution = solver.solve(prob_coaxial, mesher_config=mesher_config)
 
         # Verify the solution
         assert solution is not None
