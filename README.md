@@ -46,15 +46,11 @@ This is ideal if you want to hack on padne itself or are looking for a more ligh
 ```
 sudo apt update
 sudo apt upgrade
-sudo apt install python3-full python3-dev python3-pip libcgal-dev git libegl1 libegl1-mesa-dev kicad
+sudo apt install python3-full python3-dev python3-pip git libegl1 libegl1-mesa-dev libmpfr-dev libgmp-dev libboost-dev kicad
 # Feel free to do this in a virtual environment if you do not want to install pygerber or padne globally
 pip3 install --user git+https://github.com/Argmaster/pygerber
 pip3 install --user -e .[test] -v
 ```
-
-
-> [!WARNING]
-> On Debian, the build is likely to fail due to invalid CGAL CMake installation. This is best fixed by [installing CGAL manually](https://doc.cgal.org/latest/Manual/installation.html) from sources.
 
 ## Running the solver
 
