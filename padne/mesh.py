@@ -686,6 +686,26 @@ class Mesher:
             """Return True if variable density meshing is enabled."""
             return self.variable_size_maximum_factor != 1.0
 
+        def __post_init__(self):
+            """Validate configuration parameters."""
+            if not (0 <= self.minimum_angle <= 60):
+                raise ValueError(f"minimum_angle must be between 0 and 60 degrees, got {self.minimum_angle}")
+
+            if self.maximum_size < 0:
+                raise ValueError(f"maximum_size must be non-negative, got {self.maximum_size}")
+
+            if self.variable_density_min_distance < 0:
+                raise ValueError(f"variable_density_min_distance must be non-negative, got {self.variable_density_min_distance}")
+
+            if self.variable_density_max_distance <= self.variable_density_min_distance:
+                raise ValueError(f"variable_density_max_distance ({self.variable_density_max_distance}) must be greater than variable_density_min_distance ({self.variable_density_min_distance})")
+
+            if self.variable_size_maximum_factor < 1.0:
+                raise ValueError(f"variable_size_maximum_factor must be >= 1.0, got {self.variable_size_maximum_factor}")
+
+            if self.distance_map_quantization <= 0:
+                raise ValueError(f"distance_map_quantization must be positive, got {self.distance_map_quantization}")
+
     def __init__(self, config: Optional['Mesher.Config'] = None):
         self.config = config if config is not None else Mesher.Config()
 

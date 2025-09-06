@@ -40,13 +40,41 @@ def add_mesher_args(parser):
         default=default_config.maximum_size,
         help="Maximum size constraint for mesh triangles"
     )
+    parser.add_argument(
+        "--variable-density-min-distance",
+        type=float,
+        default=default_config.variable_density_min_distance,
+        help="Minimum distance for variable density transition"
+    )
+    parser.add_argument(
+        "--variable-density-max-distance",
+        type=float,
+        default=default_config.variable_density_max_distance,
+        help="Maximum distance for variable density transition"
+    )
+    parser.add_argument(
+        "--variable-size-maximum-factor",
+        type=float,
+        default=default_config.variable_size_maximum_factor,
+        help="Maximum size scaling factor (1.0 disables variable density)"
+    )
+    parser.add_argument(
+        "--distance-map-quantization",
+        type=float,
+        default=default_config.distance_map_quantization,
+        help="Quantization step for distance map"
+    )
 
 
 def mesher_config_from_args(args):
     """Construct a Mesher.Config from parsed arguments."""
     return padne.mesh.Mesher.Config(
         minimum_angle=args.mesh_angle,
-        maximum_size=args.mesh_size
+        maximum_size=args.mesh_size,
+        variable_density_min_distance=args.variable_density_min_distance,
+        variable_density_max_distance=args.variable_density_max_distance,
+        variable_size_maximum_factor=args.variable_size_maximum_factor,
+        distance_map_quantization=args.distance_map_quantization
     )
 
 
