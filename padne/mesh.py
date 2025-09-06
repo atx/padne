@@ -681,6 +681,11 @@ class Mesher:
         # Static relaxed configuration for disconnected copper triangulation
         RELAXED = None  # Will be initialized after class definition
 
+        @property
+        def is_variable_density(self) -> bool:
+            """Return True if variable density meshing is enabled."""
+            return self.variable_size_maximum_factor != 1.0
+
     def __init__(self, config: Optional['Mesher.Config'] = None):
         self.config = config if config is not None else Mesher.Config()
 
@@ -745,8 +750,11 @@ class Mesher:
 
         vertices, segments, seeds = self._prepare_polygon_for_cgal(poly, seed_points)
 
-        # Create distance map for variable density meshing
-        distance_map = cgal.PolyBoundaryDistanceMap(poly, self.config.distance_map_quantization)
+        # Create distance map for variable density meshing only if enabled
+        if self.config.is_variable_density:
+            distance_map = cgal.PolyBoundaryDistanceMap(poly, self.config.distance_map_quantization)
+        else:
+            distance_map = None
 
         cgal_output = cgal.mesh(self.config, vertices, segments, seeds, distance_map)
 
