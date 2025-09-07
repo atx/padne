@@ -1,7 +1,7 @@
 # padne
 *Turn your KiCad designs into an interactive voltage drop and current density visualizations*
 
-![image](https://github.com/user-attachments/assets/0792fa00-28ec-4db6-be18-a0535ac59db3)
+<img width="1875" height="600" alt="image" src="https://github.com/user-attachments/assets/5c27ca8f-dac5-44c1-97ec-30a2e30950d4" />
 
 
 padne is a KiCad-native power delivery network analysis tool. It uses the finite element method in order to simulate the voltage drop induced by DC currents on printed circuit boards. This allows easy identification of resistive bottlenecks, design of high current distribution networks or implementing complex heating elements.
