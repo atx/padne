@@ -59,6 +59,7 @@ include = ["padne*"]
 
 [tool.scikit-build]
 cmake.source-dir = "padne/cpp"
+cmake.args = ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
 
 wheel.packages = ["padne"]
 build-dir = "build/{wheel_tag}"
