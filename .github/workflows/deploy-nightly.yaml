@@ -1,0 +1,82 @@
+name: Deploy Nightly Build
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC, but only if there are new commits
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  check_commits:
+    name: "Check for new commits"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch full history to check commits
+          submodules: recursive
+
+      - name: Check for commits in last 24 hours
+        id: check
+        run: |
+          # Get the timestamp for 24 hours ago
+          yesterday=$(date -d '24 hours ago' --iso-8601=seconds)
+
+          # Check if there are any commits on master since yesterday
+          commits=$(git log --since="$yesterday" --oneline | wc -l)
+
+          if [ "$commits" -gt 0 ]; then
+            echo "Found $commits commits in the last 24 hours"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "No commits in the last 24 hours"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: "Build Binary"
+    needs: [check_commits]
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && needs.check_commits.outputs.should_build == 'true')
+    uses: ./.github/workflows/build-binary.yaml
+    with:
+      retention_days: 60
+
+  deploy_pages:
+    name: "Deploy to GitHub Pages"
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: ./binary/
+
+      - name: Prepare GitHub Pages deployment
+        run: |
+          mkdir -p pages
+          cp binary/padne pages/padne-linux-x64
+          echo "Binary built from commit ${{ github.sha }} on $(date)" > pages/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

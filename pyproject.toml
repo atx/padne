@@ -1,13 +1,13 @@
 [build-system]
 # Minimum requirements for the build system to execute.
-requires = ["scikit-build-core>=0.7", "pybind11>=3", "setuptools>=61.0.0", "wheel"]
+requires = ["scikit-build-core>=0.10", "pybind11>=3", "setuptools>=80.0.0", "setuptools-scm>=8", "wheel"]
 build-backend = "scikit_build_core.build"
 
 [project]
 # Core project metadata (PEP 621)
 # See: https://packaging.python.org/en/latest/specifications/declaring-project-metadata/
 name = "padne"
-version = "0.0.1"
+dynamic = ["version"]
 description = "A DC power delivery network analyzer for KiCad"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -65,3 +65,9 @@ wheel.packages = ["padne"]
 build-dir = "build/{wheel_tag}"
 
 install.strip = false
+
+# Configure version provider to use setuptools-scm
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+
+[tool.setuptools_scm]
+write_to = "padne/_version.py"

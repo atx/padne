@@ -11,6 +11,7 @@ import padne.solver
 import padne.ui
 import padne.mesh
 import padne.paraview
+from padne import __version__
 
 
 def setup_logging(debug_mode: bool):
@@ -84,6 +85,11 @@ def parse_args():
         "-d", "--debug",
         action="store_true",
         help="Enable debug logging output."
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"padne {__version__}"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

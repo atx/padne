@@ -173,3 +173,6 @@ compile_commands.json
 
 # Test configuration
 tests/excluded_kicad_projects.txt
+
+# Auto-generated version file
+padne/_version.py
