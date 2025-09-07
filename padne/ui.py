@@ -1707,7 +1707,7 @@ class ColorScaleWidget(QWidget):
     def updateLabels(self):
         """Update the delta and range labels."""
         delta = self.v_max - self.v_min
-        delta_str = units.Value(delta, self.unit).pretty_format()
+        delta_str = units.Value(delta, self.unit).pretty_format(decimal_places=2)
         min_str = units.Value(self.v_min, self.unit).pretty_format()
         max_str = units.Value(self.v_max, self.unit).pretty_format()
 
