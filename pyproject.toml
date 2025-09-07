@@ -1,6 +1,6 @@
 [build-system]
 # Minimum requirements for the build system to execute.
-requires = ["scikit-build-core>=0.7", "pybind11>=2.10", "setuptools>=61.0.0", "wheel"]
+requires = ["scikit-build-core>=0.7", "pybind11>=3", "setuptools>=61.0.0", "wheel"]
 build-backend = "scikit_build_core.build"
 
 [project]
