@@ -16,7 +16,7 @@ import tempfile
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Iterator, List, ClassVar, Iterable
+from typing import Any, Optional, Iterator, ClassVar, Iterable, Union
 
 from . import problem, units
 
@@ -32,6 +32,15 @@ COPPER_CONDUCTIVITY = 5.95e4
 
 def nm_to_mm(f: float) -> float:
     return f / 1000000
+
+
+def ensure_geometry_is_multipolygon(geometry: Union[shapely.geometry.Polygon, shapely.geometry.MultiPolygon]) -> shapely.geometry.MultiPolygon:
+    """Convert Polygon to MultiPolygon if needed, ensuring consistent interface."""
+    if geometry.geom_type == "Polygon":
+        return shapely.geometry.MultiPolygon([geometry])
+    if geometry.geom_type != "MultiPolygon":
+        raise ValueError(f"Expected Polygon or MultiPolygon, got {geometry.geom_type}")
+    return geometry
 
 
 @dataclass
@@ -1298,8 +1307,7 @@ def extract_layers_from_gerbers(board,
         geometry = shapely.remove_repeated_points(geometry, tolerance=1e-8)
 
         # If the layer has only a single connected component, convert it to a MultiPolygon
-        if geometry.geom_type == "Polygon":
-            geometry = shapely.geometry.MultiPolygon([geometry])
+        geometry = ensure_geometry_is_multipolygon(geometry)
 
         # Create a PlottedGerberLayer object
         plotted_layer = PlottedGerberLayer(
@@ -1482,8 +1490,7 @@ def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
             punched_geometry = plotted_layer.geometry.difference(
                 union_holes_by_layer[plotted_layer.name]
             )
-            if punched_geometry.geom_type == "Polygon":
-                punched_geometry = shapely.geometry.MultiPolygon([punched_geometry])
+            punched_geometry = ensure_geometry_is_multipolygon(punched_geometry)
             # There are cases where the difference may result in
             # a GeometryCollection or empty geometry.
             # I think we are careful enough that it should not happen,
@@ -1557,8 +1564,7 @@ def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
         # TODO: We should remove this from the list of plotted layers
         log.warning(f"Clipped geometry for layer {plotted_layer.name} is empty after applying outline")
 
-    if clipped_geometry.geom_type == "Polygon":
-        clipped_geometry = shapely.geometry.MultiPolygon([clipped_geometry])
+    clipped_geometry = ensure_geometry_is_multipolygon(clipped_geometry)
 
     return PlottedGerberLayer(
         name=plotted_layer.name,
