@@ -438,35 +438,38 @@ class AppToolBar(QToolBar):
         view_menu = QMenu(view_menu_button)
 
         # Create "Show Edges" action for the menu
-        show_edges_action_in_menu = QAction("Show Edges", self)
-        show_edges_action_in_menu.setStatusTip("Toggle visibility of mesh edges (E)")
-        show_edges_action_in_menu.setToolTip("Toggle visibility of mesh edges (E)")
-        show_edges_action_in_menu.setCheckable(True)
-        show_edges_action_in_menu.setChecked(True)  # Default to visible
-        show_edges_action_in_menu.triggered.connect(self.mesh_viewer.setEdgesVisible)
-        view_menu.addAction(show_edges_action_in_menu)
+        self.show_edges_action = QAction("Show Edges", self)
+        self.show_edges_action.setStatusTip("Toggle visibility of mesh edges (E)")
+        self.show_edges_action.setToolTip("Toggle visibility of mesh edges (E)")
+        self.show_edges_action.setCheckable(True)
+        self.show_edges_action.setChecked(True)  # Default to visible
+        self.show_edges_action.triggered.connect(self.mesh_viewer.setEdgesVisible)
+        view_menu.addAction(self.show_edges_action)
 
         # Create "Show Outline" action for the menu
-        show_outline_action_in_menu = QAction("Show Outline", self)
-        show_outline_action_in_menu.setStatusTip("Toggle visibility of mesh outline (Shift+E)")
-        show_outline_action_in_menu.setToolTip("Toggle visibility of mesh outline (Shift+E)")
-        show_outline_action_in_menu.setCheckable(True)
-        show_outline_action_in_menu.setChecked(True)  # Default to visible
-        show_outline_action_in_menu.triggered.connect(self.mesh_viewer.setOutlineVisible)
-        view_menu.addAction(show_outline_action_in_menu)
+        self.show_outline_action = QAction("Show Outline", self)
+        self.show_outline_action.setStatusTip("Toggle visibility of mesh outline (Shift+E)")
+        self.show_outline_action.setToolTip("Toggle visibility of mesh outline (Shift+E)")
+        self.show_outline_action.setCheckable(True)
+        self.show_outline_action.setChecked(True)  # Default to visible
+        self.show_outline_action.triggered.connect(self.mesh_viewer.setOutlineVisible)
+        view_menu.addAction(self.show_outline_action)
 
         # Create "Show Connection Points" action for the menu
-        show_connection_points_action = QAction("Show Connection Points", self)
-        show_connection_points_action.setStatusTip("Toggle visibility of connection points (C)")
-        show_connection_points_action.setToolTip("Toggle visibility of connection points (C)")
-        show_connection_points_action.setCheckable(True)
-        show_connection_points_action.setChecked(True)  # Default to visible
-        show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
-        view_menu.addAction(show_connection_points_action)
+        self.show_connection_points_action = QAction("Show Connection Points", self)
+        self.show_connection_points_action.setStatusTip("Toggle visibility of connection points (C)")
+        self.show_connection_points_action.setToolTip("Toggle visibility of connection points (C)")
+        self.show_connection_points_action.setCheckable(True)
+        self.show_connection_points_action.setChecked(True)  # Default to visible
+        self.show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
+        view_menu.addAction(self.show_connection_points_action)
 
         # Set the menu for the QToolButton
         view_menu_button.setMenu(view_menu)
         self.addWidget(view_menu_button)
+
+        # Connect visibility changes to sync menu checkboxes
+        self.mesh_viewer.visibilityChanged.connect(self._syncViewMenuCheckboxes)
 
     def _setupLayersButton(self):
         """Setup the Layers dropdown button."""
@@ -528,6 +531,12 @@ class AppToolBar(QToolBar):
         full_scale_action.setToolTip("Reset color scale to full range (A)")
         full_scale_action.triggered.connect(self.mesh_viewer.autoscaleValue)
         self.addAction(full_scale_action)
+
+    def _syncViewMenuCheckboxes(self):
+        """Sync View menu checkbox states with MeshViewer visibility states."""
+        self.show_edges_action.setChecked(self.mesh_viewer.edges_visible)
+        self.show_outline_action.setChecked(self.mesh_viewer.outline_visible)
+        self.show_connection_points_action.setChecked(self.mesh_viewer.connection_points_visible)
 
     @Slot(list)
     def updateLayerSelectionMenu(self, layer_names: list[str]):
@@ -972,6 +981,8 @@ class MeshViewer(QOpenGLWidget):
     keyPressedInMesh = Signal(mesh.Point, int, Qt.KeyboardModifiers)
     # Signal for mouse position and voltage probing
     mousePositionChanged = Signal(mesh.Point, object)  # object can be float or None
+    # Signal for visibility changes
+    visibilityChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1620,6 +1631,9 @@ class MeshViewer(QOpenGLWidget):
     @Slot(bool)
     def setEdgesVisible(self, visible: bool):
         """Slot to set the visibility of mesh edges."""
+        if self.edges_visible == visible:
+            return
+
         self.edges_visible = visible
 
         # If we're showing edges but outline is hidden, also show the outline
@@ -1628,11 +1642,15 @@ class MeshViewer(QOpenGLWidget):
             log.debug("Also showing outline since internal edges are being shown")
 
         log.debug(f"Mesh edges visibility set to: {self.edges_visible}")
+        self.visibilityChanged.emit()
         self.update()
 
     @Slot(bool)
     def setOutlineVisible(self, visible: bool):
         """Slot to set the visibility of outline edges."""
+        if self.outline_visible == visible:
+            return
+
         self.outline_visible = visible
 
         # If we're hiding the outline and edges are visible, also hide the edges
@@ -1641,13 +1659,18 @@ class MeshViewer(QOpenGLWidget):
             log.debug("Also hiding internal edges since outline is being hidden")
 
         log.debug(f"Outline visibility set to: {self.outline_visible}")
+        self.visibilityChanged.emit()
         self.update()
 
     @Slot(bool)
     def setConnectionPointsVisible(self, visible: bool):
         """Slot to set the visibility of connection points."""
+        if self.connection_points_visible == visible:
+            return
+
         self.connection_points_visible = visible
         log.debug(f"Connection points visibility set to: {self.connection_points_visible}")
+        self.visibilityChanged.emit()
         self.update()
 
     @Slot(str)
