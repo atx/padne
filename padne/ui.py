@@ -446,6 +446,15 @@ class AppToolBar(QToolBar):
         show_edges_action_in_menu.triggered.connect(self.mesh_viewer.setEdgesVisible)
         view_menu.addAction(show_edges_action_in_menu)
 
+        # Create "Show Outline" action for the menu
+        show_outline_action_in_menu = QAction("Show Outline", self)
+        show_outline_action_in_menu.setStatusTip("Toggle visibility of mesh outline (Shift+E)")
+        show_outline_action_in_menu.setToolTip("Toggle visibility of mesh outline (Shift+E)")
+        show_outline_action_in_menu.setCheckable(True)
+        show_outline_action_in_menu.setChecked(True)  # Default to visible
+        show_outline_action_in_menu.triggered.connect(self.mesh_viewer.setOutlineVisible)
+        view_menu.addAction(show_outline_action_in_menu)
+
         # Create "Show Connection Points" action for the menu
         show_connection_points_action = QAction("Show Connection Points", self)
         show_connection_points_action.setStatusTip("Toggle visibility of connection points (C)")
@@ -586,13 +595,17 @@ class RenderedMesh:
     triangle_count: int
     vao_edges: int
     edge_count: int
+    vao_boundary: int
+    boundary_count: int
 
     @classmethod
     def _from_common(cls,
                      triangle_vertices: list[float],
                      triangle_colors: list[float],
                      edge_vertices: list[float],
-                     edge_colors: list[float]) -> 'RenderedMesh':
+                     edge_colors: list[float],
+                     boundary_vertices: list[float],
+                     boundary_colors: list[float]) -> 'RenderedMesh':
 
         vao_triangles = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao_triangles)
@@ -645,12 +658,40 @@ class RenderedMesh:
         gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(1)
 
+        # VAO for boundary edges
+        vao_boundary = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao_boundary)
+
+        # VBO for boundary vertices
+        vbo_boundary_vertices = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_boundary_vertices)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            np.array(boundary_vertices, dtype=np.float32),
+            gl.GL_STATIC_DRAW
+        )
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+
+        # VBO for boundary colors
+        vbo_boundary_colors = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_boundary_colors)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            np.array(boundary_colors, dtype=np.float32),
+            gl.GL_STATIC_DRAW
+        )
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(1)
+
         gl.glBindVertexArray(0)
 
         return cls(vao_triangles,
                    len(triangle_vertices) // 2,
                    vao_edges,
-                   len(edge_vertices))
+                   len(edge_vertices) // 2,
+                   vao_boundary,
+                   len(boundary_vertices) // 2)
 
     @classmethod
     def from_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm):
@@ -658,6 +699,8 @@ class RenderedMesh:
         triangle_colors = []
         edge_vertices = []
         edge_colors = []
+        boundary_vertices = []
+        boundary_colors = []
 
         for face in msh.faces:
             # Note that we assume the face is a triangle. This should be already
@@ -668,20 +711,28 @@ class RenderedMesh:
                 triangle_vertices.extend([vertex.p.x, vertex.p.y])
                 triangle_colors.extend([values[vertex]])
 
-            # Edge data
+            # Edge data - separate boundary and internal edges
             for edge in face.edges:
-                # TODO: I am not quite sure how this differs from the previous case
-                # Maybe we can be sneaky and just use the same data, potentially
-                # inserting some spacing in between?
-                for e in [edge, edge.next]:
-                    edge_vertices.extend([e.origin.p.x, e.origin.p.y])
-                    edge_colors.extend([0.9, 0.9, 0.9])
+                # Add vertices for the edge (from origin to destination)
+                v1 = edge.origin
+                v2 = edge.next.origin
+                vertices_data = [v1.p.x, v1.p.y, v2.p.x, v2.p.y]
+                color_data = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
+
+                if edge.twin.is_boundary:
+                    boundary_vertices.extend(vertices_data)
+                    boundary_colors.extend(color_data)
+                else:
+                    edge_vertices.extend(vertices_data)
+                    edge_colors.extend(color_data)
 
         return cls._from_common(
             triangle_vertices,
             triangle_colors,
             edge_vertices,
-            edge_colors
+            edge_colors,
+            boundary_vertices,
+            boundary_colors
         )
 
     @classmethod
@@ -690,6 +741,8 @@ class RenderedMesh:
         triangle_colors = []
         edge_vertices = []
         edge_colors = []
+        boundary_vertices = []
+        boundary_colors = []
 
         for face in msh.faces:
             # Note that we assume the face is a triangle. This should be already
@@ -700,20 +753,28 @@ class RenderedMesh:
                 triangle_vertices.extend([vertex.p.x, vertex.p.y])
                 triangle_colors.extend([values[face]])
 
-            # Edge data
+            # Edge data - separate boundary and internal edges
             for edge in face.edges:
-                # TODO: I am not quite sure how this differs from the previous case
-                # Maybe we can be sneaky and just use the same data, potentially
-                # inserting some spacing in between?
-                for e in [edge, edge.next]:
-                    edge_vertices.extend([e.origin.p.x, e.origin.p.y])
-                    edge_colors.extend([0.9, 0.9, 0.9])
+                # Add vertices for the edge (from origin to destination)
+                v1 = edge.origin
+                v2 = edge.next.origin
+                vertices_data = [v1.p.x, v1.p.y, v2.p.x, v2.p.y]
+                color_data = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
+
+                if edge.twin.is_boundary:
+                    boundary_vertices.extend(vertices_data)
+                    boundary_colors.extend(color_data)
+                else:
+                    edge_vertices.extend(vertices_data)
+                    edge_colors.extend(color_data)
 
         return cls._from_common(
             triangle_vertices,
             triangle_colors,
             edge_vertices,
-            edge_colors
+            edge_colors,
+            boundary_vertices,
+            boundary_colors
         )
 
     def render_triangles(self):
@@ -723,6 +784,10 @@ class RenderedMesh:
     def render_edges(self):
         gl.glBindVertexArray(self.vao_edges)
         gl.glDrawArrays(gl.GL_LINES, 0, self.edge_count)
+
+    def render_boundary(self):
+        gl.glBindVertexArray(self.vao_boundary)
+        gl.glDrawArrays(gl.GL_LINES, 0, self.boundary_count)
 
     @classmethod
     def from_mesh(cls, msh: mesh.Mesh) -> 'RenderedMesh':
@@ -991,6 +1056,7 @@ class MeshViewer(QOpenGLWidget):
         self.points_shader = None
 
         self.edges_visible = True
+        self.outline_visible = True
 
     @property
     def current_rendering_mode(self) -> BaseRenderingMode:
@@ -1306,6 +1372,22 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_edges()
 
+    def _renderBoundaryEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+        """Renders the boundary edges of the meshes for the current layer."""
+        if not self.outline_visible or not self.edge_shader:
+            return
+
+        with self.edge_shader.use():
+            # Set the MVP uniform
+            gl.glUniformMatrix4fv(
+                self.edge_shader.shader_program.uniformLocation("mvp"),
+                1, gl.GL_TRUE, mvp.flatten()
+            )
+
+            # Draw boundary edges for current layer only
+            for rmesh in rendered_mesh_list:
+                rmesh.render_boundary()
+
     def _renderDisconnectedMeshes(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
         """Renders disconnected copper meshes in gray."""
         if not self.disconnected_shader or not rendered_mesh_list:
@@ -1368,6 +1450,7 @@ class MeshViewer(QOpenGLWidget):
             self.current_rendering_mode.get_rendered_meshes_for_layer(current_layer_name)
         self._renderMeshTriangles(mvp, current_layer_mesh_list)
         self._renderMeshEdges(mvp, current_layer_mesh_list)
+        self._renderBoundaryEdges(mvp, current_layer_mesh_list)
 
         # Do note that layers that do not have any rendered points are not
         # represented in the rendered_connection_points dict.
@@ -1540,7 +1623,10 @@ class MeshViewer(QOpenGLWidget):
             direction = -1 if event.modifiers() & Qt.ShiftModifier else 1
             self.switchLayerBy(direction)
         elif event.key() == Qt.Key_E:
-            self.setEdgesVisible(not self.edges_visible)
+            if event.modifiers() & Qt.ShiftModifier:
+                self.setOutlineVisible(not self.outline_visible)
+            else:
+                self.setEdgesVisible(not self.edges_visible)
         elif event.key() == Qt.Key_C:
             self.setConnectionPointsVisible(not self.connection_points_visible)
         elif event.key() == Qt.Key_F:
@@ -1582,7 +1668,26 @@ class MeshViewer(QOpenGLWidget):
     def setEdgesVisible(self, visible: bool):
         """Slot to set the visibility of mesh edges."""
         self.edges_visible = visible
+
+        # If we're showing edges but outline is hidden, also show the outline
+        if visible and not self.outline_visible:
+            self.outline_visible = True
+            log.debug("Also showing outline since internal edges are being shown")
+
         log.debug(f"Mesh edges visibility set to: {self.edges_visible}")
+        self.update()
+
+    @Slot(bool)
+    def setOutlineVisible(self, visible: bool):
+        """Slot to set the visibility of outline edges."""
+        self.outline_visible = visible
+
+        # If we're hiding the outline and edges are visible, also hide the edges
+        if not visible and self.edges_visible:
+            self.edges_visible = False
+            log.debug("Also hiding internal edges since outline is being hidden")
+
+        log.debug(f"Outline visibility set to: {self.outline_visible}")
         self.update()
 
     @Slot(bool)
