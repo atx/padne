@@ -607,82 +607,39 @@ class RenderedMesh:
                      boundary_vertices: list[float],
                      boundary_colors: list[float]) -> 'RenderedMesh':
 
-        vao_triangles = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao_triangles)
+        def create_vao(vertices: list[float], colors: list[float], color_components: int) -> int:
+            """Create a VAO with vertex and color VBOs."""
+            vao = gl.glGenVertexArrays(1)
+            gl.glBindVertexArray(vao)
 
-        # VBO for triangle vertices
-        vbo_triangle_vertices = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_triangle_vertices)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(triangle_vertices, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
+            # VBO for vertices (attribute 0, 2D coordinates)
+            vbo_vertices = gl.glGenBuffers(1)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_vertices)
+            gl.glBufferData(
+                gl.GL_ARRAY_BUFFER,
+                np.array(vertices, dtype=np.float32),
+                gl.GL_STATIC_DRAW
+            )
+            gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glEnableVertexAttribArray(0)
 
-        # VBO for triangle colors
-        vbo_triangle_colors = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_triangle_colors)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(triangle_colors, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(1, 1, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(1)
+            # VBO for colors (attribute 1, 1D or 3D components)
+            vbo_colors = gl.glGenBuffers(1)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_colors)
+            gl.glBufferData(
+                gl.GL_ARRAY_BUFFER,
+                np.array(colors, dtype=np.float32),
+                gl.GL_STATIC_DRAW
+            )
+            gl.glVertexAttribPointer(1, color_components, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glEnableVertexAttribArray(1)
 
-        #  VAO for edges
-        vao_edges = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao_edges)
+            return vao
 
-        # VBO for edge vertices
-        vbo_edge_vertices = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_edge_vertices)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(edge_vertices, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-
-        # VBO for edge colors
-        vbo_edge_colors = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_edge_colors)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(edge_colors, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(1)
-
-        # VAO for boundary edges
-        vao_boundary = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao_boundary)
-
-        # VBO for boundary vertices
-        vbo_boundary_vertices = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_boundary_vertices)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(boundary_vertices, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-
-        # VBO for boundary colors
-        vbo_boundary_colors = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_boundary_colors)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(boundary_colors, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(1)
+        # Create VAOs for each mesh component
+        vao_triangles = create_vao(triangle_vertices, triangle_colors, 1)
+        vao_edges = create_vao(edge_vertices, edge_colors, 3)
+        vao_boundary = create_vao(boundary_vertices, boundary_colors, 3)
 
         gl.glBindVertexArray(0)
 
@@ -693,14 +650,36 @@ class RenderedMesh:
                    vao_boundary,
                    len(boundary_vertices) // 2)
 
-    @classmethod
-    def from_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm):
-        triangle_vertices = []
-        triangle_colors = []
+    @staticmethod
+    def _serialize_edges_from_mesh(msh: mesh.Mesh):
         edge_vertices = []
         edge_colors = []
         boundary_vertices = []
         boundary_colors = []
+
+        for face in msh.faces:
+
+            for edge in face.edges:
+                v1 = edge.origin
+                v2 = edge.next.origin
+
+                vertices_data = [v1.p.x, v1.p.y, v2.p.x, v2.p.y]
+                # TODO: It would make sense for the color to be configurable
+                # and/or based on some property of the edge
+                color_data = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
+                if edge.twin.is_boundary:
+                    boundary_vertices.extend(vertices_data)
+                    boundary_colors.extend(color_data)
+                else:
+                    edge_vertices.extend(vertices_data)
+                    edge_colors.extend(color_data)
+
+        return edge_vertices, edge_colors, boundary_vertices, boundary_colors
+
+    @classmethod
+    def from_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm):
+        triangle_vertices = []
+        triangle_colors = []
 
         for face in msh.faces:
             # Note that we assume the face is a triangle. This should be already
@@ -709,22 +688,11 @@ class RenderedMesh:
             # Vertex data
             for vertex in face.vertices:
                 triangle_vertices.extend([vertex.p.x, vertex.p.y])
+                # This is where we differ from from_two_form
                 triangle_colors.extend([values[vertex]])
 
-            # Edge data - separate boundary and internal edges
-            for edge in face.edges:
-                # Add vertices for the edge (from origin to destination)
-                v1 = edge.origin
-                v2 = edge.next.origin
-                vertices_data = [v1.p.x, v1.p.y, v2.p.x, v2.p.y]
-                color_data = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
-
-                if edge.twin.is_boundary:
-                    boundary_vertices.extend(vertices_data)
-                    boundary_colors.extend(color_data)
-                else:
-                    edge_vertices.extend(vertices_data)
-                    edge_colors.extend(color_data)
+        edge_vertices, edge_colors, boundary_vertices, boundary_colors = \
+            cls._serialize_edges_from_mesh(msh)
 
         return cls._from_common(
             triangle_vertices,
@@ -739,10 +707,6 @@ class RenderedMesh:
     def from_two_form(cls, msh: mesh.Mesh, values: mesh.TwoForm):
         triangle_vertices = []
         triangle_colors = []
-        edge_vertices = []
-        edge_colors = []
-        boundary_vertices = []
-        boundary_colors = []
 
         for face in msh.faces:
             # Note that we assume the face is a triangle. This should be already
@@ -751,22 +715,11 @@ class RenderedMesh:
             # Vertex data
             for vertex in face.vertices:
                 triangle_vertices.extend([vertex.p.x, vertex.p.y])
+                # This is where we differ from from_zero_form
                 triangle_colors.extend([values[face]])
 
-            # Edge data - separate boundary and internal edges
-            for edge in face.edges:
-                # Add vertices for the edge (from origin to destination)
-                v1 = edge.origin
-                v2 = edge.next.origin
-                vertices_data = [v1.p.x, v1.p.y, v2.p.x, v2.p.y]
-                color_data = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
-
-                if edge.twin.is_boundary:
-                    boundary_vertices.extend(vertices_data)
-                    boundary_colors.extend(color_data)
-                else:
-                    edge_vertices.extend(vertices_data)
-                    edge_colors.extend(color_data)
+        edge_vertices, edge_colors, boundary_vertices, boundary_colors = \
+            cls._serialize_edges_from_mesh(msh)
 
         return cls._from_common(
             triangle_vertices,
