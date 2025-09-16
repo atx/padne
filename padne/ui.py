@@ -1676,12 +1676,9 @@ class MeshViewer(QOpenGLWidget):
     @Slot(str)
     def setCurrentLayerByName(self, layer_name: str):
         """Sets the current layer by its name."""
-        if layer_name in self.visible_layers:
-            self.current_layer_index = self.visible_layers.index(layer_name)
-            self.currentLayerChanged.emit(layer_name)
-            self.update()
-        else:
-            log.error(f"Attempted to set current layer to unknown layer: {layer_name}")
+        self.current_layer_index = self.visible_layers.index(layer_name)
+        self.currentLayerChanged.emit(layer_name)
+        self.update()
 
     @Slot(str)
     def setCurrentModeByName(self, mode_name: str):
@@ -1889,6 +1886,12 @@ class MainWindow(QMainWindow):
         self.app_toolbar = AppToolBar(self.tool_manager, self.mesh_viewer, self)
         self.addToolBar(Qt.TopToolBarArea, self.app_toolbar)
 
+        self._setupStatusBar()
+        self._connectSignals()
+
+        self.projectLoaded.emit(solution)
+
+    def _setupStatusBar(self):
         # Add status bar widgets with fixed widths
         self.layer_status_label = QLabel("Layer: -")
         self.layer_status_label.setMinimumWidth(120)
@@ -1919,15 +1922,16 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(QLabel(" | "))  # Separator
         self.statusBar().addWidget(self.delta_label)
 
-        # Connect signals/slots
+    def _connectSignals(self):
+        # Connect the MeshViewer
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         self.mesh_viewer.unitChanged.connect(self.color_scale.setUnit)
         self.mesh_viewer.colorMapChanged.connect(self.color_scale.setColorMap)
-        self.projectLoaded.connect(self.mesh_viewer.setSolution)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
         self.mesh_viewer.currentModeChanged.connect(self.app_toolbar.updateActiveModeInMenu)
+        self.projectLoaded.connect(self.mesh_viewer.setSolution)
 
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
@@ -1936,10 +1940,6 @@ class MainWindow(QMainWindow):
 
         # Connect mouse position updates
         self.mesh_viewer.mousePositionChanged.connect(self.updateMousePosition)
-
-        self.projectLoaded.emit(solution)
-
-    # Removed loadProject method
 
     def updateCurrentLayer(self, layer_name):
         """Update the window title to show the current layer."""
@@ -1982,14 +1982,7 @@ def main(solution: solver.Solution, project_name: Optional[str]):
     # Configure OpenGL
     configure_opengl()
 
-    # Create and run application
-    # Try to get existing instance, or create one if not present.
-    # Using sys.argv can be problematic in some contexts (e.g. pytest),
-    # but is standard for standalone Qt apps. Using [] if no Qt-specific args are needed.
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv if hasattr(sys, 'argv') else [])
-
+    app = QApplication(sys.argv)
     window = MainWindow(solution, project_name)
 
     window.show()
