@@ -67,13 +67,13 @@ private:
     int width, height;
     std::vector<double> distances;  // Flat 2D array storage
 
-    CGALPolygon cgal_polygon;  // Use CGALPolygon for all operations
+    CGALPolygon cgal_polygon;
 
     void compute_distances();
 
     // Coordinate transformation methods
     std::pair<double, double> world_to_grid(double world_x, double world_y) const;
-    std::pair<double, double> grid_to_world(int grid_i, int grid_j) const;
+    std::pair<double, double> grid_to_world(double grid_x, double grid_y) const;
     int grid_to_index(int grid_i, int grid_j) const;
 
 public:
@@ -475,8 +475,8 @@ void PolyBoundaryDistanceMap::compute_distances() {
 
     for (int j = 0; j < height; ++j) {
         for (int i = 0; i < width; ++i) {
-            // Compute world coordinates of pixel center
-            auto [world_x, world_y] = grid_to_world(i, j);
+            // Compute world coordinates of pixel center (i+0.5, j+0.5)
+            auto [world_x, world_y] = grid_to_world(i + 0.5, j + 0.5);
 
             double distance;
             if (cgal_polygon.contains(world_x, world_y)) {
@@ -509,20 +509,14 @@ double PolyBoundaryDistanceMap::query(double x, double y) const {
     int j1 = j0 + 1;
 
     // Clamp to valid ranges (should not be needed now due to bounds check)
-    i0 = std::max(0, std::min(width-1, i0));
-    i1 = std::max(0, std::min(width-1, i1));
-    j0 = std::max(0, std::min(height-1, j0));
-    j1 = std::max(0, std::min(height-1, j1));
+    i0 = std::clamp(i0, 0, width-1);
+    i1 = std::clamp(i1, 0, width-1);
+    j0 = std::clamp(j0, 0, height-1);
+    j1 = std::clamp(j1, 0, height-1);
 
     // Get fractional parts for interpolation
     double fx = gx - std::floor(gx);
     double fy = gy - std::floor(gy);
-
-    // Handle boundary cases where we're exactly on grid lines
-    if (i1 >= width) i1 = width - 1;
-    if (j1 >= height) j1 = height - 1;
-    if (fx < 0) fx = 0;
-    if (fy < 0) fy = 0;
 
     // Sample 4 corners using index transformation
     double v00 = distances[grid_to_index(i0, j0)];
@@ -536,26 +530,22 @@ double PolyBoundaryDistanceMap::query(double x, double y) const {
     return v0 * (1.0 - fy) + v1 * fy;
 }
 
-// Coordinate transformation methods
 std::pair<double, double> PolyBoundaryDistanceMap::world_to_grid(double world_x, double world_y) const {
     double grid_x = (world_x - min_x) / quantization;
     double grid_y = (world_y - min_y) / quantization;
     return std::make_pair(grid_x, grid_y);
 }
 
-std::pair<double, double> PolyBoundaryDistanceMap::grid_to_world(int grid_i, int grid_j) const {
-    // Convert grid indices to world coordinates of pixel center
-    double world_x = min_x + (grid_i + 0.5) * quantization;
-    double world_y = min_y + (grid_j + 0.5) * quantization;
+std::pair<double, double> PolyBoundaryDistanceMap::grid_to_world(double grid_x, double grid_y) const {
+    double world_x = min_x + grid_x * quantization;
+    double world_y = min_y + grid_y * quantization;
     return std::make_pair(world_x, world_y);
 }
 
 int PolyBoundaryDistanceMap::grid_to_index(int grid_i, int grid_j) const {
-    // Convert 2D grid coordinates to flat array index
     return grid_j * width + grid_i;
 }
 
-// CGALPolygon implementation
 CGALPolygon::CGALPolygon(py::object shapely_polygon) {
     extract_polygon_from_shapely(shapely_polygon);
 }
