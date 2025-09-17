@@ -1227,6 +1227,20 @@ def assert_mesh_minimum_angle(mesh, min_angle):
        assert angle2 >= min_angle_rad - tolerance, f"Angle {np.degrees(angle2)} at vertex {p2} is less than {min_angle}"
 
 
+def assert_mesh_maximum_edge_length(mesh, max_size, tolerance=1e-6):
+    """Verify all edges in mesh are at most max_size in length."""
+    for hedge in mesh.halfedges:
+        # Calculate edge length
+        start_vertex = hedge.origin
+        end_vertex = hedge.next.origin
+        edge_length = start_vertex.p.distance(end_vertex.p)
+
+        # Check constraint (with tolerance for floating-point arithmetic)
+        assert edge_length <= max_size + tolerance, \
+            f"Edge exceeds maximum size: {edge_length:.6f} > {max_size:.6f} " \
+            f"(from {start_vertex.p} to {end_vertex.p})"
+
+
 class TestMesher:
 
     def test_simple_square(self):
@@ -1580,6 +1594,28 @@ class TestMesher:
 
         assert_mesh_structure_valid(mesh)
         assert_mesh_topology_okay(mesh)
+
+    @pytest.mark.parametrize("max_size", [0.5, 1.0, 2.0])
+    @for_all_kicad_projects(include=["two_big_planes",
+                                     "degenerate_hole_geometry",
+                                     "via_tht_4layer"])
+    def test_maximum_edge_length_constraint(self, project, max_size):
+        """Test that mesher enforces maximum edge length constraint."""
+        # Load project geometry
+        problem = kicad.load_kicad_project(project.pro_path)
+
+        # Create mesher with fixed density (no variable sizing)
+        mesher = Mesher(Mesher.Config(
+            minimum_angle=20.0,
+            maximum_size=max_size,
+            variable_size_maximum_factor=1.0  # Disable variable density
+        ))
+
+        # Test each layer's geometry
+        for layer in problem.layers:
+            for polygon in layer.shape.geoms:
+                mesh = mesher.poly_to_mesh(polygon)
+                assert_mesh_maximum_edge_length(mesh, max_size)
 
 
 class TestMeshPickling:
