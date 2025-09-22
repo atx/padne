@@ -16,7 +16,8 @@ from conftest import for_all_kicad_projects
 
 class TestNetworkSolver:
 
-    def create_test_system(self, network: problem.Network) -> tuple[solver.NodeIndexer, scipy.sparse.lil_matrix, np.ndarray]:
+    def create_test_system(self, network: problem.Network
+                           ) -> tuple[solver.NodeIndexer, scipy.sparse.lil_matrix, np.ndarray]:
         # For reasons unknown, network.nodes is not a list of NodeIDs
         # but instead a dict mapping NodeIDs to numbers from 0 to N-1.
         # So we just use that here
@@ -28,7 +29,7 @@ class TestNetworkSolver:
             if elem.extra_variable_count > 1:
                 raise ValueError(f"Element {elem} has more than one extra variable, which is not supported")
             extra_source_to_global_index[elem] = len(extra_source_to_global_index) \
-                    + len(node_to_global_index)
+                + len(node_to_global_index)
 
         node_indexer = solver.NodeIndexer(
             node_to_global_index=node_to_global_index,
@@ -50,8 +51,7 @@ class TestNetworkSolver:
         # However, the main solver code should also force a ground node
         # to improve numerical stability, so this is a mystery likely not worth
         # solving...
-        print(L.todense())
-        L = L.todense()[1:,1:]
+        L = L.todense()[1:, 1:]
         v = np.linalg.solve(L, r[1:])  # Solve the system
         v = np.concatenate(([0.0], v))  # Add ground node voltage back
         node_to_value = {
@@ -177,9 +177,9 @@ def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
 
 # Add this helper function at the module level
 def _find_connection_at_point(prob: problem.Problem,
-                             coords: tuple[float, float],
-                             layer_name: str,
-                             tolerance: float = 1e-2) -> problem.Connection:
+                              coords: tuple[float, float],
+                              layer_name: str,
+                              tolerance: float = 1e-2) -> problem.Connection:
     """
     Finds a problem.Connection at the given coordinates on the specified layer.
     Raises ValueError if no connection is found.
@@ -363,7 +363,11 @@ class TestSolverMeshLayer:
         for network in prob.networks:
             for connection in network.connections:
                 layer_index = prob.layers.index(connection.layer)
-                relevant_meshes = [meshes[i] for i, l_idx in enumerate(mesh_index_to_layer_index) if l_idx == layer_index]
+                relevant_meshes = [
+                    meshes[i]
+                    for i, l_idx in enumerate(mesh_index_to_layer_index)
+                    if l_idx == layer_index
+                ]
 
                 # Convert connection point (already shapely) to mesh.Point for distance comparison
                 conn_point_mesh = mesh.Point(connection.point.x, connection.point.y)
