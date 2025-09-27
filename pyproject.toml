@@ -51,6 +51,9 @@ dependencies = [
 test = [
     "pytest>=8.0.0",
 ]
+bench = [
+    "asv>=0.6.0",
+]
 # docs = [
 #     "sphinx",
 # ]
