@@ -176,3 +176,6 @@ tests/excluded_kicad_projects.txt
 
 # Auto-generated version file
 padne/_version.py
+
+# airspeed velocity
+.asv
