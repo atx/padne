@@ -1090,7 +1090,8 @@ class TestSolverEndToEnd:
                                      "overlapping_vias",
                                      "long_trace_esr",
                                      "via_in_pad",
-                                     "degenerate_hole_geometry"])
+                                     "degenerate_hole_geometry",
+                                     "empty_via"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
@@ -1842,3 +1843,49 @@ class TestSolverEndToEnd:
                 f"Disconnected mesh {i} should have vertices"
             assert len(disconnected_mesh.faces) > 0, \
                 f"Disconnected mesh {i} should have faces"
+
+    def test_empty_via_works(self, kicad_test_projects):
+        """
+        Test that a via with no connections (floating via) does not cause solver failure.
+        The via should be ignored in the electrical analysis.
+        """
+        project = kicad_test_projects["empty_via"]
+
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+
+        # Solve the problem
+        solution = solver.solve(prob)
+        # Did not crash, *yay*
+
+        assert len(solution.layer_solutions) == 2
+
+        for layer_sol in solution.layer_solutions:
+            assert len(layer_sol.meshes) == 0
+            assert len(layer_sol.disconnected_meshes) == 1
+
+    def test_detached_via_works(self, kicad_test_projects):
+        """
+        Test that a via with connections to layers but not connected to any network
+        does not cause solver failure. The via should be ignored in the electrical analysis.
+        """
+        project = kicad_test_projects["detached_via"]
+
+        # Load the problem from the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+
+        # Solve the problem
+        solution = solver.solve(prob)
+        # Did not crash, *yay*
+
+        assert len(solution.layer_solutions) == 2
+
+        for layer, lsol in zip(prob.layers, solution.layer_solutions):
+            if layer.name == "F.Cu":
+                assert len(lsol.meshes) == 2
+                assert len(lsol.disconnected_meshes) == 1
+            elif layer.name == "B.Cu":
+                assert len(lsol.meshes) == 0
+                assert len(lsol.disconnected_meshes) == 1
+            else:
+                pytest.fail(f"Unexpected layer {layer.name}")

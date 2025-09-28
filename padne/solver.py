@@ -380,7 +380,8 @@ class NodeIndexer:
                prob: problem.Problem,
                meshes: list[mesh.Mesh],
                mesh_index_to_layer_index: list[int],
-               vindex: VertexIndexer) -> "NodeIndexer":
+               vindex: VertexIndexer,
+               filtered_networks: list[problem.Network]) -> "NodeIndexer":
 
         layer_to_kdtree, layer_global_index_and_vertex = cls._construct_kdtrees(
             prob,
@@ -395,7 +396,7 @@ class NodeIndexer:
 
         # First, we index the NodeIDs that are used in a Connection
         connections = [
-            conn for network in prob.networks for conn in network.connections
+            conn for network in filtered_networks for conn in network.connections
         ]
         for conn in connections:
             layer_i = prob.layers.index(conn.layer)
@@ -413,7 +414,7 @@ class NodeIndexer:
 
         # Next, we allocate new indices for all the yet to be allocated nodes
         nodes = [
-            node for network in prob.networks for node in network.nodes
+            node for network in filtered_networks for node in network.nodes
             if node not in node_to_global_index
         ]
         internal_node_count = len(nodes)
@@ -425,7 +426,7 @@ class NodeIndexer:
         # And finally we need to allocate indices for the voltage sources
         # (those need an extra variable)
         extra_sources = [
-            elem for network in prob.networks for elem in network.elements
+            elem for network in filtered_networks for elem in network.elements
         ]
         extra_source_to_global_index = {}
         for elem in extra_sources:
@@ -763,7 +764,9 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # Next, we construct the _internal_ system of equations for each of the
     # network.
     log.info("Constructing node index for networks")
-    node_indexer = NodeIndexer.create(prob, meshes, mesh_index_to_layer_index, vindex)
+    node_indexer = NodeIndexer.create(
+        prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
+    )
 
     # We are solving the equation L * v = r
     # where L is the "laplace operator",
