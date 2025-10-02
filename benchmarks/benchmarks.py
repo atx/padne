@@ -2,9 +2,12 @@
 import os
 import pathlib
 import sys
+import tempfile
+from pathlib import Path
 import shapely.geometry
 from padne.mesh import Mesher
 from padne import kicad, solver
+import pcbnew
 
 from tests.conftest import _kicad_test_projects
 
@@ -119,3 +122,93 @@ class SolverSuite:
 
     time_solver_solve.params = ['two_big_planes', 'via_tht_4layer']
     time_solver_solve.param_names = ['project']
+
+
+class KicadRenderSuite:
+    """Benchmarks for KiCad rendering and geometry extraction operations."""
+
+    def setup(self, *_):
+        # Load test projects
+        test_projects = _kicad_test_projects()
+
+        # Select projects with varying complexity
+        project_names = [
+            'two_big_planes', 'via_tht_4layer', 'castellated_vias_internal_cutout',
+        ]
+
+        # Load boards using pcbnew
+        self.boards = {}
+        for project_name in project_names:
+            project = test_projects[project_name]
+            board = pcbnew.LoadBoard(str(project.pcb_path))
+            self.boards[project_name] = board
+
+        # Create a persistent temp directory for this benchmark run
+        self.temp_dir = tempfile.mkdtemp(prefix='padne_bench_')
+        self.temp_path = Path(self.temp_dir)
+
+        # Map layer names to layer IDs
+        self.layer_map = {
+            'F_Cu': pcbnew.F_Cu,
+            'B_Cu': pcbnew.B_Cu,
+            'In1_Cu': pcbnew.In1_Cu
+        }
+
+        # Pre-generate all Gerber files needed for benchmarking
+        self.gerber_files = {}
+
+        for project_name, board in self.boards.items():
+            for layer_name, layer_id in self.layer_map.items():
+                # Check if this layer exists on the board
+                if not board.GetEnabledLayers().Contains(layer_id):
+                    continue
+
+                # Generate Gerber file
+                gerber_path = self.temp_path / f"{project_name}_{layer_name}.gbr"
+                kicad.plot_board_layer_to_gerber(board, layer_id, gerber_path)
+
+                # Store path for later use
+                self.gerber_files[(project_name, layer_name)] = gerber_path
+
+    def teardown(self, *_):
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
+    def time_plot_board_layer_to_gerber(self, project_name, layer_name):
+        """Time Gerber generation for different layers and projects."""
+        board = self.boards[project_name]
+        layer_id = self.layer_map[layer_name]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / f"layer_{layer_name}.gbr"
+            kicad.plot_board_layer_to_gerber(board, layer_id, output_path)
+
+    # Parameters for plot_board_layer_to_gerber
+    time_plot_board_layer_to_gerber.params = (
+        ['two_big_planes', 'via_tht_4layer'],
+        ['F_Cu', 'B_Cu']
+    )
+    time_plot_board_layer_to_gerber.param_names = ['project', 'layer']
+
+    def time_gerber_file_to_shapely(self, project_name, layer_name):
+        """Time Shapely conversion from pre-generated Gerber files."""
+        # Use pre-generated Gerber file to isolate conversion timing
+        gerber_path = self.gerber_files.get((project_name, layer_name))
+
+        kicad.gerber_file_to_shapely(gerber_path)
+
+    # Parameters for gerber_file_to_shapely
+    time_gerber_file_to_shapely.params = (
+        ['two_big_planes', 'via_tht_4layer'],
+        ['F_Cu', 'B_Cu']
+    )
+    time_gerber_file_to_shapely.param_names = ['project', 'layer']
+
+    def time_extract_board_outline(self, project_name):
+        """Time board outline extraction for different PCB complexities."""
+        board = self.boards[project_name]
+        kicad.extract_board_outline(board)
+
+    # Parameters for extract_board_outline
+    time_extract_board_outline.params = ['castellated_vias_internal_cutout']
+    time_extract_board_outline.param_names = ['project']

@@ -1255,6 +1255,45 @@ def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile
     return result.shape
 
 
+def gerber_file_to_shapely(gerber_path: Path) -> Optional[shapely.geometry.MultiPolygon]:
+    """Loads data from a Gerber file and converts it to a Shapely geometry."""
+    gerber_data = pygerber.gerber.api.GerberFile.from_file(gerber_path)
+    try:
+        geometry = render_with_shapely(gerber_data)
+    except AssertionError:
+        # This is a bug in pygerber, which gets triggered if the
+        # gerber file is empty. We should fix this in pygerber ideally
+        # TODO: Figure out if there is at least a way to check if the
+        # gerber file is empty before we try to render it
+        return None
+
+    # For reasons to be determined, the geometry generated like this has
+    # a flipped y axis. Flip it back.
+    geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
+
+    # Simplify the geometry to remove almost-duplicate points
+    # This is unfortunately a "bug" in pygerber, where drawing
+    # a circle is implemented by drawing an arbitrary degree arc,
+    # which sometimes results to the "starting" and "ending" points
+    # not being exactly the same such as
+    # (-1.0, 0.0) vs  (-1.0, 1.2246467991473532e-16)
+    # Again, it would be nice to fix this in pygerber, but that
+    # is a task for another day...
+    geometry = geometry.simplify(tolerance=1e-4, preserve_topology=True)
+    # Unfortunately, the above simplification can sometimes miss issues
+    # with the polygon. Setting preserve_topology=False fixes it, but
+    # who knows what other issues it may cause. Running a dedicated
+    # point deduplication step seems to fix the issue, but again,
+    # could potentially break the geometry. The "degenerate_hole_geometry"
+    # test project exhibits this issue.
+    geometry = shapely.remove_repeated_points(geometry, tolerance=1e-8)
+
+    # If the layer has only a single connected component, convert it to a MultiPolygon
+    geometry = ensure_geometry_is_multipolygon(geometry)
+
+    return geometry
+
+
 def extract_layers_from_gerbers(board,
                                 gerber_layers: dict[int, Path]
                                 ) -> list[PlottedGerberLayer]:
@@ -1274,40 +1313,9 @@ def extract_layers_from_gerbers(board,
         # Get layer name from the board
         layer_name = board.GetLayerName(layer_id)
 
-        # Load gerber file and extract geometry
-        gerber_data = pygerber.gerber.api.GerberFile.from_file(gerber_path)
-        try:
-            geometry = render_with_shapely(gerber_data)
-        except AssertionError:
-            # This is a bug in pygerber, which gets triggered if the
-            # gerber file is empty. We should fix this in pygerber ideally
-            # TODO: Figure out if there is at least a way to check if the
-            # gerber file is empty before we try to render it
+        geometry = gerber_file_to_shapely(gerber_path)
+        if geometry is None:
             continue
-
-        # For reasons to be determined, the geometry generated like this has
-        # a flipped y axis. Flip it back.
-        geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
-
-        # Simplify the geometry to remove almost-duplicate points
-        # This is unfortunately a "bug" in pygerber, where drawing
-        # a circle is implemented by drawing an arbitrary degree arc,
-        # which sometimes results to the "starting" and "ending" points
-        # not being exactly the same such as
-        # (-1.0, 0.0) vs  (-1.0, 1.2246467991473532e-16)
-        # Again, it would be nice to fix this in pygerber, but that
-        # is a task for another day...
-        geometry = geometry.simplify(tolerance=1e-4, preserve_topology=True)
-        # Unfortunately, the above simplification can sometimes miss issues
-        # with the polygon. Setting preserve_topology=False fixes it, but
-        # who knows what other issues it may cause. Running a dedicated
-        # point deduplication step seems to fix the issue, but again,
-        # could potentially break the geometry. The "degenerate_hole_geometry"
-        # test project exhibits this issue.
-        geometry = shapely.remove_repeated_points(geometry, tolerance=1e-8)
-
-        # If the layer has only a single connected component, convert it to a MultiPolygon
-        geometry = ensure_geometry_is_multipolygon(geometry)
 
         # Create a PlottedGerberLayer object
         plotted_layer = PlottedGerberLayer(
