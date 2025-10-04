@@ -1170,6 +1170,80 @@ class TestSolverEndToEnd:
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
             f"Voltage difference for {current_source_element} does not match expected value (diff={voltage_diff})"
 
+    @pytest.mark.parametrize("max_mesh_size, face_tolerance", [
+        (0.6, 0.05),
+        (0.1, 0.18),
+    ], ids=["default_0.6mm", "fine_0.1mm"])
+    def test_long_trace_current_power_density(self,
+                                              kicad_test_projects,
+                                              max_mesh_size,
+                                              face_tolerance):
+        """Test power density computation accuracy for a simple trace with current source."""
+        project = kicad_test_projects["long_trace_current"]
+
+        # Physical parameters from the test project
+        trace_width = 0.2  # mm
+        injected_current = 1.0  # A
+        trace_length = 100.0  # mm
+        total_resistance = 0.24  # ohm
+        total_power_dissupated = injected_current**2 * total_resistance  # W
+        trace_area = trace_length * trace_width  # mm²
+        expected_power_density = total_power_dissupated / trace_area
+
+        # Configure mesh
+        mesher_config = mesh.Mesher.Config(maximum_size=max_mesh_size)
+
+        # Solve the problem
+        prob = kicad.load_kicad_project(project.pro_path)
+        solution = solver.solve(prob, mesher_config=mesher_config)
+
+        # Get F.Cu layer solution (first layer)
+        layer_solution = solution.layer_solutions[0]
+
+        # Test region bounds (avoid connection points at edges)
+        x_min, x_max = 127.0, 223.0  # Avoid connection points at 125.3 and 225.3
+        trace_y = 94.45  # Y coordinate of trace centerline from PCB file
+        y_tolerance = 2 * trace_width  # Include triangles within trace width
+
+        # Collect power densities from triangles in test region
+        power_densities_in_region = []
+        areas_in_region = []
+
+        for msh, power_density in zip(layer_solution.meshes, layer_solution.power_densities):
+            for face in msh.faces:
+                # Get triangle centroid
+                vertices = list(face.vertices)
+                centroid_x = sum(v.p.x for v in vertices) / 3
+                centroid_y = sum(v.p.y for v in vertices) / 3
+
+                # Check if triangle is in the test region
+                if not (x_min < centroid_x < x_max and abs(centroid_y - trace_y) < y_tolerance):
+                    continue
+
+                # At the moment, the power density that is computed is relatively
+                # noisy, especially on small triangles.
+                # I am not quite sure if this is simply a limitation of the
+                # order of the elements or if there is some numerical issue.
+                assert power_density[face] == pytest.approx(expected_power_density, rel=face_tolerance)
+
+                power_densities_in_region.append(power_density[face])
+                areas_in_region.append(face.area)
+
+        # Verify we found triangles in the region
+        assert len(power_densities_in_region) >= 30, "Too few triangles found in the test region"
+
+        # Calculate area-weighted average power density
+        total_area = sum(areas_in_region)
+        avg_power_density = sum(
+            p * a for p, a in
+            zip(power_densities_in_region, areas_in_region)
+        ) / total_area
+
+        # Validate average power density
+        assert avg_power_density == pytest.approx(expected_power_density, rel=0.001), \
+            f"Power density: {avg_power_density:.6f} W/mm², " \
+            f"expected {expected_power_density:.6f} W/mm² ±{tolerance:.6f}"
+
     def test_long_trace_esr(self, kicad_test_projects):
         project = kicad_test_projects["long_trace_esr"]
         # Load the problem and solve it
