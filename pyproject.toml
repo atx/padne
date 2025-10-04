@@ -50,6 +50,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=8.0.0",
+    "typeguard>=4.0.0",
 ]
 bench = [
     "asv>=0.6.0",
@@ -67,6 +68,9 @@ Issues = "https://github.com/atx/padne/issues"
 # Entry points (Optional) - e.g., for command-line scripts
 [project.scripts]
 padne = "padne.cli:main"
+
+[tool.pytest.ini_options]
+typeguard-packages = ["padne"]
 
 [tool.setuptools.packages.find]
 where = ["."]
