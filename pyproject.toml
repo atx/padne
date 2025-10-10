@@ -39,7 +39,7 @@ classifiers = [
 dependencies = [
     "lxml>=5.0.0",
     "numpy>=2.0.0",
-    "pygerber>=2.4.3",
+    "pygerber @ git+https://github.com/Argmaster/pygerber.git@main",
     "PySide6>=6.8.0",
     "PyOpenGL>=3.0.0",
     "scipy>=1.15.0",
