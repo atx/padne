@@ -1,0 +1,49 @@
+name: Test pipx run
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test_pipx_run:
+    name: "Test pipx run --spec ."
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-full \
+            python3-dev \
+            python3-pip \
+            git \
+            libegl1 \
+            libegl1-mesa-dev \
+            libmpfr-dev \
+            libgmp-dev \
+            libboost-dev \
+            kicad \
+            pipx
+
+      - name: Test pipx run
+        run: |
+          pipx run --spec . padne --version
+          EXIT_CODE=$?
+
+          echo "Exit code: $EXIT_CODE"
+          echo "Output: $OUTPUT"
+
+          # Check exit code is 0
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "ERROR: pipx run failed with exit code $EXIT_CODE"
+            exit 1
+          fi
+
+          echo "SUCCESS: pipx run works correctly"
