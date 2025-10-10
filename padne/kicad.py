@@ -6,7 +6,6 @@ import enum
 import math
 import logging
 import pathlib
-import pcbnew
 import pygerber.gerber.api
 import pygerber.vm
 import sexpdata
@@ -22,6 +21,56 @@ from . import problem, units
 
 
 log = logging.getLogger(__name__)
+
+
+def find_pcbnew_module() -> Any:
+    """
+    Find and return the pcbnew module using multiple strategies.
+
+    Strategy order:
+    1. Try direct import of pcbnew (works when running inside KiCad or with system Python)
+    2. Try using kigadgets.get_pcbnew_module() (works in virtual environments)
+
+    Returns:
+        The pcbnew module
+
+    Raises:
+        ImportError: If pcbnew cannot be found via any method
+    """
+    # Strategy 1: Try direct import
+    try:
+        import pcbnew
+        log.debug("Successfully imported pcbnew directly")
+        return pcbnew
+    except ImportError as e:
+        log.debug(f"Direct pcbnew import failed: {e}")
+
+    # Strategy 2: Try kigadgets fallback
+    try:
+        import kigadgets
+        pcbnew = kigadgets.get_pcbnew_module(verbose=False)
+        log.debug("Successfully loaded pcbnew via kigadgets")
+        return pcbnew
+    except ImportError:
+        log.debug("kigadgets not installed, cannot use fallback method")
+    except Exception as e:
+        log.debug(f"kigadgets.get_pcbnew_module() failed: {e}")
+
+    # If all strategies fail, provide helpful error message
+    raise ImportError(
+        "Could not import pcbnew module. This can happen when:\n"
+        "1. KiCad is not installed\n"
+        "2. Running in a virtual environment without proper setup\n"
+        "\n"
+        "To fix this, either:\n"
+        "- Install KiCad and ensure pcbnew is in your Python path\n"
+        "- Configure the PCBNEW_PATH environment variable to point to pcbnew.py from your KiCad installation\n"
+        "- Run padne with system Python where KiCad is installed"
+    )
+
+
+# Load pcbnew module using the fallback mechanism
+pcbnew = find_pcbnew_module()
 
 # This file is responsible for loading KiCad files and converting them to our
 # internal representation.
