@@ -16,11 +16,11 @@ padne is a KiCad-native power delivery network analysis tool. It uses the finite
 
 ## Installation
 
-Two methods are supported at the moment:
+Three methods are supported at the moment:
 
 ### All-in-one binary
 
-Simply download the binary from [here](https://atx.github.io/padne/padne-linux-x64). This comes with all dependencies already bundled. The downside is the relatively large size (around 200MB binary) and some startup time penalty (a few seconds or so).
+Simply download the binary from [here](https://atx.github.io/padne/padne-linux-x64). This comes with all dependencies already bundled (including KiCad). The downside is the relatively large size (around 200MB binary) and some startup time penalty.
 
 For a quick start, you can run:
 ```sh
@@ -38,16 +38,26 @@ This launches a simple GUI that looks like the GIF below:
 <img src="https://github.com/user-attachments/assets/2f2f0753-b140-4d7a-9dfd-50b160771076">
 </p>
 
+### pipx
+
+By executing:
+```
+sudo apt install python3-full python3-dev python3-pip git libegl1 \
+        libegl1-mesa-dev libmpfr-dev libgmp-dev libboost-dev pipx kicad
+pipx run --spec git+https://github.com/atx/padne.git padne
+```
+
+do note that in this variant (and the variant below), padne uses the system KiCad Python bindings.
+
 
 ### Build-it-yourself
 
 This is ideal if you want to hack on padne itself or are looking for a more lightweight setup. On Ubuntu, we proceed as follows:
 
 ```
-sudo apt update
-sudo apt upgrade
-sudo apt install python3-full python3-dev python3-pip git libegl1 libegl1-mesa-dev libmpfr-dev libgmp-dev libboost-dev kicad
-pip3 install --user -e .[test] -v
+sudo apt install python3-full python3-dev python3-pip git libegl1 \
+        libegl1-mesa-dev libmpfr-dev libgmp-dev libboost-dev kicad
+pip3 install --user -e .[test,bench] -v
 ```
 
 ## Running the solver
