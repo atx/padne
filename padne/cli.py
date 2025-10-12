@@ -5,6 +5,7 @@ import logging
 import pickle
 import sys
 import traceback
+import functools
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -172,56 +173,58 @@ def parse_args():
     return parser.parse_args()
 
 
-@contextmanager
-def handle_errors():
-    """Context manager for handling errors with enhanced display."""
-    try:
-        yield
-    except Exception as e:
-        # Print the normal traceback
-        traceback.print_exc()
+def handle_errors(func):
+    """Decorator for handling errors with enhanced display."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Print the normal traceback
+            traceback.print_exc()
 
-        # Print the exception message in bold yellow
-        print(f"\033[1;33m{str(e)}\033[0m")
+            # Print the exception message in bold yellow
+            print(f"\033[1;33m{str(e)}\033[0m")
 
-        # Exit with error code
-        sys.exit(1)
+            # Exit with error code
+            sys.exit(1)
+    return wrapper
 
 
+@handle_errors
 def do_gui(args):
-    with handle_errors():
-        log = logging.getLogger(__name__)
-        log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
-        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
-        log.info("Solving problem for GUI...")
-        mesher_config = mesher_config_from_args(args)
+    log = logging.getLogger(__name__)
+    log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
+    prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+    log.info("Solving problem for GUI...")
+    mesher_config = mesher_config_from_args(args)
 
-        # Capture warnings emitted during solving
-        with collect_warnings() as warns:
-            solution = padne.solver.solve(prob, mesher_config=mesher_config)
-
-        captured_warnings = [
-            msg
-            for msg in warns
-            if issubclass(msg.category, padne.solver.SolverWarning)
-        ]
-
-        # TODO: Store the project name in the problem/solution object
-        project_name = args.kicad_pro_file.name
-        return padne.ui.main(solution, project_name, captured_warnings)
-
-
-def do_solve(args):
-    with handle_errors():
-        log = logging.getLogger(__name__)
-        log.info(f"Loading KiCad project: {args.kicad_pro_file}")
-        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
-        log.info("Solving problem...")
-        mesher_config = mesher_config_from_args(args)
+    # Capture warnings emitted during solving
+    with collect_warnings() as warns:
         solution = padne.solver.solve(prob, mesher_config=mesher_config)
-        with open(args.output_file, "wb") as f:
-            pickle.dump(solution, f)
-        log.info(f"Solution saved to {args.output_file}")
+
+    captured_warnings = [
+        msg
+        for msg in warns
+        if issubclass(msg.category, padne.solver.SolverWarning)
+    ]
+
+    # TODO: Store the project name in the problem/solution object
+    project_name = args.kicad_pro_file.name
+    return padne.ui.main(solution, project_name, captured_warnings)
+
+
+@handle_errors
+def do_solve(args):
+    log = logging.getLogger(__name__)
+    log.info(f"Loading KiCad project: {args.kicad_pro_file}")
+    prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+    log.info("Solving problem...")
+    mesher_config = mesher_config_from_args(args)
+    solution = padne.solver.solve(prob, mesher_config=mesher_config)
+    with open(args.output_file, "wb") as f:
+        pickle.dump(solution, f)
+    log.info(f"Solution saved to {args.output_file}")
 
 
 def do_show(args):
@@ -233,14 +236,14 @@ def do_show(args):
     return padne.ui.main(solution, project_name)
 
 
+@handle_errors
 def do_paraview(args):
-    with handle_errors():
-        log = logging.getLogger(__name__)
-        log.info(f"Loading solution from: {args.solution_file}")
-        with open(args.solution_file, "rb") as f:
-            solution = pickle.load(f)
-        padne.paraview.export_solution(solution, args.output_dir)
-        log.info(f"ParaView export completed: {args.output_dir}")
+    log = logging.getLogger(__name__)
+    log.info(f"Loading solution from: {args.solution_file}")
+    with open(args.solution_file, "rb") as f:
+        solution = pickle.load(f)
+    padne.paraview.export_solution(solution, args.output_dir)
+    log.info(f"ParaView export completed: {args.output_dir}")
 
 
 def main():
