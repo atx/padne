@@ -1,4 +1,6 @@
 import argparse
+import warnings
+import unittest.mock
 import logging
 import pickle
 import sys
@@ -24,6 +26,23 @@ def setup_logging(debug_mode: bool):
             logging.StreamHandler()
         ]
     )
+
+
+@contextmanager
+def collect_warnings():
+    """Context manager to collect warnings."""
+    # Note: we cannot use warnings.catch_warnings here because it
+    # does not print the warnings as they occur.
+    warns = []
+    orig_showwarning = warnings.showwarning
+
+    def showwarning_wrapper(message, category, filename, lineno, file=None, line=None):
+        msg = warnings.WarningMessage(message, category, filename, lineno, file, line)
+        warns.append(msg)
+        orig_showwarning(message, category, filename, lineno, file=file, line=line)
+
+    with unittest.mock.patch("warnings.showwarning", new=showwarning_wrapper):
+        yield warns
 
 
 def add_mesher_args(parser):
@@ -168,6 +187,7 @@ def handle_errors():
         # Exit with error code
         sys.exit(1)
 
+
 def do_gui(args):
     with handle_errors():
         log = logging.getLogger(__name__)
@@ -175,10 +195,20 @@ def do_gui(args):
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
         log.info("Solving problem for GUI...")
         mesher_config = mesher_config_from_args(args)
-        solution = padne.solver.solve(prob, mesher_config=mesher_config)
+
+        # Capture warnings emitted during solving
+        with collect_warnings() as warns:
+            solution = padne.solver.solve(prob, mesher_config=mesher_config)
+
+        captured_warnings = [
+            msg
+            for msg in warns
+            if issubclass(msg.category, padne.solver.SolverWarning)
+        ]
+
         # TODO: Store the project name in the problem/solution object
         project_name = args.kicad_pro_file.name
-        return padne.ui.main(solution, project_name)
+        return padne.ui.main(solution, project_name, captured_warnings)
 
 
 def do_solve(args):

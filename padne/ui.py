@@ -4,6 +4,7 @@ import contextlib
 import logging
 import numpy as np
 import sys
+import warnings
 import OpenGL.GL as gl
 import time
 
@@ -18,8 +19,9 @@ from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout,
-    QToolBar, QToolButton, QMenu
+    QToolBar, QToolButton, QMenu, QMessageBox
 )
+from PySide6.QtCore import QTimer
 
 import shapely.geometry
 from scipy.spatial import cKDTree
@@ -1850,10 +1852,12 @@ class MainWindow(QMainWindow):
 
     projectLoaded = Signal(solver.Solution)
 
-    def __init__(self, solution: solver.Solution, project_name: Optional[str]):
+    def __init__(self, solution: solver.Solution, project_name: Optional[str], warnings_list: Optional[list[warnings.WarningMessage]] = None):
         super().__init__()
 
         self.project_file_name = project_name if project_name else "Loaded Solution"
+        self.warnings_list = warnings_list if warnings_list else []
+        self.warnings_shown = False
 
         # Should be overwritten soon
         self.setWindowTitle("padne")
@@ -1966,6 +1970,30 @@ class MainWindow(QMainWindow):
             self.value_label.setText(f"{current_unit}: ?")
             self.delta_label.setText("Δ: ?")
 
+    def showEvent(self, event):
+        """Override showEvent to display warnings after window is visible."""
+        super().showEvent(event)
+        if self.warnings_list and not self.warnings_shown:
+            self.warnings_shown = True
+            # Use QTimer with 0ms to defer until after the window is fully painted
+            # --- we want to avoid showing the dialog before the main window is
+            # constructed (since it would block the main window from appearing)
+            QTimer.singleShot(0, self._show_warnings_dialog)
+
+    def _show_warnings_dialog(self):
+        """Show the warnings dialog."""
+        warning_text = "The solver encountered the following warnings:\n\n"
+        for idx, warning_msg in enumerate(self.warnings_list, 1):
+            warning_text += f"{idx}. {warning_msg.message}\n"
+
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setWindowTitle("Solver Warnings")
+        msg_box.setText("The solver encountered warnings during execution.")
+        msg_box.setDetailedText(warning_text)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec()
+
 
 def configure_opengl():
     """Configure OpenGL settings for the application."""
@@ -1977,13 +2005,16 @@ def configure_opengl():
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main(solution: solver.Solution, project_name: Optional[str]):
+def main(solution: solver.Solution, project_name: Optional[str], warnings_list: Optional[list[warnings.WarningMessage]] = None):
     """Main entry point for the UI application."""
     # Configure OpenGL
     configure_opengl()
 
+    if warnings_list is None:
+        warnings_list = []
+
     app = QApplication(sys.argv)
-    window = MainWindow(solution, project_name)
+    window = MainWindow(solution, project_name, warnings_list)
 
     window.show()
     return app.exec()
