@@ -1320,6 +1320,12 @@ def gerber_file_to_shapely(gerber_path: Path) -> Optional[shapely.geometry.Multi
     # a flipped y axis. Flip it back.
     geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
 
+    # First, we try to clean up the geometry by inflating and deflating.
+    # This should remove any tiny slivers or gaps, usually caused by
+    # pygerber not quite matching starts and ends of consecutive traces.
+    # (see the test case "broken_trace_geometry" for an example)
+    geometry = geometry.buffer(1e-4).buffer(-1e-4)
+
     # Simplify the geometry to remove almost-duplicate points
     # This is unfortunately a "bug" in pygerber, where drawing
     # a circle is implemented by drawing an arbitrary degree arc,
