@@ -1391,6 +1391,7 @@ def extract_board_outline(board: pcbnew.BOARD) -> Optional[shapely.geometry.Mult
 
     if not board.GetBoardPolygonOutlines(outline_set):
         # No outline defined or it is malformed in some way
+        log.debug("No valid board outline found")
         return None
 
     polygons = []

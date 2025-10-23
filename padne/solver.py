@@ -596,47 +596,40 @@ def produce_layer_solutions(layers: list[problem.Layer],
     return layer_solutions
 
 
-def filter_networks_in_dead_regions(prob: problem.Problem,
-                                    connected_layer_mesh_pairs: set[tuple[int, int]],
-                                    strtrees: list[shapely.strtree.STRtree]
-                                    ) -> list[problem.Network]:
-    filtered_networks = []
-    for network in prob.networks:
-        has_a_dead_terminal = False
+def network_has_a_dead_terminal(network: problem.Network,
+                                prob: problem.Problem,
+                                connected_layer_mesh_pairs: set[tuple[int, int]],
+                                strtrees: list[shapely.strtree.STRtree]
+                                ) -> bool:
+    """
+    Check if a network has any connection on a dead (disconnected) copper region.
+    """
+    for conn in network.connections:
+        layer_i = prob.layers.index(conn.layer)
+        strtree = strtrees[layer_i]
 
-        for conn in network.connections:
-            layer_i = prob.layers.index(conn.layer)
-            strtree = strtrees[layer_i]
+        candidates = strtree.query(conn.point)
+        for geom_i in candidates:
+            if (layer_i, geom_i) in connected_layer_mesh_pairs:
+                # Would have no effect on whether the network
+                # has a dead terminal or not, do not even bother checking
+                continue
 
-            candidates = strtree.query(conn.point)
-            for geom_i in candidates:
-                if (layer_i, geom_i) in connected_layer_mesh_pairs:
-                    # Would have no effect on whether the network
-                    # has a dead terminal or not, do not even bother checking
-                    continue
+            if not conn.layer.shape.geoms[geom_i].intersects(conn.point):
+                continue
 
-                if not conn.layer.shape.geoms[geom_i].intersects(conn.point):
-                    continue
+            # Okay, at this point:
+            # * We know that the connection is on (layer_i, geom_i)
+            # * We know that the (layer_i, geom_i) pair got eliminated by
+            # the connectivity graph check.
+            # This means we eliminate the entire network. In practice,
+            # it should not happen that a network has some dead
+            # terminals and some live terminals (that would mean ConnectivityGraph
+            # is broken). So it is enough to just find the first dead terminal
+            # and bail.
+            return True
 
-                # Okay, at this point:
-                # * We know that the connection is on (layer_i, geom_i)
-                # * We know that the (layer_i, geom_i) pair got eliminated by
-                # the connectivity graph check.
-                # This means we eliminate the entire network. In practice,
-                # it should not happen that a network has some dead
-                # terminals and some live terminals (that would mean ConnectivityGraph
-                # is broken). So it is enough to just find the first dead terminal
-                # and bail.
-                has_a_dead_terminal = True
-                break
-
-            if has_a_dead_terminal:
-                break
-
-        if not has_a_dead_terminal:
-            filtered_networks.append(network)
-
-    return filtered_networks
+    return False
 
 
 def find_best_ground_node_index(prob: problem.Problem, node_indexer: NodeIndexer) -> int:
@@ -740,7 +733,7 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     strtrees = construct_strtrees_from_layers(prob.layers)
     connectivity_graph = ConnectivityGraph.create_from_problem(prob, strtrees)
     connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
-    log.info(f"Meshing the connected components")
+    log.info("Meshing the connected components")
     meshes, mesh_index_to_layer_index = \
         generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs, strtrees)
 
@@ -757,9 +750,11 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     log.info("Processing lumped element networks")
     # Now we need to filter out the lumped element networks that are not connected
     # to any of the meshes that we are driving with a source.
-    filtered_networks = filter_networks_in_dead_regions(
-        prob, connected_layer_mesh_pairs, strtrees
-    )
+    filtered_networks = [
+        net
+        for net in prob.networks
+        if not network_has_a_dead_terminal(net, prob, connected_layer_mesh_pairs, strtrees)
+    ]
     log.info(f"Filtered networks: {len(filtered_networks)}/{len(prob.networks)}")
     # Next, we construct the _internal_ system of equations for each of the
     # network.
@@ -805,6 +800,7 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
 
     # TODO: Implement a better way to pick the ground node.
     i_gnd = find_best_ground_node_index(prob, node_indexer)
+    log.debug(f"Ground node global index: {i_gnd}")
     setup_ground_node(i_gnd, L, r)
 
     # Now we need to solve the system of equations
