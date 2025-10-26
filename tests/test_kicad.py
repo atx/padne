@@ -1137,10 +1137,9 @@ class TestExtractBoardOutline:
 
 class TestClipLayerWithOutline:
 
-    def test_layer_clipping_castellated_vias_internal_cutout(self, kicad_test_projects):
+    @for_all_kicad_projects(include=["castellated_vias_internal_cutout", "castellated_vias_internal_cutout_aux_origin"])
+    def test_layer_clipping_castellated_vias_internal_cutout(self, project):
         """Test that layer geometry is properly clipped by board outline in load_kicad_project."""
-        project = kicad_test_projects["castellated_vias_internal_cutout"]
-
         # Load the KiCad project - this will apply layer clipping
         problem = kicad.load_kicad_project(project.pro_path)
 

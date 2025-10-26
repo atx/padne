@@ -1087,6 +1087,7 @@ class TestSolverEndToEnd:
                                      "long_trace_current_custom_conductivity",
                                      "castellated_vias",
                                      "castellated_vias_internal_cutout",
+                                     "castellated_vias_internal_cutout_aux_origin",
                                      "overlapping_vias",
                                      "long_trace_esr",
                                      "via_in_pad",

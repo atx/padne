@@ -1265,7 +1265,7 @@ def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: 
         plot_options.SetFormat(pcbnew.PLOT_FORMAT_GERBER)
         plot_options.SetUseGerberAttributes(True)
         plot_options.SetCreateGerberJobFile(False)
-        plot_options.SetUseAuxOrigin(True)
+        plot_options.SetUseAuxOrigin(False)
         # This does not apply to Gerbers anyway, but we set it for completeness
         plot_options.SetDrillMarksType(pcbnew.DRILL_MARKS_NO_DRILL_SHAPE)
 
