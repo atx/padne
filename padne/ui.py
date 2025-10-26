@@ -272,7 +272,7 @@ class PanTool(BaseTool):
         return "Pan and zoom the view"
 
     def on_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
-        if event.buttons() & Qt.LeftButton:
+        if event.buttons() & (Qt.LeftButton | Qt.MiddleButton):
             self.mesh_viewer.panViewByScreenDelta(dx, dy)
 
 
@@ -1451,7 +1451,7 @@ class MeshViewer(QOpenGLWidget):
 
     def mousePressEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse press events."""
-        if event.buttons() & Qt.LeftButton:  # Typically, tools operate on left click
+        if event.buttons() & (Qt.LeftButton | Qt.MiddleButton):
             self.last_mouse_screen_pos = event.position()
 
         self.setFocus()  # Ensure the widget gets focus when clicked
@@ -1463,7 +1463,7 @@ class MeshViewer(QOpenGLWidget):
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse movement."""
-        if event.buttons() & Qt.LeftButton and self.last_mouse_screen_pos is not None:
+        if event.buttons() & (Qt.LeftButton | Qt.MiddleButton) and self.last_mouse_screen_pos is not None:
             delta = event.position() - self.last_mouse_screen_pos
             dx = float(delta.x())
             dy = float(delta.y())
@@ -1484,7 +1484,7 @@ class MeshViewer(QOpenGLWidget):
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
         """Handle mouse release events."""
-        if event.button() == Qt.LeftButton and self.last_mouse_screen_pos is not None:
+        if event.button() in (Qt.LeftButton, Qt.MiddleButton) and self.last_mouse_screen_pos is not None:
             # TODO: Potentially emit a clickReleased signal if tools need it
             # Clear drag state
             self.last_mouse_screen_pos = None
