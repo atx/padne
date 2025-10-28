@@ -661,6 +661,22 @@ PolyBoundaryDistanceMap = cgal.PolyBoundaryDistanceMap
 CGALPolygon = cgal.CGALPolygon
 
 
+class MeshingException(RuntimeError):
+    """
+    Exception raised when CGAL mesh generation fails due to invalid geometry.
+
+    This includes cases such as:
+    - Self-intersecting polygons with unauthorized constraint intersections
+    - Degenerate edges that are too short (near-duplicate vertices)
+    - Other geometric degeneracies that prevent mesh generation
+
+    With CGAL_DEBUG enabled, these issues are detected early through CGAL's
+    internal precondition checking, preventing crashes and providing clear
+    error messages.
+    """
+    pass
+
+
 class Mesher:
     """
     This class is responsible for generating a mesh from a Shapely polygon.
@@ -770,13 +786,17 @@ class Mesher:
 
         vertices, segments, seeds = self._prepare_polygon_for_cgal(poly, seed_points)
 
-        # Create distance map for variable density meshing only if enabled
-        if self.config.is_variable_density:
-            distance_map = cgal.PolyBoundaryDistanceMap(poly, self.config.distance_map_quantization)
-        else:
-            distance_map = None
+        try:
+            # Create distance map for variable density meshing only if enabled
+            if self.config.is_variable_density:
+                distance_map = cgal.PolyBoundaryDistanceMap(poly, self.config.distance_map_quantization)
+            else:
+                distance_map = None
 
-        cgal_output = cgal.mesh(self.config, vertices, segments, seeds, distance_map)
+            cgal_output = cgal.mesh(self.config, vertices, segments, seeds, distance_map)
+        except RuntimeError as e:
+            # Re-raise as MeshingException to provide clearer error context
+            raise MeshingException(str(e)) from e
 
         mesh = Mesh.from_triangle_soup(
             [Point(*p) for p in cgal_output['vertices']],
