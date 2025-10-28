@@ -7,7 +7,7 @@ import shapely.geometry
 from padne import kicad
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
-    Mesher, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon
+    Mesher, MeshingException, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon
 from unittest.mock import patch, Mock
 
 from conftest import for_all_kicad_projects
@@ -1616,6 +1616,46 @@ class TestMesher:
             for polygon in layer.shape.geoms:
                 mesh = mesher.poly_to_mesh(polygon)
                 assert_mesh_maximum_edge_length(mesh, max_size)
+
+    def test_self_intersecting_fails_cleanly(self):
+        """
+        Tests that self-intersecting geometry is properly detected and reported.
+        CGAL detects unauthorized constraint intersections and raises a clear error.
+        """
+        coords = [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (0.5, 1.0),
+            (0.6, 1.0),
+        ]
+        degenerate_poly = shapely.geometry.Polygon(coords)
+
+        mesher = Mesher()
+        # This should raise a MeshingException due to intersecting constraints
+        # With CGAL_DEBUG enabled, this is caught during polygon simplicity check
+        with pytest.raises(MeshingException, match="precondition violation"):
+            mesh = mesher.poly_to_mesh(degenerate_poly)
+
+    def test_epsilon_small_notch_fails_cleanly(self):
+        """
+        Tests a shape that has a small "notch" where the top vertices are extremely close together.
+        This used to cause a segfault in the mesher, but now CGAL detects the degenerate edges
+        and raises a RuntimeError before the crash can occur.
+        """
+        coords = [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (0.5, 1.0),
+            (0.5, 0.7),
+            (0.5 - 1e-10, 1.0),
+        ]
+        degenerate_poly = shapely.geometry.Polygon(coords)
+
+        mesher = Mesher()
+        # This should raise a MeshingException due to degenerate edges
+        # With CGAL_DEBUG enabled, this is caught during mesh refinement
+        with pytest.raises(MeshingException, match="assertion violation"):
+            mesh = mesher.poly_to_mesh(degenerate_poly)
 
 
 class TestMeshPickling:

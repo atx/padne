@@ -30,6 +30,9 @@ target_include_directories(_cgal PRIVATE ${pybind11_INCLUDE_DIRS})
 # Set C++ standard if required (pybind11 needs at least C++11)
 target_compile_features(_cgal PRIVATE cxx_std_17) # Or cxx_std_17
 
+# Enable CGAL's internal assertion checking to catch geometric degeneracies
+target_compile_definitions(_cgal PRIVATE CGAL_DEBUG=1)
+
 # For some unknown reason, scikit-build-core does not install the resulting
 # .so file in the correct location. This forces it to be installed, but
 # it does not look like it is a canonical solution...
