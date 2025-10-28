@@ -546,6 +546,25 @@ int PolyBoundaryDistanceMap::grid_to_index(int grid_i, int grid_j) const {
     return grid_j * width + grid_i;
 }
 
+// Helper function to convert Shapely coordinate list to CGAL Polygon_2
+// NOTE: Shapely includes duplicate closing coordinate, but CGAL Polygon_2 is implicitly closed
+// We must skip the last coordinate to avoid creating zero-length edges
+static Polygon_2 shapely_coords_to_cgal_polygon(py::object coords) {
+    Polygon_2 polygon;
+    py::list coords_list = py::list(coords);
+    size_t num_coords = coords_list.size();
+
+    // Skip last coordinate (duplicate closing point)
+    for (size_t i = 0; i < num_coords - 1; ++i) {
+        py::tuple pt = coords_list[i].cast<py::tuple>();
+        double x = pt[0].cast<double>();
+        double y = pt[1].cast<double>();
+        polygon.push_back(Point(x, y));
+    }
+
+    return polygon;
+}
+
 CGALPolygon::CGALPolygon(py::object shapely_polygon) {
     extract_polygon_from_shapely(shapely_polygon);
 }
@@ -556,13 +575,7 @@ void CGALPolygon::extract_polygon_from_shapely(py::object shapely_polygon) {
     py::object coords = exterior.attr("coords");
 
     // Convert exterior to CGAL polygon
-    Polygon_2 outer_boundary;
-    for (auto coord : coords) {
-        py::tuple pt = coord.cast<py::tuple>();
-        double x = pt[0].cast<double>();
-        double y = pt[1].cast<double>();
-        outer_boundary.push_back(Point(x, y));
-    }
+    Polygon_2 outer_boundary = shapely_coords_to_cgal_polygon(coords);
 
     // Make sure outer boundary is counter-clockwise (CGAL convention)
     if (outer_boundary.is_clockwise_oriented()) {
@@ -578,15 +591,9 @@ void CGALPolygon::extract_polygon_from_shapely(py::object shapely_polygon) {
     std::vector<Polygon_2> holes;
     py::object interiors = shapely_polygon.attr("interiors");
     for (auto interior : interiors) {
-        Polygon_2 hole;
         py::object hole_coords = interior.attr("coords");
 
-        for (auto coord : hole_coords) {
-            py::tuple pt = coord.cast<py::tuple>();
-            double x = pt[0].cast<double>();
-            double y = pt[1].cast<double>();
-            hole.push_back(Point(x, y));
-        }
+        Polygon_2 hole = shapely_coords_to_cgal_polygon(hole_coords);
 
         // Make sure holes are clockwise (CGAL convention for holes)
         if (!hole.is_clockwise_oriented()) {
