@@ -5,6 +5,7 @@ import math
 import numpy as np
 import scipy.sparse
 import warnings
+import pickle
 from dataclasses import dataclass
 from typing import Optional, Any
 
@@ -12,6 +13,7 @@ from padne import solver, problem, mesh, kicad
 from padne.kicad import ensure_geometry_is_multipolygon
 
 from conftest import for_all_kicad_projects
+from test_mesh import assert_meshes_equivalent
 
 
 class TestNetworkSolver:
@@ -1965,3 +1967,42 @@ class TestSolverEndToEnd:
                 assert len(lsol.disconnected_meshes) == 1
             else:
                 pytest.fail(f"Unexpected layer {layer.name}")
+
+
+class TestSolutionPickling:
+    """Test pickling and unpickling of Solution objects."""
+
+    @for_all_kicad_projects(include=["simple_geometry", "two_big_planes", "via_tht_4layer"])
+    def test_pickle_solution_from_kicad_projects(self, project):
+        """Test pickling and unpickling Solution objects from real KiCad projects."""
+        # Load and solve the KiCad project
+        prob = kicad.load_kicad_project(project.pro_path)
+        original_solution = solver.solve(prob)
+
+        # Pickle and unpickle the solution
+        pickled_solution = pickle.dumps(original_solution)
+        unpickled_solution = pickle.loads(pickled_solution)
+
+        # Verify the solution structure
+        assert len(unpickled_solution.layer_solutions) == len(original_solution.layer_solutions)
+
+        # Verify each layer solution
+        for layer_idx, (orig_ls, unpick_ls) in enumerate(zip(
+            original_solution.layer_solutions,
+            unpickled_solution.layer_solutions
+        )):
+            # Check meshes count
+            assert len(unpick_ls.meshes) == len(orig_ls.meshes)
+
+            # Check that meshes are equivalent
+            for orig_mesh, unpick_mesh in zip(orig_ls.meshes, unpick_ls.meshes):
+                assert_meshes_equivalent(orig_mesh, unpick_mesh)
+
+            # Check potentials (ZeroForm)
+            assert len(unpick_ls.potentials) == len(orig_ls.potentials)
+
+            # Check power densities (TwoForm)
+            assert len(unpick_ls.power_densities) == len(orig_ls.power_densities)
+
+            # Check disconnected meshes
+            assert len(unpick_ls.disconnected_meshes) == len(orig_ls.disconnected_meshes)
