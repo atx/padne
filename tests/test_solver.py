@@ -1757,7 +1757,7 @@ class TestSolverEndToEnd:
     def test_unterminated_current_loop_warning(self, kicad_test_projects):
         project = kicad_test_projects["unterminated_current_loop"]
         prob = kicad.load_kicad_project(project.pro_path)
-        with pytest.warns(solver.SolverWarning, match="Ground node voltage is not zero"):
+        with pytest.warns(solver.SolverWarning, match="Ground node current is not zero"):
             solution = solver.solve(prob)
         # TODO: Ideally, we would sanity check that the solution object is
         # at least reasonably structured

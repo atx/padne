@@ -812,7 +812,9 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
         # This is a warning, but we still continue to produce the solution object
         # since it may still be useful for the user.
         warnings.warn(
-            "Ground node voltage is not zero, this may indicate a problem with the system. Check for unterminated current loops or floating connected components.",
+            f"Ground node current is not zero ({v[-1]} A), this may indicate an issue with the problem being solved."
+            "Check for unterminated current loops or floating connected components."
+            "This may be harmless if the current is small, but it may indicate an ill-conditioned system.",
             SolverWarning
         )
 
