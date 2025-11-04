@@ -524,7 +524,7 @@ def stamp_network_into_system(network: problem.Network,
 
 def setup_ground_node(i_gnd: int,
                       L: scipy.sparse.lil_matrix,
-                      r: np.ndarray):
+                      r: np.ndarray) -> None:
     # This effectively wires a voltage source of 0V from i_gnd to a
     # virtual (not in the matrix) "ground" node.
     # A more useful way of thinking about this is that:

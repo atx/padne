@@ -149,7 +149,7 @@ class BaseSpatialIndex:
     shape: shapely.geometry.MultiPolygon
 
     @classmethod
-    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution):
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[list[list[float]], list[float]]:
         raise NotImplementedError("This method should be implemented in subclasses")
 
     @classmethod
@@ -189,7 +189,7 @@ class VertexSpatialIndex(BaseSpatialIndex):
     """Spatial index for fast vertex value lookups within a layer."""
 
     @classmethod
-    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution):
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[list[list[float]], list[float]]:
         """Extract vertex coordinates and their values from the layer solution."""
         all_vertices = []
         all_values = []
@@ -206,7 +206,7 @@ class FaceSpatialIndex(BaseSpatialIndex):
     """Spatial index for fast face value lookups within a layer."""
 
     @classmethod
-    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution):
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[list[list[float]], list[float]]:
         """Extract face coordinates and their values from the layer solution."""
         all_faces = []
         all_values = []
@@ -1089,7 +1089,7 @@ class MeshViewer(QOpenGLWidget):
         # Delegate to current rendering mode
         return self.current_rendering_mode.pick_nearest_value(current_layer_name, world_x, world_y)
 
-    def autoscaleValue(self):
+    def autoscaleValue(self) -> None:
         """
         Automatically adjust the min/max values for color scaling using the current rendering mode.
         """
@@ -1103,7 +1103,7 @@ class MeshViewer(QOpenGLWidget):
         self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
         self.update()
 
-    def autoscaleXY(self):
+    def autoscaleXY(self) -> None:
         """
         Automatically adjust the offset and scale to fit all meshes in the view.
         Sets the view to display all meshes with a small margin around them.
@@ -1187,7 +1187,7 @@ class MeshViewer(QOpenGLWidget):
 
         self.update()
 
-    def setupConnectionPointsData(self):
+    def setupConnectionPointsData(self) -> None:
         """Set up the connection points data for rendering."""
         self.rendered_connection_points.clear()
 
@@ -1226,7 +1226,7 @@ class MeshViewer(QOpenGLWidget):
             rendered_obj = RenderedPoints.from_points(collected_points_data)
             self.rendered_connection_points[layer_name] = rendered_obj
 
-    def initializeGL(self):
+    def initializeGL(self) -> None:
         """Initialize OpenGL settings."""
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)  # Background
         gl.glDisable(gl.GL_CULL_FACE)
@@ -1258,7 +1258,7 @@ class MeshViewer(QOpenGLWidget):
         if self.solution:
             self.setupConnectionPointsData()
 
-    def resizeGL(self, width, height):
+    def resizeGL(self, width: int, height: int) -> None:
         """Handle window resizing."""
         gl.glViewport(0, 0, width, height)
 
@@ -1267,7 +1267,7 @@ class MeshViewer(QOpenGLWidget):
             self.autoscaleXY()
             self.update()
 
-    def _computeMVP(self):
+    def _computeMVP(self) -> np.ndarray:
         aspect = self.aspect_ratio
 
         # Create a 2D orthographic projection matrix
@@ -1299,7 +1299,7 @@ class MeshViewer(QOpenGLWidget):
         # Combine matrices: projection * translation
         return np.dot(proj_matrix, trans_matrix)
 
-    def _renderMeshTriangles(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+    def _renderMeshTriangles(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the triangles of the meshes for the current layer."""
         with self.mesh_shader.use():
             # Set the MVP uniform
@@ -1322,7 +1322,7 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_triangles()
 
-    def _renderMeshEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+    def _renderMeshEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the edges of the meshes for the current layer."""
         if not self.edges_visible or not self.edge_shader:
             return
@@ -1338,7 +1338,7 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_edges()
 
-    def _renderBoundaryEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+    def _renderBoundaryEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the boundary edges of the meshes for the current layer."""
         if not self.outline_visible or not self.edge_shader:
             return
@@ -1354,7 +1354,7 @@ class MeshViewer(QOpenGLWidget):
             for rmesh in rendered_mesh_list:
                 rmesh.render_boundary()
 
-    def _renderDisconnectedMeshes(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]):
+    def _renderDisconnectedMeshes(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders disconnected copper meshes in gray."""
         if not self.disconnected_shader or not rendered_mesh_list:
             return
@@ -1374,7 +1374,7 @@ class MeshViewer(QOpenGLWidget):
             # They provide no additional information and look messy anyway...
             # It can be useful to render them when debugging the code
 
-    def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: RenderedPoints):
+    def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: RenderedPoints) -> None:
         """Renders the connection points for the current layer."""
         if not self.connection_points_visible or not self.points_shader:
             return
@@ -1393,7 +1393,7 @@ class MeshViewer(QOpenGLWidget):
             rendered_points_obj.render()
             gl.glDisable(gl.GL_PROGRAM_POINT_SIZE)
 
-    def paintGL(self):
+    def paintGL(self) -> None:
         """Render the mesh using shaders."""
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
 
@@ -1449,7 +1449,7 @@ class MeshViewer(QOpenGLWidget):
 
         return mesh.Point(world_x, world_y)
 
-    def mousePressEvent(self, event: QtGui.QMouseEvent):
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         """Handle mouse press events."""
         if event.buttons() & (Qt.LeftButton | Qt.MiddleButton):
             self.last_mouse_screen_pos = event.position()
@@ -1461,7 +1461,7 @@ class MeshViewer(QOpenGLWidget):
         world_point = self._screenToWorld(event.position())
         self.meshClicked.emit(world_point, event)
 
-    def mouseMoveEvent(self, event: QtGui.QMouseEvent):
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         """Handle mouse movement."""
         if event.buttons() & (Qt.LeftButton | Qt.MiddleButton) and self.last_mouse_screen_pos is not None:
             delta = event.position() - self.last_mouse_screen_pos
@@ -1482,14 +1482,14 @@ class MeshViewer(QOpenGLWidget):
         self.mousePositionChanged.emit(world_point, voltage)
         self.last_mouse_position_change_ts = time.monotonic()
 
-    def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         """Handle mouse release events."""
         if event.button() in (Qt.LeftButton, Qt.MiddleButton) and self.last_mouse_screen_pos is not None:
             # TODO: Potentially emit a clickReleased signal if tools need it
             # Clear drag state
             self.last_mouse_screen_pos = None
 
-    def panViewByScreenDelta(self, dx_screen: float, dy_screen: float):
+    def panViewByScreenDelta(self, dx_screen: float, dy_screen: float) -> None:
         """
         Pans the view based on a screen delta.
 
@@ -1517,7 +1517,7 @@ class MeshViewer(QOpenGLWidget):
         self.offset_y += dy_world
         self.update()
 
-    def setMinValueFromWorldPoint(self, world_point: mesh.Point):
+    def setMinValueFromWorldPoint(self, world_point: mesh.Point) -> None:
         """
         Sets the minimum value of the color scale from a world point.
         If the selected value is greater than the current maximum, both min and max
@@ -1539,7 +1539,7 @@ class MeshViewer(QOpenGLWidget):
         self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
         self.update()
 
-    def setMaxValueFromWorldPoint(self, world_point: mesh.Point):
+    def setMaxValueFromWorldPoint(self, world_point: mesh.Point) -> None:
         """
         Sets the maximum value of the color scale from a world point.
         If the selected value is less than the current minimum, both min and max
@@ -1561,7 +1561,7 @@ class MeshViewer(QOpenGLWidget):
         self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
         self.update()
 
-    def wheelEvent(self, event):
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         """Handle mouse wheel for zooming."""
         # User manually zoomed - disable automatic scaling
         self.needs_initial_autoscale = False
@@ -1573,7 +1573,7 @@ class MeshViewer(QOpenGLWidget):
             self.scale /= zoom_factor
         self.update()
 
-    def keyPressEvent(self, event: QtGui.QKeyEvent):
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         """Handle keyboard events."""
         # Get current mouse position in widget coordinates
         screen_pos = self.mapFromGlobal(QtGui.QCursor.pos())
@@ -1603,7 +1603,7 @@ class MeshViewer(QOpenGLWidget):
             # Allow other key events to be processed if not handled by shortcuts or specific keys
             super().keyPressEvent(event)
 
-    def switchLayerBy(self, direction: int = 1):
+    def switchLayerBy(self, direction: int = 1) -> None:
         """Switch to the next or previous layer in the cycle.
 
         Args:
@@ -1622,11 +1622,11 @@ class MeshViewer(QOpenGLWidget):
         # Refresh the display
         self.update()
 
-    def switchToNextLayer(self):
+    def switchToNextLayer(self) -> None:
         """Switch to the next layer in the cycle."""
         self.switchLayerBy(1)
 
-    def switchToPreviousLayer(self):
+    def switchToPreviousLayer(self) -> None:
         """Switch to the previous layer in the cycle."""
         self.switchLayerBy(-1)
 
@@ -1706,7 +1706,7 @@ class MeshViewer(QOpenGLWidget):
             self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
             self.update()
 
-    def _updateShaderColorMap(self):
+    def _updateShaderColorMap(self) -> None:
         """Update the shader color map uniform with the current mode's color map."""
         if not self.mesh_shader:
             return
@@ -1742,7 +1742,7 @@ class ColorScaleWidget(QWidget):
 
         self.setupUI()
 
-    def setupUI(self):
+    def setupUI(self) -> None:
         """Set up the UI components."""
         layout = QVBoxLayout(self)
         layout.setSpacing(2)  # Add a little vertical spacing
@@ -1784,7 +1784,7 @@ class ColorScaleWidget(QWidget):
         self.color_map = color_map
         self.update()  # Trigger a repaint
 
-    def updateLabels(self):
+    def updateLabels(self) -> None:
         """Update the delta and range labels."""
         delta = self.v_max - self.v_min
         delta_str = units.Value(delta, self.unit).pretty_format(decimal_places=2)
@@ -1794,7 +1794,7 @@ class ColorScaleWidget(QWidget):
         self.delta_label.setText(f"Δ = {delta_str}")
         self.range_label.setText(f"{max_str}\n  ↑\n{min_str}")
 
-    def paintEvent(self, event):
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         """Paint the color gradient scale."""
         super().paintEvent(event)
 
@@ -1895,7 +1895,7 @@ class MainWindow(QMainWindow):
 
         self.projectLoaded.emit(solution)
 
-    def _setupStatusBar(self):
+    def _setupStatusBar(self) -> None:
         # Add status bar widgets with fixed widths
         self.layer_status_label = QLabel("Layer: -")
         self.layer_status_label.setMinimumWidth(120)
@@ -1926,7 +1926,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(QLabel(" | "))  # Separator
         self.statusBar().addWidget(self.delta_label)
 
-    def _connectSignals(self):
+    def _connectSignals(self) -> None:
         # Connect the MeshViewer
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         self.mesh_viewer.unitChanged.connect(self.color_scale.setUnit)
@@ -1945,7 +1945,7 @@ class MainWindow(QMainWindow):
         # Connect mouse position updates
         self.mesh_viewer.mousePositionChanged.connect(self.updateMousePosition)
 
-    def updateCurrentLayer(self, layer_name):
+    def updateCurrentLayer(self, layer_name: str) -> None:
         """Update the window title to show the current layer."""
         self.setWindowTitle(f"padne: {self.project_file_name} - {layer_name}")
         self.layer_status_label.setText(f"Layer: {layer_name}")
@@ -1970,7 +1970,7 @@ class MainWindow(QMainWindow):
             self.value_label.setText(f"{current_unit}: ?")
             self.delta_label.setText("Δ: ?")
 
-    def showEvent(self, event):
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
         """Override showEvent to display warnings after window is visible."""
         super().showEvent(event)
         if self.warnings_list and not self.warnings_shown:
@@ -1980,7 +1980,7 @@ class MainWindow(QMainWindow):
             # constructed (since it would block the main window from appearing)
             QTimer.singleShot(0, self._show_warnings_dialog)
 
-    def _show_warnings_dialog(self):
+    def _show_warnings_dialog(self) -> None:
         """Show the warnings dialog."""
         warning_text = "The solver encountered the following warnings:\n\n"
         for idx, warning_msg in enumerate(self.warnings_list, 1):
@@ -1995,7 +1995,7 @@ class MainWindow(QMainWindow):
         msg_box.exec()
 
 
-def configure_opengl():
+def configure_opengl() -> None:
     """Configure OpenGL settings for the application."""
     # Create OpenGL format
     gl_format = QSurfaceFormat()
@@ -2005,7 +2005,7 @@ def configure_opengl():
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main(solution: solver.Solution, project_name: Optional[str], warnings_list: Optional[list[warnings.WarningMessage]] = None):
+def main(solution: solver.Solution, project_name: Optional[str], warnings_list: Optional[list[warnings.WarningMessage]] = None) -> int:
     """Main entry point for the UI application."""
     # Configure OpenGL
     configure_opengl()

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class UniformColorMap:
     points: list[tuple[float, float, float]]
 
-    def __call__(self, v: float):
+    def __call__(self, v: float) -> tuple[float, float, float]:
         i = v * len(self.points)
 
         # Clamp to range

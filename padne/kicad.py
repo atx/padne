@@ -1026,7 +1026,7 @@ def build_schema_hierarchy(sch_file_path: pathlib.Path,
     )
 
     # Find sheet elements in the parsed data
-    def find_sheet_elements(sexp_data):
+    def find_sheet_elements(sexp_data) -> list:
         """Recursively find all (sheet ...) elements in the sexp tree."""
         if not isinstance(sexp_data, list):
             return []
@@ -1041,7 +1041,7 @@ def build_schema_hierarchy(sch_file_path: pathlib.Path,
 
         return ret
 
-    def extract_sheet_properties(sheet_element):
+    def extract_sheet_properties(sheet_element) -> tuple[str | None, str | None]:
         """Extract Sheetname and Sheetfile properties from a sheet element."""
         sheetname = None
         sheetfile = None
@@ -1132,7 +1132,7 @@ def extract_directives_from_text(text: str) -> list[Directive]:
 
 def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
 
-    def find_text_elements(sexp_data):
+    def find_text_elements(sexp_data) -> list:
         """Recursively find all (text ...) elements in the sexp tree."""
         if not isinstance(sexp_data, list):
             return []
@@ -1147,7 +1147,7 @@ def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
 
         return ret
 
-    def extract_content_from_text_element(text_element):
+    def extract_content_from_text_element(text_element) -> str:
         """Extract text content from a text element."""
         assert isinstance(text_element, list)
         assert text_element[0] == sexpdata.Symbol("text")

@@ -5,7 +5,7 @@ import shapely.geometry
 import padne._cgal as cgal
 
 from dataclasses import dataclass, field
-from typing import Optional, Iterable, Hashable
+from typing import Optional, Iterable, Iterator, Hashable
 
 # The purpose of this module is to generate triangular meshes from Shapely
 # (multi)polygons
@@ -37,7 +37,7 @@ class Vector:
         # Should there be a special 2-vector type?
         return self.dx * other.dy - self.dy * other.dx
 
-    def __abs__(self):
+    def __abs__(self) -> float:
         return np.sqrt(self.dx ** 2 + self.dy ** 2)
 
 
@@ -69,7 +69,7 @@ class Vertex:
     p: Point
     out: Optional["HalfEdge"] = None
 
-    def orbit(self) -> Iterable["HalfEdge"]:
+    def orbit(self) -> Iterator["HalfEdge"]:
         edge = self.out
         while True:
             yield edge
@@ -106,7 +106,7 @@ class HalfEdge:
         e1.next = e2
         e2.prev = e1
 
-    def walk(self):
+    def walk(self) -> Iterator["HalfEdge"]:
         edge = self
         while True:
             yield edge
@@ -114,7 +114,7 @@ class HalfEdge:
             if edge == self:
                 break
 
-    def cotan(self):
+    def cotan(self) -> float:
         """
         Compute the cotangent weight for this half-edge.
         """
@@ -204,14 +204,14 @@ class IndexMap[T: Hashable]:
     def __len__(self) -> int:
         return len(self._idx_to_obj)
 
-    def __iter__(self) -> Iterable[T]:
+    def __iter__(self) -> Iterator[T]:
         return iter(self._idx_to_obj)
 
     def __contains__(self, obj: T) -> bool:
         """Check if an object is in the index map."""
         return obj in self._obj_to_idx
 
-    def items(self) -> Iterable[tuple[int, T]]:
+    def items(self) -> Iterator[tuple[int, T]]:
         for idx, obj in enumerate(self._idx_to_obj):
             yield idx, obj
 

@@ -17,7 +17,7 @@ import padne.paraview
 from padne import __version__
 
 
-def setup_logging(debug_mode: bool):
+def setup_logging(debug_mode: bool) -> None:
     """Configures basic logging for the application."""
     level = logging.DEBUG if debug_mode else logging.INFO
     logging.basicConfig(
@@ -46,7 +46,7 @@ def collect_warnings():
         yield warns
 
 
-def add_mesher_args(parser):
+def add_mesher_args(parser: argparse.ArgumentParser) -> None:
     """Add mesher configuration arguments to a parser."""
     default_config = padne.mesh.Mesher.Config()
     parser.add_argument(
@@ -87,7 +87,7 @@ def add_mesher_args(parser):
     )
 
 
-def mesher_config_from_args(args):
+def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Config:
     """Construct a Mesher.Config from parsed arguments."""
     return padne.mesh.Mesher.Config(
         minimum_angle=args.mesh_angle,
@@ -99,7 +99,7 @@ def mesher_config_from_args(args):
     )
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "-d", "--debug",
@@ -192,7 +192,7 @@ def handle_errors(func):
 
 
 @handle_errors
-def do_gui(args):
+def do_gui(args: argparse.Namespace) -> int:
     log = logging.getLogger(__name__)
     log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
     prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
@@ -215,7 +215,7 @@ def do_gui(args):
 
 
 @handle_errors
-def do_solve(args):
+def do_solve(args: argparse.Namespace) -> None:
     log = logging.getLogger(__name__)
     log.info(f"Loading KiCad project: {args.kicad_pro_file}")
     prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
@@ -227,7 +227,7 @@ def do_solve(args):
     log.info(f"Solution saved to {args.output_file}")
 
 
-def do_show(args):
+def do_show(args: argparse.Namespace) -> int:
     log = logging.getLogger(__name__)
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
@@ -237,7 +237,7 @@ def do_show(args):
 
 
 @handle_errors
-def do_paraview(args):
+def do_paraview(args: argparse.Namespace) -> None:
     log = logging.getLogger(__name__)
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
@@ -246,7 +246,7 @@ def do_paraview(args):
     log.info(f"ParaView export completed: {args.output_dir}")
 
 
-def main():
+def main() -> None:
     args = parse_args()
     setup_logging(args.debug)
 
