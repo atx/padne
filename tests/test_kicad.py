@@ -1035,7 +1035,7 @@ class TestLoadKicadProject:
             f"In2.Cu layer shape should be MultiPolygon, got {type(in2_cu_layer.shape)}"
 
         # Verify we have a single polygon
-        assert len(in2_cu_layer.shape.geoms) == 1
+        assert len(in2_cu_layer.geoms) == 1
 
         # Next, check its area is at least 20 mm²
         assert in2_cu_layer.shape.area >= 20.0, "In2.Cu layer area should be at least 20 mm²"

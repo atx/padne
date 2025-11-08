@@ -1613,7 +1613,7 @@ class TestMesher:
 
         # Test each layer's geometry
         for layer in problem.layers:
-            for polygon in layer.shape.geoms:
+            for polygon in layer.geoms:
                 mesh = mesher.poly_to_mesh(polygon)
                 assert_mesh_maximum_edge_length(mesh, max_size)
 
@@ -2708,7 +2708,7 @@ class TestCGALPolygon:
         problem = kicad.load_kicad_project(project.pro_path)
 
         for layer_idx, layer in enumerate(problem.layers):
-            for poly_idx, polygon in enumerate(layer.shape.geoms):
+            for poly_idx, polygon in enumerate(layer.geoms):
                 cgal_poly = CGALPolygon(polygon)
                 bounds = polygon.bounds
 

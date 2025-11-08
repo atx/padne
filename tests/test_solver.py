@@ -1859,8 +1859,8 @@ class TestSolverEndToEnd:
                 break
 
         assert b_cu_layer is not None, "B.Cu layer not found in project"
-        assert len(list(b_cu_layer.shape.geoms)) == 2, \
-            f"Expected 2 polygons in B.Cu geometry, got {len(list(b_cu_layer.shape.geoms))}"
+        assert len(b_cu_layer.geoms) == 2, \
+            f"Expected 2 polygons in B.Cu geometry, got {len(b_cu_layer.geoms)}"
 
         # Solve the problem
         solution = solver.solve(prob)
