@@ -346,7 +346,7 @@ class ConnectivitySuite:
     def setup(self, *_):
         """Load test projects for connectivity analysis."""
         test_projects = _kicad_test_projects()
-        project_names = ['simple_geometry', 'disconnected_components', 'two_big_planes', 'via_tht_4layer']
+        project_names = ['simple_geometry', 'disconnected_components', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
 
         # Load problem definitions
         self.problems = {}
@@ -361,7 +361,7 @@ class ConnectivitySuite:
         strtrees = solver.construct_strtrees_from_layers(problem.layers)
         solver.ConnectivityGraph.create_from_problem(problem, strtrees)
 
-    time_connectivity_graph_construction.params = ['simple_geometry', 'disconnected_components', 'via_tht_4layer']
+    time_connectivity_graph_construction.params = ['simple_geometry', 'disconnected_components', 'via_tht_4layer', 'many_meshes']
     time_connectivity_graph_construction.param_names = ['project']
 
 
