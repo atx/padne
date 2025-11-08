@@ -365,6 +365,63 @@ class ConnectivitySuite:
     time_connectivity_graph_construction.param_names = ['project']
 
 
+class MeshGenerationSuite:
+    """Benchmarks for mesh generation from KiCad projects."""
+
+    def setup_cache(self):
+        """Cache loaded projects and pre-computed data for mesh generation benchmarks."""
+        test_projects = _kicad_test_projects()
+        project_names = ['many_meshes', 'via_tht_4layer', 'simple_geometry']
+
+        cache = {
+            'problems': {},
+            'strtrees': {},
+            'connected_layer_mesh_pairs': {}
+        }
+
+        for project_name in project_names:
+            project = test_projects[project_name]
+            problem = kicad.load_kicad_project(project.pro_path)
+            cache['problems'][project_name] = problem
+
+            # Pre-compute STRtrees
+            strtrees = solver.construct_strtrees_from_layers(problem.layers)
+            cache['strtrees'][project_name] = strtrees
+
+            # Pre-compute connectivity graph and connected pairs
+            connectivity_graph = solver.ConnectivityGraph.create_from_problem(problem, strtrees)
+            connected_pairs = solver.find_connected_layer_geom_indices(connectivity_graph)
+            cache['connected_layer_mesh_pairs'][project_name] = connected_pairs
+
+        return cache
+
+    def time_generate_meshes_for_problem(self, cache, project_name):
+        """Time mesh generation for different KiCad projects."""
+        problem = cache['problems'][project_name]
+        strtrees = cache['strtrees'][project_name]
+        connected_pairs = cache['connected_layer_mesh_pairs'][project_name]
+
+        # Create fresh Mesher instance with default config for each run
+        mesher = Mesher()
+        solver.generate_meshes_for_problem(problem, mesher, connected_pairs, strtrees)
+
+    time_generate_meshes_for_problem.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry']
+    time_generate_meshes_for_problem.param_names = ['project']
+
+    def track_mesh_count(self, cache, project_name):
+        """Track the number of meshes generated for different projects."""
+        problem = cache['problems'][project_name]
+        strtrees = cache['strtrees'][project_name]
+        connected_pairs = cache['connected_layer_mesh_pairs'][project_name]
+
+        mesher = Mesher()
+        meshes, _ = solver.generate_meshes_for_problem(problem, mesher, connected_pairs, strtrees)
+        return len(meshes)
+
+    track_mesh_count.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry']
+    track_mesh_count.param_names = ['project']
+
+
 class DistanceMapSuite:
     """Benchmarks for distance map computation and queries."""
 
