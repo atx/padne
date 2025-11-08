@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 class Layer:
     """
     Represents a single copper layer of the input circuit board.
+
+    The individual polygons are cached in the .geoms field to avoid expensive
+    Shapely copying when accessing them repeatedly using shape.geoms[...].
     """
     shape: shapely.geometry.MultiPolygon
     name: str
@@ -20,6 +23,14 @@ class Layer:
     # Note that this is computed by
     # conductivity [S/mm] * thickness [mm]
     conductance: float
+
+    # Cached tuple of individual polygons, extracted from shape
+    geoms: tuple[shapely.geometry.Polygon, ...] = field(init=False, repr=False)
+
+    def __post_init__(self):
+        # Extract individual polygons from MultiPolygon and cache them
+        # This avoids expensive Shapely copying on repeated .geoms access
+        object.__setattr__(self, 'geoms', tuple(self.shape.geoms))
 
 
 @dataclass(frozen=True, eq=False)

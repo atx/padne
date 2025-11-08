@@ -57,10 +57,7 @@ def construct_strtrees_from_layers(layers: list[problem.Layer]
     """
     strtrees = []
     for layer in layers:
-        # We need to break up the layer Multipolygons into the individual components
-        # for the STRTree construction.
-        geoms = [geom for geom in layer.shape.geoms]
-        strtree = shapely.strtree.STRtree(geoms)
+        strtree = shapely.strtree.STRtree(layer.geoms)
         strtrees.append(strtree)
     return strtrees
 
@@ -72,7 +69,7 @@ class ConnectivityGraph:
     @dataclass(eq=False)
     class Node:
         layer_i: int  # Index of the layer in the Problem
-        geom_i: int   # Index of this particular polygon in the layer.shape.geoms list
+        geom_i: int   # Index of this particular polygon in the layer.geoms tuple
         is_root: bool = False
         neighbors: set["ConnectivityGraph.Node"] = field(default_factory=set)
 
@@ -88,7 +85,7 @@ class ConnectivityGraph:
         for layer_i, layer in enumerate(problem.layers):
             nodes_by_layers.append(
                 [cls.Node(layer_i=layer_i, geom_i=geom_i)
-                 for geom_i, geom in enumerate(layer.shape.geoms)]
+                 for geom_i, geom in enumerate(layer.geoms)]
             )
 
         # And finally, we walk through each of the networks, figure out
@@ -106,7 +103,7 @@ class ConnectivityGraph:
 
                 for geom_i in candidates:
                     # Check if this connection is already in the index
-                    if not conn.layer.shape.geoms[geom_i].intersects(conn.point):
+                    if not conn.layer.geoms[geom_i].intersects(conn.point):
                         continue
                     intersecting_node = nodes_by_layers[layer_i][geom_i]
                     nodes_in_this_network.append(intersecting_node)
@@ -264,13 +261,13 @@ def generate_meshes_for_problem(prob: problem.Problem,
                     # This geometry is not even connected to any driven
                     # network, so we can just skip it.
                     continue
-                if not layer.shape.geoms[geom_i].contains(seed_point):
+                if not layer.geoms[geom_i].contains(seed_point):
                     continue
 
                 # This seed point is inside the geometry, so we stick it in
                 geom_to_seed_points[geom_i].append(seed_point)
 
-        for geom_i, geom in enumerate(layer.shape.geoms):
+        for geom_i, geom in enumerate(layer.geoms):
             if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                 # This layer is not connected to any lumped elements, skip it
                 continue
@@ -289,7 +286,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
             seed_points_in_geom = geom_to_seed_points[geom_i]
 
             m = mesher.poly_to_mesh(
-                layer.shape.geoms[geom_i],
+                layer.geoms[geom_i],
                 seed_points_in_geom
             )
             meshes.append(m)
@@ -316,12 +313,12 @@ def generate_disconnected_meshes(prob: problem.Problem,
     disconnected_meshes_by_layer: list[list[mesh.Mesh]] = [[] for _ in prob.layers]
 
     for layer_i, layer in enumerate(prob.layers):
-        for geom_i, geom in enumerate(layer.shape.geoms):
+        for geom_i, geom in enumerate(layer.geoms):
             if (layer_i, geom_i) in connected_layer_mesh_pairs:
                 continue
             # This layer is not connected to any lumped elements
             # Triangulate it for display as disconnected copper
-            m = relaxed_mesher.poly_to_mesh(layer.shape.geoms[geom_i])
+            m = relaxed_mesher.poly_to_mesh(layer.geoms[geom_i])
             disconnected_meshes_by_layer[layer_i].append(m)
 
     return disconnected_meshes_by_layer
@@ -615,7 +612,7 @@ def network_has_a_dead_terminal(network: problem.Network,
                 # has a dead terminal or not, do not even bother checking
                 continue
 
-            if not conn.layer.shape.geoms[geom_i].intersects(conn.point):
+            if not conn.layer.geoms[geom_i].intersects(conn.point):
                 continue
 
             # Okay, at this point:
