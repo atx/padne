@@ -147,7 +147,7 @@ class KicadSuite:
         kicad.load_kicad_project(project.pro_path)
 
     # Define parameters for the benchmark
-    time_kicad_project_loading.params = ['two_big_planes', 'via_tht_4layer']
+    time_kicad_project_loading.params = ['two_big_planes', 'via_tht_4layer', 'many_meshes_many_vias']
     time_kicad_project_loading.param_names = ['project']
 
 
@@ -158,7 +158,7 @@ class SolverSuite:
         """Cache loaded projects and pre-computed solutions for benchmarks."""
         test_projects = _kicad_test_projects()
         # Expanded project list to include simple_geometry
-        project_names = ['simple_geometry', 'two_big_planes', 'via_tht_4layer']
+        project_names = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
 
         cache = {'problems': {}, 'solutions': {}}
 
@@ -176,7 +176,7 @@ class SolverSuite:
         problem = cache['problems'][project_name]
         solver.solve(problem)
 
-    time_solver_solve.params = ['simple_geometry', 'two_big_planes', 'via_tht_4layer']
+    time_solver_solve.params = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
     time_solver_solve.param_names = ['project']
 
     def peakmem_solver_solve(self, cache, project_name):
@@ -191,7 +191,7 @@ class SolverSuite:
         """Track memory usage of Problem objects."""
         return cache['problems'][project_name]
 
-    mem_problem_definition.params = ['simple_geometry', 'two_big_planes', 'via_tht_4layer']
+    mem_problem_definition.params = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
     mem_problem_definition.param_names = ['project']
 
     def mem_layer_solutions(self, cache, project_name):
@@ -199,7 +199,7 @@ class SolverSuite:
         solution = cache['solutions'][project_name]
         return solution.layer_solutions
 
-    mem_layer_solutions.params = ['simple_geometry', 'two_big_planes', 'via_tht_4layer']
+    mem_layer_solutions.params = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
     mem_layer_solutions.param_names = ['project']
 
 
@@ -346,7 +346,7 @@ class ConnectivitySuite:
     def setup(self, *_):
         """Load test projects for connectivity analysis."""
         test_projects = _kicad_test_projects()
-        project_names = ['simple_geometry', 'disconnected_components', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
+        project_names = ['simple_geometry', 'disconnected_components', 'two_big_planes', 'via_tht_4layer', 'many_meshes', 'many_meshes_many_vias']
 
         # Load problem definitions
         self.problems = {}
@@ -361,7 +361,7 @@ class ConnectivitySuite:
         strtrees = solver.construct_strtrees_from_layers(problem.layers)
         solver.ConnectivityGraph.create_from_problem(problem, strtrees)
 
-    time_connectivity_graph_construction.params = ['simple_geometry', 'disconnected_components', 'via_tht_4layer', 'many_meshes']
+    time_connectivity_graph_construction.params = ['simple_geometry', 'disconnected_components', 'via_tht_4layer', 'many_meshes', 'many_meshes_many_vias']
     time_connectivity_graph_construction.param_names = ['project']
 
 
@@ -371,7 +371,7 @@ class MeshGenerationSuite:
     def setup_cache(self):
         """Cache loaded projects and pre-computed data for mesh generation benchmarks."""
         test_projects = _kicad_test_projects()
-        project_names = ['many_meshes', 'via_tht_4layer', 'simple_geometry']
+        project_names = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
 
         cache = {
             'problems': {},
@@ -405,7 +405,7 @@ class MeshGenerationSuite:
         mesher = Mesher()
         solver.generate_meshes_for_problem(problem, mesher, connected_pairs, strtrees)
 
-    time_generate_meshes_for_problem.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry']
+    time_generate_meshes_for_problem.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
     time_generate_meshes_for_problem.param_names = ['project']
 
     def track_mesh_count(self, cache, project_name):
@@ -418,7 +418,7 @@ class MeshGenerationSuite:
         meshes, _ = solver.generate_meshes_for_problem(problem, mesher, connected_pairs, strtrees)
         return len(meshes)
 
-    track_mesh_count.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry']
+    track_mesh_count.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
     track_mesh_count.param_names = ['project']
 
 
