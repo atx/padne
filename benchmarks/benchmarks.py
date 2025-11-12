@@ -343,26 +343,39 @@ class LaplaceOperatorSuite:
 class ConnectivitySuite:
     """Benchmarks for electrical connectivity analysis."""
 
-    def setup(self, *_):
-        """Load test projects for connectivity analysis."""
+    def setup_cache(self):
+        """Cache loaded projects and connectivity graphs for benchmarks."""
         test_projects = _kicad_test_projects()
         project_names = ['simple_geometry', 'disconnected_components', 'two_big_planes', 'via_tht_4layer', 'many_meshes', 'many_meshes_many_vias']
 
-        # Load problem definitions
-        self.problems = {}
+        cache = {'problems': {}, 'connectivity_graphs': {}}
+
         for project_name in project_names:
             project = test_projects[project_name]
-            self.problems[project_name] = kicad.load_kicad_project(project.pro_path)
+            cache['problems'][project_name] = kicad.load_kicad_project(project.pro_path)
+            strtrees = solver.construct_strtrees_from_layers(cache['problems'][project_name].layers)
+            cache['connectivity_graphs'][project_name] = \
+                solver.ConnectivityGraph.create_from_problem(cache['problems'][project_name], strtrees)
 
-    def time_connectivity_graph_construction(self, project_name):
+        return cache
+
+    def time_connectivity_graph_construction(self, cache, project_name):
         """Time construction of connectivity graph from layer geometry."""
-        problem = self.problems[project_name]
+        problem = cache['problems'][project_name]
         # Construct STRtrees and connectivity graph
         strtrees = solver.construct_strtrees_from_layers(problem.layers)
         solver.ConnectivityGraph.create_from_problem(problem, strtrees)
 
     time_connectivity_graph_construction.params = ['simple_geometry', 'disconnected_components', 'via_tht_4layer', 'many_meshes', 'many_meshes_many_vias']
     time_connectivity_graph_construction.param_names = ['project']
+
+    def time_connectivity_graph_connected_nodes(self, cache, project_name):
+        """Time the computation of connected nodes in the connectivity graph."""
+        connectivity_graph = cache['connectivity_graphs'][project_name]
+        connectivity_graph.compute_connected_nodes()
+
+    time_connectivity_graph_connected_nodes.params = ['simple_geometry', 'disconnected_components', 'via_tht_4layer', 'many_meshes', 'many_meshes_many_vias']
+    time_connectivity_graph_connected_nodes.param_names = ['project']
 
 
 class MeshGenerationSuite:
