@@ -22,6 +22,7 @@
     // Need to initialize git submodules before building since CGAL is a submodule
     "build_command": [
         "python -m pip install 'git+https://github.com/Argmaster/pygerber'",
+        "python {conf_dir}/benchmarks/copy_test_data.py {conf_dir} {build_dir}",
         "python -m pip wheel --no-deps -w {build_cache_dir} {build_dir}"
     ],
 
