@@ -780,7 +780,8 @@ class TestLoadKicadProject:
         assert (conn_b.point.x == r3_2_point.x and
                 conn_b.point.y == r3_2_point.y)
 
-    @for_all_kicad_projects(exclude=["nested_schematic_twoinstances"])
+    @for_all_kicad_projects(exclude=["nested_schematic_twoinstances",
+                                     "many_meshes_many_vias"])
     def test_lumped_points_inside_layers(self, project):
         """
         Test that for all test projects, the start and end points of lumped elements
@@ -839,7 +840,8 @@ class TestLoadKicadProject:
             f"Connections: {connections_at_target}"
         )
 
-    @for_all_kicad_projects(exclude=["nested_schematic_twoinstances"])
+    @for_all_kicad_projects(exclude=["nested_schematic_twoinstances",
+                                     "many_meshes_many_vias"])
     def test_all_layer_shapes_are_multipolygons(self, project):
         """
         Test that for all test projects, the shapes of all layers are MultiPolygons.

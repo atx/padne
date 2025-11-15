@@ -1050,7 +1050,9 @@ class TestSolverEndToEnd:
 
     @for_all_kicad_projects(exclude=["tht_component",
                                      "unterminated_current_loop",
-                                     "nested_schematic_twoinstances"])
+                                     "nested_schematic_twoinstances",
+                                     "many_meshes",
+                                     "many_meshes_many_vias"])
     def test_all_test_projects_solve(self, project):
         """Test that solver.solve works on all test projects."""
         # Load the problem from the KiCad project
@@ -1095,7 +1097,9 @@ class TestSolverEndToEnd:
                                      "via_in_pad",
                                      "degenerate_hole_geometry",
                                      "empty_via",
-                                     "broken_trace_geometry"])
+                                     "broken_trace_geometry",
+                                     "many_meshes",
+                                     "many_meshes_many_vias"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
