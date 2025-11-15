@@ -46,5 +46,18 @@ class SystemVirtualenv(virtualenv.Virtualenv):
             ],
             env=env,
         )
+
+        # Create a .pth file to disable editable install import hooks
+        # Using .pth instead of sitecustomize.py because system sitecustomize takes precedence
+        # .pth files run early and can execute Python code via "import" statements
+        log.info(f"Creating .pth file to disable editable install hooks")
+        import site
+        site_packages_dir = os.path.join(self._path, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages")
+        pth_path = os.path.join(site_packages_dir, "zzz_disable_editable_hooks.pth")
+        with open(pth_path, "w") as f:
+            # .pth files can execute code on lines starting with "import"
+            # Using zzz_ prefix to ensure it runs after other .pth files
+            f.write("import sys; sys.meta_path[:] = [f for f in sys.meta_path if 'ScikitBuildRedirectingFinder' not in f.__class__.__name__]\n")
+
         log.info(f"Installing requirements for {self.name}")
         self._install_requirements()
