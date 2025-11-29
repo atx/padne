@@ -209,9 +209,7 @@ def do_gui(args: argparse.Namespace) -> int:
         if issubclass(msg.category, padne.solver.SolverWarning)
     ]
 
-    # TODO: Store the project name in the problem/solution object
-    project_name = args.kicad_pro_file.name
-    return padne.ui.main(solution, project_name, captured_warnings)
+    return padne.ui.main(solution, captured_warnings)
 
 
 @handle_errors
@@ -232,8 +230,7 @@ def do_show(args: argparse.Namespace) -> int:
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
         solution = pickle.load(f)
-    project_name = args.solution_file.name
-    return padne.ui.main(solution, project_name)
+    return padne.ui.main(solution)
 
 
 @handle_errors

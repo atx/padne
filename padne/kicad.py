@@ -1713,4 +1713,4 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     layers = [layer_dict[name] for name in layer_names_in_order]
 
     # Return the Problem object
-    return problem.Problem(layers=layers, networks=networks)
+    return problem.Problem(layers=layers, networks=networks, project_name=project.name)

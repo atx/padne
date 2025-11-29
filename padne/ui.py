@@ -1852,10 +1852,10 @@ class MainWindow(QMainWindow):
 
     projectLoaded = Signal(solver.Solution)
 
-    def __init__(self, solution: solver.Solution, project_name: Optional[str], warnings_list: Optional[list[warnings.WarningMessage]] = None):
+    def __init__(self, solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None):
         super().__init__()
 
-        self.project_file_name = project_name if project_name else "Loaded Solution"
+        self.project_file_name = solution.problem.project_name or "unknown"
         self.warnings_list = warnings_list if warnings_list else []
         self.warnings_shown = False
 
@@ -2005,7 +2005,7 @@ def configure_opengl() -> None:
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main(solution: solver.Solution, project_name: Optional[str], warnings_list: Optional[list[warnings.WarningMessage]] = None) -> int:
+def main(solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None) -> int:
     """Main entry point for the UI application."""
     # Configure OpenGL
     configure_opengl()
@@ -2014,7 +2014,7 @@ def main(solution: solver.Solution, project_name: Optional[str], warnings_list: 
         warnings_list = []
 
     app = QApplication(sys.argv)
-    window = MainWindow(solution, project_name, warnings_list)
+    window = MainWindow(solution, warnings_list)
 
     window.show()
     return app.exec()

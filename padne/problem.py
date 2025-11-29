@@ -181,3 +181,4 @@ class VoltageRegulator(BaseLumped):
 class Problem:
     layers: list[Layer]
     networks: list[Network]
+    project_name: str | None = None
