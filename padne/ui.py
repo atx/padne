@@ -7,8 +7,9 @@ import sys
 import warnings
 import OpenGL.GL as gl
 import time
+import concurrent.futures
 
-from typing import Optional
+from typing import Optional, ClassVar
 from dataclasses import dataclass, field
 
 import abc
@@ -140,6 +141,51 @@ void main() {
     out_color = vec4(frag_color, 1.0);
 }
 """
+
+
+class DeferedDict[K, V]:
+    """
+    A dictionary-like object that can hold futures for values,
+    unwrapping them when accessed.
+    """
+
+    def __init__(self):
+        self._futures: dict[K, concurrent.futures.Future[V]] = {}
+        self._values: dict[K, V] = {}
+
+    def is_ready(self, key: K) -> bool:
+        if key in self._values:
+            return True
+
+        if key in self._futures:
+            return self._futures[key].done()
+
+        return False
+
+    def set_future(self, key: K, future: concurrent.futures.Future[V]):
+        # We do not support overwriting existing keys for now
+        if key in self._values or key in self._futures:
+            raise KeyError(f"Key {key} already exists in DeferedDict")
+        self._futures[key] = future
+
+    def __getitem__(self, key: K) -> V:
+        if key in self._values:
+            return self._values[key]
+
+        if key in self._futures:
+            value = self._futures[key].result()
+            self._values[key] = value
+            del self._futures[key]
+            return value
+
+        raise KeyError(key)
+
+    def __contains__(self, key: K) -> bool:
+        return key in self._values or key in self._futures
+
+    def clear(self):
+        self._futures.clear()
+        self._values.clear()
 
 
 @dataclass
@@ -609,6 +655,28 @@ class RenderedMesh:
     vao_boundary: int
     boundary_count: int
 
+    @dataclass(frozen=True)
+    class PreparedData:
+        triangle_vertices: np.ndarray[np.float32]
+        triangle_colors: np.ndarray[np.float32]
+        edge_vertices: np.ndarray[np.float32]
+        edge_colors: np.ndarray[np.float32]
+        boundary_vertices: np.ndarray[np.float32]
+        boundary_colors: np.ndarray[np.float32]
+
+    @classmethod
+    def from_prepared_data(cls, data: 'RenderedMesh.PreparedData') -> 'RenderedMesh':
+        # TODO: Fold this into _from_common, it should never get called anyway
+        # after I am done
+        return cls._from_common(
+            data.triangle_vertices,
+            data.triangle_colors,
+            data.edge_vertices,
+            data.edge_colors,
+            data.boundary_vertices,
+            data.boundary_colors
+        )
+
     @classmethod
     def _from_common(cls,
                      triangle_vertices: np.ndarray[np.float32],
@@ -688,7 +756,7 @@ class RenderedMesh:
         return edge_vertices, edge_colors, boundary_vertices, boundary_colors
 
     @classmethod
-    def from_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm):
+    def prepare_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm) -> 'RenderedMesh.PreparedData':
         triangle_vertices = []
         triangle_colors = []
 
@@ -705,7 +773,7 @@ class RenderedMesh:
         edge_vertices, edge_colors, boundary_vertices, boundary_colors = \
             cls._serialize_edges_from_mesh(msh)
 
-        return cls._from_common(
+        return cls.PreparedData(
             np.array(triangle_vertices, dtype=np.float32),
             np.array(triangle_colors, dtype=np.float32),
             np.array(edge_vertices, dtype=np.float32),
@@ -715,7 +783,7 @@ class RenderedMesh:
         )
 
     @classmethod
-    def from_two_form(cls, msh: mesh.Mesh, values: mesh.TwoForm):
+    def prepare_two_form(cls, msh: mesh.Mesh, values: mesh.TwoForm) -> 'RenderedMesh.PreparedData':
         triangle_vertices = []
         triangle_colors = []
 
@@ -732,7 +800,7 @@ class RenderedMesh:
         edge_vertices, edge_colors, boundary_vertices, boundary_colors = \
             cls._serialize_edges_from_mesh(msh)
 
-        return cls._from_common(
+        return cls.PreparedData(
             np.array(triangle_vertices, dtype=np.float32),
             np.array(triangle_colors, dtype=np.float32),
             np.array(edge_vertices, dtype=np.float32),
@@ -754,7 +822,7 @@ class RenderedMesh:
         gl.glDrawArrays(gl.GL_LINES, 0, self.boundary_count)
 
     @classmethod
-    def from_mesh(cls, msh: mesh.Mesh) -> 'RenderedMesh':
+    def prepare_mesh(cls, msh: mesh.Mesh) -> "RenderedMesh.PreparedData":
         """Create a RenderedMesh from a mesh with zero values.
         Used for disconnected copper regions that will be rendered in gray."""
         # Create a ZeroForm with all values set to zero
@@ -763,7 +831,7 @@ class RenderedMesh:
             zero_values[vertex] = 0.0
 
         # Use the existing from_zero_form method
-        return cls.from_zero_form(msh, zero_values)
+        return cls.prepare_zero_form(msh, zero_values)
 
 
 @dataclass
@@ -831,8 +899,17 @@ class MeshViewer(QOpenGLWidget):
         max_value: float = 1.0
         solution: Optional[solver.Solution] = None
         spatial_indices: dict[str, BaseSpatialIndex] = field(default_factory=dict)
+
         rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
         disconnected_rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
+
+        _prepared_rendered_meshes: DeferedDict[str, list[RenderedMesh.PreparedData]] = \
+            field(default_factory=DeferedDict)
+        _prepared_disconnected_rendered_meshes: DeferedDict[str, list[RenderedMesh.PreparedData]] = \
+            field(default_factory=DeferedDict)
+
+        _executor: ClassVar[concurrent.futures.ThreadPoolExecutor] = \
+            concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         def _compute_min_max(self) -> tuple[float, float]:
             """Compute min and max values across all spatial indices."""
@@ -864,12 +941,36 @@ class MeshViewer(QOpenGLWidget):
             """Initialize this mode with solution data (build indices + meshes)."""
             self.solution = solution
             self.spatial_indices.clear()
-            self._build_spatial_indices()
+
             # We have to delay this until the OpenGL context is properly initialized.
             self.rendered_meshes.clear()
             self.disconnected_rendered_meshes.clear()
+            self._prepared_rendered_meshes.clear()
+            self._prepared_disconnected_rendered_meshes.clear()
 
-        def _create_rendered_meshes_for_layer(self, layer_name) -> list[RenderedMesh]:
+            # Next, we do the OpenGL-independent preparation in background
+            # threads as to not block the UI thread
+            for layer in self.solution.problem.layers:
+                self._prepared_rendered_meshes.set_future(
+                    layer.name,
+                    self._executor.submit(
+                        self._prepare_rendered_meshes_for_layer,
+                        layer.name
+                    )
+                )
+                self._prepared_disconnected_rendered_meshes.set_future(
+                    layer.name,
+                    self._executor.submit(
+                        self._prepare_disconnected_rendered_meshes_for_layer,
+                        layer.name
+                    )
+                )
+
+            # Do this _after_ starting the background tasks
+            # TODO: Eventually, we might want to do this in the background as well
+            self._build_spatial_indices()
+
+        def _prepare_rendered_meshes_for_layer(self, layer_name) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for a specific layer."""
             raise NotImplementedError("This method should be implemented in subclasses")
 
@@ -881,15 +982,35 @@ class MeshViewer(QOpenGLWidget):
 
         def get_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
             """Get pre-built rendered meshes for a layer."""
-            if layer_name not in self.rendered_meshes:
-                # If not already built, create them
-                # Ideally, we would do this in .set_solution, but that
-                # is getting called before OpenGL context is ready
-                self.rendered_meshes[layer_name] = \
-                    self._create_rendered_meshes_for_layer(layer_name)
+            if layer_name in self.rendered_meshes:
+                # This means that everything is ready for rendering
+                return self.rendered_meshes[layer_name]
+
+            if not self._prepared_rendered_meshes.is_ready(layer_name):
+                # This means that preparation is still ongoing.
+                # Theoretically we could block here, but I think it's better to
+                # not render anything as to not lag the UI.
+                return []
+
+            # Okay, now we have prepared data, but it has not yet been
+            # inserted into the OpenGL context. Which is something we have to
+            # do in our main thread, meaning here.
+
+            # Also note: This function is not only called from the main thread,
+            # it is also called from paintGL. This means that it is also
+            # properly holding the OpenGL context.
+            # If this changes, it is necessary to figure something out
+            # with mesh_viewer.makeCurrent() and doneCurrent().
+
+            prepared_meshes = self._prepared_rendered_meshes[layer_name]
+            self.rendered_meshes[layer_name] = [
+                RenderedMesh.from_prepared_data(data)
+                for data in prepared_meshes
+            ]
+
             return self.rendered_meshes[layer_name]
 
-        def _create_disconnected_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+        def _prepare_disconnected_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for disconnected copper on a specific layer."""
             rendered_meshes = []
             if not self.solution:
@@ -900,15 +1021,31 @@ class MeshViewer(QOpenGLWidget):
                 if layer.name != layer_name:
                     continue
                 for msh in layer_solution.disconnected_meshes:
-                    rendered_meshes.append(RenderedMesh.from_mesh(msh))
+                    rendered_meshes.append(RenderedMesh.prepare_mesh(msh))
             return rendered_meshes
 
         def get_disconnected_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
             """Get pre-built disconnected rendered meshes for a layer."""
-            if layer_name not in self.disconnected_rendered_meshes:
-                # If not already built, create them
-                self.disconnected_rendered_meshes[layer_name] = \
-                    self._create_disconnected_rendered_meshes_for_layer(layer_name)
+            # TODO: Deduplicate this with get_rendered_meshes_for_layer
+            if layer_name in self.disconnected_rendered_meshes:
+                # This means that everything is ready for rendering
+                return self.disconnected_rendered_meshes[layer_name]
+
+            if not self._prepared_disconnected_rendered_meshes.is_ready(layer_name):
+                # This means that preparation is still ongoing.
+                # Theoretically we could block here, but I think it's better to
+                # not render anything as to not lag the UI.
+                return []
+
+            # Okay, now we have prepared data, but it has not yet been
+            # inserted into the OpenGL context. Which is something we have to
+            # do in our main thread, meaning here.
+
+            prepared_meshes = self._prepared_disconnected_rendered_meshes[layer_name]
+            self.disconnected_rendered_meshes[layer_name] = [
+                RenderedMesh.from_prepared_data(data)
+                for data in prepared_meshes
+            ]
             return self.disconnected_rendered_meshes[layer_name]
 
     @dataclass
@@ -924,16 +1061,17 @@ class MeshViewer(QOpenGLWidget):
                 spatial_index = VertexSpatialIndex.from_layer_data(layer, layer_solution)
                 self.spatial_indices[layer.name] = spatial_index
 
-        def _create_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+        def _prepare_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for a specific layer."""
-            rendered_meshes = []
+            prepared_meshes = []
             for layer, layer_solution in zip(self.solution.problem.layers,
                                              self.solution.layer_solutions):
                 if layer.name != layer_name:
                     continue
                 for msh, values in zip(layer_solution.meshes, layer_solution.potentials):
-                    rendered_meshes.append(RenderedMesh.from_zero_form(msh, values))
-            return rendered_meshes
+                    prepared_meshes.append(RenderedMesh.prepare_zero_form(msh, values))
+
+            return prepared_meshes
 
     @dataclass
     class PowerDensityRenderingMode(BaseRenderingMode):
@@ -954,16 +1092,16 @@ class MeshViewer(QOpenGLWidget):
                 spatial_index = FaceSpatialIndex.from_layer_data(layer, layer_solution)
                 self.spatial_indices[layer.name] = spatial_index
 
-        def _create_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh]:
+        def _prepare_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for a specific layer."""
-            rendered_meshes = []
+            prepared_meshes = []
             for layer, layer_solution in zip(self.solution.problem.layers,
                                              self.solution.layer_solutions):
                 if layer.name != layer_name:
                     continue
                 for msh, values in zip(layer_solution.meshes, layer_solution.power_densities):
-                    rendered_meshes.append(RenderedMesh.from_two_form(msh, values))
-            return rendered_meshes
+                    prepared_meshes.append(RenderedMesh.prepare_two_form(msh, values))
+            return prepared_meshes
 
     # Signal to notify when the value range changes
     valueRangeChanged = Signal(float, float)
