@@ -611,14 +611,14 @@ class RenderedMesh:
 
     @classmethod
     def _from_common(cls,
-                     triangle_vertices: list[float],
-                     triangle_colors: list[float],
-                     edge_vertices: list[float],
-                     edge_colors: list[float],
-                     boundary_vertices: list[float],
-                     boundary_colors: list[float]) -> 'RenderedMesh':
+                     triangle_vertices: np.ndarray[np.float32],
+                     triangle_colors: np.ndarray[np.float32],
+                     edge_vertices: np.ndarray[np.float32],
+                     edge_colors: np.ndarray[np.float32],
+                     boundary_vertices: np.ndarray[np.float32],
+                     boundary_colors: np.ndarray[np.float32]) -> 'RenderedMesh':
 
-        def create_vao(vertices: list[float], colors: list[float], color_components: int) -> int:
+        def create_vao(vertices: np.ndarray[np.float32], colors: np.ndarray[np.float32], color_components: int) -> int:
             """Create a VAO with vertex and color VBOs."""
             vao = gl.glGenVertexArrays(1)
             gl.glBindVertexArray(vao)
@@ -628,7 +628,7 @@ class RenderedMesh:
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_vertices)
             gl.glBufferData(
                 gl.GL_ARRAY_BUFFER,
-                np.array(vertices, dtype=np.float32),
+                vertices,
                 gl.GL_STATIC_DRAW
             )
             gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
@@ -639,7 +639,7 @@ class RenderedMesh:
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_colors)
             gl.glBufferData(
                 gl.GL_ARRAY_BUFFER,
-                np.array(colors, dtype=np.float32),
+                colors,
                 gl.GL_STATIC_DRAW
             )
             gl.glVertexAttribPointer(1, color_components, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
@@ -706,12 +706,12 @@ class RenderedMesh:
             cls._serialize_edges_from_mesh(msh)
 
         return cls._from_common(
-            triangle_vertices,
-            triangle_colors,
-            edge_vertices,
-            edge_colors,
-            boundary_vertices,
-            boundary_colors
+            np.array(triangle_vertices, dtype=np.float32),
+            np.array(triangle_colors, dtype=np.float32),
+            np.array(edge_vertices, dtype=np.float32),
+            np.array(edge_colors, dtype=np.float32),
+            np.array(boundary_vertices, dtype=np.float32),
+            np.array(boundary_colors, dtype=np.float32),
         )
 
     @classmethod
@@ -733,12 +733,12 @@ class RenderedMesh:
             cls._serialize_edges_from_mesh(msh)
 
         return cls._from_common(
-            triangle_vertices,
-            triangle_colors,
-            edge_vertices,
-            edge_colors,
-            boundary_vertices,
-            boundary_colors
+            np.array(triangle_vertices, dtype=np.float32),
+            np.array(triangle_colors, dtype=np.float32),
+            np.array(edge_vertices, dtype=np.float32),
+            np.array(edge_colors, dtype=np.float32),
+            np.array(boundary_vertices, dtype=np.float32),
+            np.array(boundary_colors, dtype=np.float32),
         )
 
     def render_triangles(self):
