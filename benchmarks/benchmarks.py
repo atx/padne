@@ -5,8 +5,9 @@ import sys
 import tempfile
 from pathlib import Path
 import shapely.geometry
-from padne.mesh import Mesher
-from padne import kicad, solver
+from padne.mesh import Mesher, ZeroForm, TwoForm
+from padne import kicad, solver, problem
+import padne.ui as ui
 import padne._cgal as cgal
 import pcbnew
 
@@ -484,3 +485,113 @@ class DistanceMapSuite:
 
     time_distance_map_queries.params = ['small_rect', 'large_rect', 'rect_with_hole']
     time_distance_map_queries.param_names = ['geometry']
+
+
+class SpatialIndexSuite:
+    """Benchmarks for VertexSpatialIndex and FaceSpatialIndex."""
+
+    def setup(self, *_):
+        """Create meshes and spatial indices for benchmarking."""
+        # Create geometries (same as MesherSuite)
+        self.small_rect = shapely.geometry.box(0, 0, 30, 30)
+        self.large_rect = shapely.geometry.box(0, 0, 100, 100)
+        outer = shapely.geometry.box(0, 0, 80, 80)
+        hole = shapely.geometry.Point(40, 40).buffer(25)
+        self.rect_with_hole = outer.difference(hole)
+
+        self.geometries = {
+            'small_rect': self.small_rect,
+            'large_rect': self.large_rect,
+            'rect_with_hole': self.rect_with_hole
+        }
+
+        # Use explicit config for reproducibility
+        config = Mesher.Config(
+            minimum_angle=20.0,
+            maximum_size=0.6,
+            variable_density_min_distance=0.5,
+            variable_density_max_distance=3.0,
+            variable_size_maximum_factor=3.0,
+            distance_map_quantization=1.0
+        )
+        mesher = Mesher(config)
+
+        # Build meshes, forms, layers, and layer_solutions
+        self.layers = {}
+        self.layer_solutions = {}
+        self.vertex_indices = {}
+        self.face_indices = {}
+        self.query_points = {
+            'small_rect': (15.0, 15.0),
+            'large_rect': (50.0, 50.0),
+            'rect_with_hole': (10.0, 10.0)  # Inside the shape, not in the hole
+        }
+
+        for name, geometry in self.geometries.items():
+            msh = mesher.poly_to_mesh(geometry)
+
+            # ZeroForm: f(x, y) = x + y
+            zero_form = ZeroForm(msh)
+            for v in msh.vertices:
+                zero_form[v] = v.p.x + v.p.y
+
+            # TwoForm: f(x, y) = x * y at centroid
+            two_form = TwoForm(msh)
+            for face in msh.faces:
+                c = face.centroid
+                two_form[face] = c.x * c.y
+
+            layer_solution = solver.LayerSolution(
+                meshes=[msh],
+                potentials=[zero_form],
+                power_densities=[two_form],
+                disconnected_meshes=[]
+            )
+
+            shape = shapely.geometry.MultiPolygon([geometry])
+            layer = problem.Layer(shape=shape, name=name, conductance=1.0)
+
+            self.layers[name] = layer
+            self.layer_solutions[name] = layer_solution
+
+            # Pre-build indices for query benchmarks
+            self.vertex_indices[name] = ui.VertexSpatialIndex.from_layer_data(layer, layer_solution)
+            self.face_indices[name] = ui.FaceSpatialIndex.from_layer_data(layer, layer_solution)
+
+    def time_vertex_index_construction(self, geometry_name):
+        """Time VertexSpatialIndex.from_layer_data()."""
+        layer = self.layers[geometry_name]
+        layer_solution = self.layer_solutions[geometry_name]
+        ui.VertexSpatialIndex.from_layer_data(layer, layer_solution)
+
+    time_vertex_index_construction.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_vertex_index_construction.param_names = ['geometry']
+
+    def time_face_index_construction(self, geometry_name):
+        """Time FaceSpatialIndex.from_layer_data()."""
+        layer = self.layers[geometry_name]
+        layer_solution = self.layer_solutions[geometry_name]
+        ui.FaceSpatialIndex.from_layer_data(layer, layer_solution)
+
+    time_face_index_construction.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_face_index_construction.param_names = ['geometry']
+
+    def time_vertex_index_queries(self, geometry_name):
+        """Time 1000 query_nearest() calls on VertexSpatialIndex."""
+        index = self.vertex_indices[geometry_name]
+        x, y = self.query_points[geometry_name]
+        for _ in range(1000):
+            index.query_nearest(x, y)
+
+    time_vertex_index_queries.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_vertex_index_queries.param_names = ['geometry']
+
+    def time_face_index_queries(self, geometry_name):
+        """Time 1000 query_nearest() calls on FaceSpatialIndex."""
+        index = self.face_indices[geometry_name]
+        x, y = self.query_points[geometry_name]
+        for _ in range(1000):
+            index.query_nearest(x, y)
+
+    time_face_index_queries.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_face_index_queries.param_names = ['geometry']
