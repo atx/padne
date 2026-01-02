@@ -418,6 +418,15 @@ class TestDirectiveParse:
         assert directive.name == "TEST"
         assert directive.params == {"key": "value2"}
 
+    def test_directive_with_simple_quotes(self):
+        """Test that simple quotes get eliminated. We do not yet support spaces, so that is undefined behavior for now."""
+        directive_str = '!padne LABEL text="HelloWorld" position=R1.1'
+
+        directive = kicad.Directive.parse(directive_str)
+
+        assert directive.name == "LABEL"
+        assert directive.params == {"text": "HelloWorld", "position": "R1.1"}
+
     # Error case tests
 
     def test_missing_padne_prefix(self):
