@@ -487,12 +487,12 @@ class DistanceMapSuite:
     time_distance_map_queries.param_names = ['geometry']
 
 
-class SpatialIndexSuite:
-    """Benchmarks for VertexSpatialIndex and FaceSpatialIndex."""
+class _MeshWithFormsSuiteBase:
+    """Base class providing mesh and form setup for benchmarks."""
 
     def setup(self, *_):
-        """Create meshes and spatial indices for benchmarking."""
-        # Create geometries (same as MesherSuite)
+        """Create geometries, meshes, and forms for benchmarking."""
+        # Create geometries
         self.small_rect = shapely.geometry.box(0, 0, 30, 30)
         self.large_rect = shapely.geometry.box(0, 0, 100, 100)
         outer = shapely.geometry.box(0, 0, 80, 80)
@@ -516,11 +516,10 @@ class SpatialIndexSuite:
         )
         mesher = Mesher(config)
 
-        # Build meshes, forms, layers, and layer_solutions
-        self.layers = {}
-        self.layer_solutions = {}
-        self.vertex_indices = {}
-        self.face_indices = {}
+        # Build meshes and forms
+        self.meshes = {}
+        self.zero_forms = {}
+        self.two_forms = {}
         self.query_points = {
             'small_rect': (15.0, 15.0),
             'large_rect': (50.0, 50.0),
@@ -529,22 +528,40 @@ class SpatialIndexSuite:
 
         for name, geometry in self.geometries.items():
             msh = mesher.poly_to_mesh(geometry)
+            self.meshes[name] = msh
 
             # ZeroForm: f(x, y) = x + y
             zero_form = ZeroForm(msh)
             for v in msh.vertices:
                 zero_form[v] = v.p.x + v.p.y
+            self.zero_forms[name] = zero_form
 
             # TwoForm: f(x, y) = x * y at centroid
             two_form = TwoForm(msh)
             for face in msh.faces:
                 c = face.centroid
                 two_form[face] = c.x * c.y
+            self.two_forms[name] = two_form
 
+
+class SpatialIndexSuite(_MeshWithFormsSuiteBase):
+    """Benchmarks for VertexSpatialIndex and FaceSpatialIndex."""
+
+    def setup(self, *_):
+        """Create meshes and spatial indices for benchmarking."""
+        super().setup()
+
+        # Build layers, layer_solutions, and indices
+        self.layers = {}
+        self.layer_solutions = {}
+        self.vertex_indices = {}
+        self.face_indices = {}
+
+        for name, geometry in self.geometries.items():
             layer_solution = solver.LayerSolution(
-                meshes=[msh],
-                potentials=[zero_form],
-                power_densities=[two_form],
+                meshes=[self.meshes[name]],
+                potentials=[self.zero_forms[name]],
+                power_densities=[self.two_forms[name]],
                 disconnected_meshes=[]
             )
 
@@ -595,3 +612,27 @@ class SpatialIndexSuite:
 
     time_face_index_queries.params = ['small_rect', 'large_rect', 'rect_with_hole']
     time_face_index_queries.param_names = ['geometry']
+
+
+class RenderedMeshSuite(_MeshWithFormsSuiteBase):
+    """Benchmarks for RenderedMesh preparation methods."""
+
+    def time_prepare_zero_form(self, geometry_name):
+        """Time RenderedMesh.prepare_zero_form()."""
+        ui.RenderedMesh.prepare_zero_form(
+            self.meshes[geometry_name],
+            self.zero_forms[geometry_name]
+        )
+
+    time_prepare_zero_form.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_prepare_zero_form.param_names = ['geometry']
+
+    def time_prepare_two_form(self, geometry_name):
+        """Time RenderedMesh.prepare_two_form()."""
+        ui.RenderedMesh.prepare_two_form(
+            self.meshes[geometry_name],
+            self.two_forms[geometry_name]
+        )
+
+    time_prepare_two_form.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_prepare_two_form.param_names = ['geometry']
