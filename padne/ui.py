@@ -729,84 +729,122 @@ class RenderedMesh:
                    vao_boundary,
                    len(boundary_vertices) // 2)
 
-    @staticmethod
-    def _serialize_edges_from_mesh(msh: mesh.Mesh):
-        edge_vertices = []
-        edge_colors = []
-        boundary_vertices = []
-        boundary_colors = []
-
-        for face in msh.faces:
-
-            for edge in face.edges:
-                v1 = edge.origin
-                v2 = edge.next.origin
-
-                vertices_data = [v1.p.x, v1.p.y, v2.p.x, v2.p.y]
-                # TODO: It would make sense for the color to be configurable
-                # and/or based on some property of the edge
-                color_data = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
-                if edge.twin.is_boundary:
-                    boundary_vertices.extend(vertices_data)
-                    boundary_colors.extend(color_data)
-                else:
-                    edge_vertices.extend(vertices_data)
-                    edge_colors.extend(color_data)
-
-        return edge_vertices, edge_colors, boundary_vertices, boundary_colors
-
     @classmethod
     def prepare_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm) -> 'RenderedMesh.PreparedData':
-        triangle_vertices = []
-        triangle_colors = []
+        # Note: This code is a relatively optimized hot loop. Even though, it
+        # does not provide huge performance benefits (20%-ish) over the original
+        # version. At some point, it will probably be replaced by another approach.
+        n_faces = len(msh.faces)
 
-        for face in msh.faces:
-            # Note that we assume the face is a triangle. This should be already
-            # checked by other layers
+        # Triangle arrays - exact size known (assuming triangles)
+        triangle_vertices = np.zeros(n_faces * 6, dtype=np.float32)
+        triangle_colors = np.zeros(n_faces * 3, dtype=np.float32)
 
-            # Vertex data
-            for vertex in face.vertices:
-                triangle_vertices.extend([vertex.p.x, vertex.p.y])
-                # This is where we differ from from_two_form
-                triangle_colors.extend([values[vertex]])
+        # Edge arrays - preallocate to max, clip later
+        max_edges = n_faces * 3
+        edge_vertices = np.zeros(max_edges * 4, dtype=np.float32)
+        boundary_vertices = np.zeros(max_edges * 4, dtype=np.float32)
 
-        edge_vertices, edge_colors, boundary_vertices, boundary_colors = \
-            cls._serialize_edges_from_mesh(msh)
+        n_edges = 0
+        n_boundary = 0
+        values_dict = values.values  # Cache dict access
+
+        for i_face, face in enumerate(msh.faces):
+            for i_edge, edge in enumerate(face.edges):
+                # Triangle vertex
+                vertex = edge.origin
+                p = vertex.p
+                triangle_vertices[i_face * 6 + i_edge * 2] = p.x
+                triangle_vertices[i_face * 6 + i_edge * 2 + 1] = p.y
+                triangle_colors[i_face * 3 + i_edge] = values_dict[vertex]
+
+                # Edge data
+                v2 = edge.next.origin
+                if edge.twin.is_boundary:
+                    boundary_vertices[n_boundary * 4 + 0] = p.x
+                    boundary_vertices[n_boundary * 4 + 1] = p.y
+                    boundary_vertices[n_boundary * 4 + 2] = v2.p.x
+                    boundary_vertices[n_boundary * 4 + 3] = v2.p.y
+                    n_boundary += 1
+                else:
+                    edge_vertices[n_edges * 4 + 0] = p.x
+                    edge_vertices[n_edges * 4 + 1] = p.y
+                    edge_vertices[n_edges * 4 + 2] = v2.p.x
+                    edge_vertices[n_edges * 4 + 3] = v2.p.y
+                    n_edges += 1
+
+        # Clip and construct color arrays
+        edge_vertices = edge_vertices[:n_edges * 4]
+        boundary_vertices = boundary_vertices[:n_boundary * 4]
+        edge_colors = np.full(n_edges * 6, 0.9, dtype=np.float32)
+        boundary_colors = np.full(n_boundary * 6, 0.9, dtype=np.float32)
 
         return cls.PreparedData(
-            np.array(triangle_vertices, dtype=np.float32),
-            np.array(triangle_colors, dtype=np.float32),
-            np.array(edge_vertices, dtype=np.float32),
-            np.array(edge_colors, dtype=np.float32),
-            np.array(boundary_vertices, dtype=np.float32),
-            np.array(boundary_colors, dtype=np.float32),
+            triangle_vertices,
+            triangle_colors,
+            edge_vertices,
+            edge_colors,
+            boundary_vertices,
+            boundary_colors,
         )
 
     @classmethod
     def prepare_two_form(cls, msh: mesh.Mesh, values: mesh.TwoForm) -> 'RenderedMesh.PreparedData':
-        triangle_vertices = []
-        triangle_colors = []
+        # Just like above, this is a relatively optimized hot loop
+        n_faces = len(msh.faces)
 
-        for face in msh.faces:
-            # Note that we assume the face is a triangle. This should be already
-            # checked by other layers
+        # Triangle arrays - exact size known (assuming triangles)
+        triangle_vertices = np.zeros(n_faces * 6, dtype=np.float32)
+        triangle_colors = np.zeros(n_faces * 3, dtype=np.float32)
 
-            # Vertex data
-            for vertex in face.vertices:
-                triangle_vertices.extend([vertex.p.x, vertex.p.y])
-                # This is where we differ from from_zero_form
-                triangle_colors.extend([values[face]])
+        # Edge arrays - preallocate to max, clip later
+        max_edges = n_faces * 3
+        edge_vertices = np.zeros(max_edges * 4, dtype=np.float32)
+        boundary_vertices = np.zeros(max_edges * 4, dtype=np.float32)
 
-        edge_vertices, edge_colors, boundary_vertices, boundary_colors = \
-            cls._serialize_edges_from_mesh(msh)
+        n_edges = 0
+        n_boundary = 0
+        values_dict = values.values  # Cache dict access
+
+        for i_face, face in enumerate(msh.faces):
+            # TwoForm: one color per face (cache outside inner loop)
+            face_color = values_dict[face]
+
+            for i_edge, edge in enumerate(face.edges):
+                # Triangle vertex
+                p = edge.origin.p
+                triangle_vertices[i_face * 6 + i_edge * 2] = p.x
+                triangle_vertices[i_face * 6 + i_edge * 2 + 1] = p.y
+                triangle_colors[i_face * 3 + i_edge] = face_color
+
+                # Edge data
+                v2 = edge.next.origin
+                if edge.twin.is_boundary:
+                    boundary_vertices[n_boundary * 4 + 0] = p.x
+                    boundary_vertices[n_boundary * 4 + 1] = p.y
+                    boundary_vertices[n_boundary * 4 + 2] = v2.p.x
+                    boundary_vertices[n_boundary * 4 + 3] = v2.p.y
+                    n_boundary += 1
+                else:
+                    edge_vertices[n_edges * 4 + 0] = p.x
+                    edge_vertices[n_edges * 4 + 1] = p.y
+                    edge_vertices[n_edges * 4 + 2] = v2.p.x
+                    edge_vertices[n_edges * 4 + 3] = v2.p.y
+                    n_edges += 1
+
+        # Clip and construct color arrays
+        edge_vertices = edge_vertices[:n_edges * 4]
+        boundary_vertices = boundary_vertices[:n_boundary * 4]
+        edge_colors = np.full(n_edges * 6, 0.9, dtype=np.float32)
+        boundary_colors = np.full(n_boundary * 6, 0.9, dtype=np.float32)
 
         return cls.PreparedData(
-            np.array(triangle_vertices, dtype=np.float32),
-            np.array(triangle_colors, dtype=np.float32),
-            np.array(edge_vertices, dtype=np.float32),
-            np.array(edge_colors, dtype=np.float32),
-            np.array(boundary_vertices, dtype=np.float32),
-            np.array(boundary_colors, dtype=np.float32),
+            triangle_vertices,
+            triangle_colors,
+            edge_vertices,
+            edge_colors,
+            boundary_vertices,
+            boundary_colors,
         )
 
     def render_triangles(self):
