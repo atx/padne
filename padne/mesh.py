@@ -5,10 +5,16 @@ import shapely.geometry
 import padne._cgal as cgal
 
 from dataclasses import dataclass, field
-from typing import Optional, Iterable, Iterator, Hashable
+from typing import Optional, Iterable, Iterator, Protocol
 
 # The purpose of this module is to generate triangular meshes from Shapely
 # (multi)polygons
+
+index_type = np.uint64
+
+
+class HasIndex(Protocol):
+    i: index_type
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,7 @@ class Point:
 class Vertex:
     p: Point
     out: Optional["HalfEdge"] = None
+    i: index_type = field(default=index_type(0))
 
     def orbit(self) -> Iterator["HalfEdge"]:
         edge = self.out
@@ -85,6 +92,7 @@ class HalfEdge:
     next: Optional["HalfEdge"] = None
     prev: Optional["HalfEdge"] = None
     face: Optional["Face"] = None
+    i: index_type = field(default=index_type(0))
 
     def __getstate__(self):
         # We _do not_ pickle the twin/next/prev halfedges explicitly
@@ -136,6 +144,7 @@ class HalfEdge:
 class Face:
     edge: HalfEdge = None
     is_boundary: bool = False
+    i: index_type = field(default=index_type(0))
 
     @property
     def edges(self):
@@ -179,27 +188,31 @@ class Face:
         return 0.5 * abs(area)
 
 
-class IndexMap[T: Hashable]:
+class IndexStore[T: HasIndex]:
     """
-    A simple class that maps objects to indices and vice versa.
+    A simple class that stores objects with indices.
     """
 
     def __init__(self):
-        self._obj_to_idx: dict[T, int] = {}
         self._idx_to_obj: list[T] = []
 
-    def add(self, obj: T) -> int:
-        if obj not in self._obj_to_idx:
-            idx = len(self._idx_to_obj)
-            self._obj_to_idx[obj] = idx
-            self._idx_to_obj.append(obj)
-        return self._obj_to_idx[obj]
+    @property
+    def next_index(self) -> index_type:
+        """Get the next available index without adding an object."""
+        return index_type(len(self._idx_to_obj))
 
-    def to_index(self, obj: T) -> int:
-        return self._obj_to_idx[obj]
+    def add(self, obj: T) -> None:
+        # TODO: maybe we should assert that obj.i is not set already?
+        obj.i = self.next_index
+        self._idx_to_obj.append(obj)
 
-    def to_object(self, idx: int) -> T:
-        return self._idx_to_obj[idx]
+    def to_index(self, obj: T) -> index_type:
+        """Get the index of an object. This is for backwards compatibility, otherwise use obj.i directly."""
+        return obj.i
+
+    def to_object(self, idx: int | index_type) -> T:
+        """Get the object at a given index."""
+        return self._idx_to_obj[int(idx)]
 
     def __len__(self) -> int:
         return len(self._idx_to_obj)
@@ -208,20 +221,20 @@ class IndexMap[T: Hashable]:
         return iter(self._idx_to_obj)
 
     def __contains__(self, obj: T) -> bool:
-        """Check if an object is in the index map."""
-        return obj in self._obj_to_idx
+        """Check if an object is in the index store."""
+        return 0 <= obj.i < len(self._idx_to_obj) and self._idx_to_obj[obj.i] is obj
 
-    def items(self) -> Iterator[tuple[int, T]]:
+    def items(self) -> Iterator[tuple[index_type, T]]:
         for idx, obj in enumerate(self._idx_to_obj):
-            yield idx, obj
+            yield index_type(idx), obj
 
 
 class Mesh:
     def __init__(self):
-        self.vertices = IndexMap[Vertex]()
-        self.halfedges = IndexMap[HalfEdge]()
-        self.faces = IndexMap[Face]()
-        self.boundaries = IndexMap[Face]()
+        self.vertices = IndexStore[Vertex]()
+        self.halfedges = IndexStore[HalfEdge]()
+        self.faces = IndexStore[Face]()
+        self.boundaries = IndexStore[Face]()
         self._edge_map: dict[tuple[int, int], HalfEdge] = {}
 
     def __getstate__(self):
@@ -268,11 +281,11 @@ class Mesh:
         assert key21 not in self._edge_map, "Inconsistent half edge state"
 
         e12 = HalfEdge(v1)
+        self.halfedges.add(e12)
         e21 = HalfEdge(v2)
+        self.halfedges.add(e21)
         e12.twin = e21
         e21.twin = e12
-        self.halfedges.add(e12)
-        self.halfedges.add(e21)
 
         self._edge_map[key12] = e12
         self._edge_map[key21] = e21
