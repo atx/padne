@@ -6,8 +6,8 @@ import shapely.geometry
 
 from padne import kicad
 
-from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexMap, Mesh, \
-    Mesher, MeshingException, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon
+from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexStore, Mesh, \
+    Mesher, MeshingException, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon, index_type
 from unittest.mock import patch, Mock
 
 from conftest import for_all_kicad_projects
@@ -814,126 +814,126 @@ class TestMesh:
 
 
 
-class TestIndexMap:
+class TestIndexStore:
     def test_initialization(self):
-        # Test that an empty IndexMap has length 0
-        index_map = IndexMap()
-        assert len(index_map) == 0
+        store = IndexStore()
+        assert len(store) == 0
 
     def test_add_single_object(self):
-        # Test adding a single object
-        index_map = IndexMap()
-        idx = index_map.add("test")
-        assert idx == 0
-        assert len(index_map) == 1
+        store = IndexStore()
+        v = Vertex(Point(1.0, 2.0))
+        store.add(v)
+        assert len(store) == 1
+        assert v.i == index_type(0)
 
     def test_add_multiple_objects(self):
-        # Test adding multiple different objects
-        index_map = IndexMap()
-        idx1 = index_map.add("one")
-        idx2 = index_map.add("two")
-        idx3 = index_map.add("three")
+        store = IndexStore()
+        v1 = Vertex(Point(1.0, 2.0))
+        v2 = Vertex(Point(3.0, 4.0))
+        v3 = Vertex(Point(5.0, 6.0))
 
-        assert idx1 == 0
-        assert idx2 == 1
-        assert idx3 == 2
-        assert len(index_map) == 3
+        store.add(v1)
+        store.add(v2)
+        store.add(v3)
 
-    def test_add_duplicate_objects(self):
-        # Test that adding the same object twice returns the same index
-        index_map = IndexMap()
-        idx1 = index_map.add("repeated")
-        idx2 = index_map.add("repeated")
-
-        assert idx1 == idx2
-        assert len(index_map) == 1
+        assert len(store) == 3
+        assert v1.i == index_type(0)
+        assert v2.i == index_type(1)
+        assert v3.i == index_type(2)
 
     def test_to_index(self):
-        # Test retrieving index from object
-        index_map = IndexMap()
-        index_map.add("apple")
-        index_map.add("banana")
+        store = IndexStore()
+        v1 = Vertex(Point(1.0, 2.0))
+        v2 = Vertex(Point(3.0, 4.0))
 
-        assert index_map.to_index("apple") == 0
-        assert index_map.to_index("banana") == 1
+        store.add(v1)
+        store.add(v2)
 
-        with pytest.raises(KeyError):
-            # Non-existent object should raise KeyError
-            index_map.to_index("orange")
+        assert store.to_index(v1) == index_type(0)
+        assert store.to_index(v2) == index_type(1)
 
     def test_to_object(self):
-        # Test retrieving object from index
-        index_map = IndexMap()
-        index_map.add("apple")
-        index_map.add("banana")
+        store = IndexStore()
+        v1 = Vertex(Point(1.0, 2.0))
+        v2 = Vertex(Point(3.0, 4.0))
 
-        assert index_map.to_object(0) == "apple"
-        assert index_map.to_object(1) == "banana"
+        store.add(v1)
+        store.add(v2)
+
+        assert store.to_object(0) is v1
+        assert store.to_object(1) is v2
+        assert store.to_object(index_type(0)) is v1
+        assert store.to_object(index_type(1)) is v2
 
         with pytest.raises(IndexError):
-            # Invalid index should raise IndexError
-            index_map.to_object(2)
+            store.to_object(2)
 
     def test_items(self):
-        # Test the items iterator
-        index_map = IndexMap()
-        objects = ["one", "two", "three"]
-        for obj in objects:
-            index_map.add(obj)
+        store = IndexStore()
+        vertices = [Vertex(Point(float(i), float(i))) for i in range(3)]
 
-        items = list(index_map.items())
+        for v in vertices:
+            store.add(v)
+
+        items = list(store.items())
         assert len(items) == 3
 
         for i, (idx, obj) in enumerate(items):
-            assert idx == i
-            assert obj == objects[i]
+            assert idx == index_type(i)
+            assert obj is vertices[i]
 
-    def test_contains(self):
-        # Test the 'in' operator
-        index_map = IndexMap()
-        index_map.add("apple")
-        index_map.add("banana")
+    def test_contains_added_object(self):
+        store = IndexStore()
+        v = Vertex(Point(1.0, 2.0))
+        store.add(v)
 
-        assert "apple" in index_map
-        assert "banana" in index_map
-        assert "orange" not in index_map
+        assert v in store
 
-        # Test with other types
-        index_map = IndexMap()
-        index_map.add(1)
-        index_map.add((2, 3))
+    def test_contains_not_added_object(self):
+        store = IndexStore()
+        v1 = Vertex(Point(1.0, 2.0))
+        v2 = Vertex(Point(3.0, 4.0))
 
-        assert 1 in index_map
-        assert (2, 3) in index_map
-        assert "string" not in index_map
-        assert 2 not in index_map
+        store.add(v1)
 
-    def test_different_object_types(self):
-        # Test with various object types
-        index_map = IndexMap()
+        assert v2 not in store
 
-        # String
-        str_idx = index_map.add("string")
-        assert str_idx == 0
+    def test_contains_wrong_index(self):
+        store = IndexStore()
+        v1 = Vertex(Point(1.0, 2.0))
+        v2 = Vertex(Point(3.0, 4.0))
 
-        # Integer
-        int_idx = index_map.add(42)
-        assert int_idx == 1
+        store.add(v1)
+        store.add(v2)
 
-        # Tuple (hashable)
-        tuple_idx = index_map.add((1, 2, 3))
-        assert tuple_idx == 2
+        # Manually corrupt the index - v2 claims to be at index 0
+        v2.i = index_type(0)
+        # Now v2 is not in the store because store[0] is v1, not v2
+        assert v2 not in store
 
-        # Custom object (Point)
-        point = Point(1.0, 2.0)
-        point_idx = index_map.add(point)
-        assert point_idx == 3
+    def test_next_index(self):
+        store = IndexStore()
+        assert store.next_index == index_type(0)
 
-        # Verify all objects
-        assert index_map.to_object(str_idx) == "string"
-        assert index_map.to_object(int_idx) == 42
-        assert index_map.to_object(tuple_idx) == (1, 2, 3)
-        assert index_map.to_object(point_idx) == point
+        v = Vertex(Point(1.0, 2.0))
+        store.add(v)
+        assert store.next_index == index_type(1)
+
+        v2 = Vertex(Point(3.0, 4.0))
+        store.add(v2)
+        assert store.next_index == index_type(2)
+
+    def test_iteration(self):
+        store = IndexStore()
+        vertices = [Vertex(Point(float(i), float(i))) for i in range(5)]
+
+        for v in vertices:
+            store.add(v)
+
+        iterated = list(store)
+        assert len(iterated) == 5
+        for i, v in enumerate(iterated):
+            assert v is vertices[i]
 
 
 def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
