@@ -1,5 +1,4 @@
 
-import collections
 import numpy as np
 import shapely.geometry
 import padne._cgal as cgal
@@ -383,20 +382,20 @@ class Mesh:
 @dataclass
 class ZeroForm:
     mesh: Mesh
-    values: dict[Vertex, float] = field(
-        default_factory=lambda: collections.defaultdict(float),
-        repr=False,
-    )
+    values: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.values = np.zeros(len(self.mesh.vertices), dtype=np.float64)
 
     def __getitem__(self, vertex: Vertex) -> float:
         if vertex not in self.mesh.vertices:
             raise KeyError("Vertex not in mesh")
-        return self.values[vertex]
+        return float(self.values[vertex.i])
 
     def __setitem__(self, vertex: Vertex, value: float) -> None:
         if vertex not in self.mesh.vertices:
             raise KeyError("Vertex not in mesh")
-        self.values[vertex] = value
+        self.values[vertex.i] = value
 
     def __add__(self, other: "ZeroForm") -> "ZeroForm":
         """Add two ZeroForms element-wise.
@@ -412,10 +411,8 @@ class ZeroForm:
         """
         if self.mesh is not other.mesh:
             raise ValueError("Cannot add ZeroForms on different meshes")
-
         result = ZeroForm(self.mesh)
-        for vertex in self.mesh.vertices:
-            result[vertex] = self[vertex] + other[vertex]
+        result.values = self.values + other.values
         return result
 
     def __sub__(self, other: "ZeroForm") -> "ZeroForm":
@@ -432,10 +429,8 @@ class ZeroForm:
         """
         if self.mesh is not other.mesh:
             raise ValueError("Cannot subtract ZeroForms on different meshes")
-
         result = ZeroForm(self.mesh)
-        for vertex in self.mesh.vertices:
-            result[vertex] = self[vertex] - other[vertex]
+        result.values = self.values - other.values
         return result
 
     def __mul__(self, scalar: float) -> "ZeroForm":
@@ -448,8 +443,7 @@ class ZeroForm:
             A new ZeroForm with scaled values
         """
         result = ZeroForm(self.mesh)
-        for vertex in self.mesh.vertices:
-            result[vertex] = self[vertex] * scalar
+        result.values = self.values * scalar
         return result
 
     def __rmul__(self, scalar: float) -> "ZeroForm":
@@ -477,10 +471,8 @@ class ZeroForm:
         """
         if scalar == 0:
             raise ZeroDivisionError("Cannot divide ZeroForm by zero")
-
         result = ZeroForm(self.mesh)
-        for vertex in self.mesh.vertices:
-            result[vertex] = self[vertex] / scalar
+        result.values = self.values / scalar
         return result
 
     def __neg__(self) -> "ZeroForm":
@@ -490,8 +482,7 @@ class ZeroForm:
             A new ZeroForm with negated values
         """
         result = ZeroForm(self.mesh)
-        for vertex in self.mesh.vertices:
-            result[vertex] = -self[vertex]
+        result.values = -self.values
         return result
 
     def d(self) -> "OneForm":
@@ -506,12 +497,12 @@ class ZeroForm:
         """
         one_form = OneForm(self.mesh)
 
-        # Process each half-edge
         for hedge in self.mesh.halfedges:
             # For edge from A to B: df[edge] = f(B) - f(A)
-            target_value = self[hedge.twin.origin]  # Value at target vertex
-            source_value = self[hedge.origin]       # Value at source vertex
-            one_form[hedge] = target_value - source_value
+            assert hedge.twin is not None
+            target_value = self.values[hedge.twin.origin.i]
+            source_value = self.values[hedge.origin.i]
+            one_form.values[hedge.i] = target_value - source_value
 
         return one_form
 
@@ -522,52 +513,45 @@ class OneForm:
     A discrete 1-form defined on the (h)edges of a mesh.
     """
     mesh: Mesh
-    values: dict[HalfEdge, float] = field(
-        default_factory=dict,
-        repr=False,
-    )
+    values: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.values = np.zeros(len(self.mesh.halfedges), dtype=np.float64)
 
     def __getitem__(self, hedge: HalfEdge) -> float:
         """Get the value of the 1-form on a half-edge."""
         if hedge not in self.mesh.halfedges:
             raise KeyError("HalfEdge not in mesh")
-
-        return self.values.get(hedge, 0.0)
+        return float(self.values[hedge.i])
 
     def __setitem__(self, hedge: HalfEdge, value: float) -> None:
         """Set the value of the 1-form on a half-edge, ensuring antisymmetry."""
         if hedge not in self.mesh.halfedges:
             raise KeyError("HalfEdge not in mesh")
-
-        # Set value for hedge and -value for its twin
-        self.values[hedge] = value
-        self.values[hedge.twin] = -value
+        assert hedge.twin is not None
+        self.values[hedge.i] = value
+        self.values[hedge.twin.i] = -value
 
     def __add__(self, other: "OneForm") -> "OneForm":
         """Add two OneForm objects element-wise."""
         if self.mesh is not other.mesh:
             raise ValueError("Cannot add OneForms on different meshes")
-
         result = OneForm(self.mesh)
-        for hedge in self.mesh.halfedges:
-            result[hedge] = self[hedge] + other[hedge]
+        result.values = self.values + other.values
         return result
 
     def __sub__(self, other: "OneForm") -> "OneForm":
         """Subtract another OneForm element-wise."""
         if self.mesh is not other.mesh:
             raise ValueError("Cannot subtract OneForms on different meshes")
-
         result = OneForm(self.mesh)
-        for hedge in self.mesh.halfedges:
-            result[hedge] = self[hedge] - other[hedge]
+        result.values = self.values - other.values
         return result
 
     def __mul__(self, scalar: float) -> "OneForm":
         """Multiply this OneForm by a scalar."""
         result = OneForm(self.mesh)
-        for hedge in self.mesh.halfedges:
-            result[hedge] = self[hedge] * scalar
+        result.values = self.values * scalar
         return result
 
     def __rmul__(self, scalar: float) -> "OneForm":
@@ -578,17 +562,14 @@ class OneForm:
         """Divide this OneForm by a scalar."""
         if scalar == 0:
             raise ZeroDivisionError("Cannot divide OneForm by zero")
-
         result = OneForm(self.mesh)
-        for hedge in self.mesh.halfedges:
-            result[hedge] = self[hedge] / scalar
+        result.values = self.values / scalar
         return result
 
     def __neg__(self) -> "OneForm":
         """Negate all values in this OneForm."""
         result = OneForm(self.mesh)
-        for hedge in self.mesh.halfedges:
-            result[hedge] = -self[hedge]
+        result.values = -self.values
         return result
 
 
@@ -598,54 +579,46 @@ class TwoForm:
     A discrete 2-form defined on the faces of a mesh.
     """
     mesh: Mesh
-    values: dict[Face, float] = field(
-        default_factory=dict,
-        repr=False,
-    )
+    values: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.values = np.zeros(len(self.mesh.faces), dtype=np.float64)
 
     def __getitem__(self, face: Face) -> float:
         """Get the value of the 2-form on a face."""
         if face not in self.mesh.faces and face not in self.mesh.boundaries:
             raise KeyError("Face not in mesh")
-
         # Boundary faces always return 0.0
         if face in self.mesh.boundaries:
             return 0.0
-
-        return self.values.get(face, 0.0)
+        return float(self.values[face.i])
 
     def __setitem__(self, face: Face, value: float) -> None:
         """Set the value of the 2-form on a face."""
         if face not in self.mesh.faces:
             raise KeyError("Face not in mesh.faces (boundary faces not supported)")
-
-        self.values[face] = value
+        self.values[face.i] = value
 
     def __add__(self, other: "TwoForm") -> "TwoForm":
         """Add two TwoForm objects element-wise."""
         if self.mesh is not other.mesh:
             raise ValueError("Cannot add TwoForms on different meshes")
-
         result = TwoForm(self.mesh)
-        for face in self.mesh.faces:
-            result[face] = self[face] + other[face]
+        result.values = self.values + other.values
         return result
 
     def __sub__(self, other: "TwoForm") -> "TwoForm":
         """Subtract another TwoForm element-wise."""
         if self.mesh is not other.mesh:
             raise ValueError("Cannot subtract TwoForms on different meshes")
-
         result = TwoForm(self.mesh)
-        for face in self.mesh.faces:
-            result[face] = self[face] - other[face]
+        result.values = self.values - other.values
         return result
 
     def __mul__(self, scalar: float) -> "TwoForm":
         """Multiply this TwoForm by a scalar."""
         result = TwoForm(self.mesh)
-        for face in self.mesh.faces:
-            result[face] = self[face] * scalar
+        result.values = self.values * scalar
         return result
 
     def __rmul__(self, scalar: float) -> "TwoForm":
@@ -656,17 +629,14 @@ class TwoForm:
         """Divide this TwoForm by a scalar."""
         if scalar == 0:
             raise ZeroDivisionError("Cannot divide TwoForm by zero")
-
         result = TwoForm(self.mesh)
-        for face in self.mesh.faces:
-            result[face] = self[face] / scalar
+        result.values = self.values / scalar
         return result
 
     def __neg__(self) -> "TwoForm":
         """Negate all values in this TwoForm."""
         result = TwoForm(self.mesh)
-        for face in self.mesh.faces:
-            result[face] = -self[face]
+        result.values = -self.values
         return result
 
 
