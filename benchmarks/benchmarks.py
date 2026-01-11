@@ -1,9 +1,8 @@
 
-import os
-import pathlib
 import sys
 import tempfile
 from pathlib import Path
+import numpy as np
 import shapely.geometry
 from padne.mesh import Mesher, ZeroForm, TwoForm
 from padne import kicad, solver, problem
@@ -12,6 +11,53 @@ import padne._cgal as cgal
 import pcbnew
 
 from tests.conftest import _kicad_test_projects
+
+
+def _fix_numpy_array_views(root):
+    """
+    Iteratively walk an object graph and copy any numpy arrays that don't own their data.
+
+    This is needed because ASV pickles the benchmark cache between processes,
+    and numpy's pickle optimization can create arrays that are views into the
+    pickle buffer. pympler's asizeof crashes on such arrays because
+    sys.getsizeof() returns just the header size while nbytes returns the full
+    data size, resulting in a negative "base" value.
+
+    As of 2026-01-11, I am seeing this on the 24.04 Ubuntu in the CI container,
+    but not on my Sid Debian laptop, meaning it may depend on Python/numpy/asv version.
+    """
+    seen = set()
+    # Stack of (container, key/index/attr, value) tuples for deferred fixing
+    stack = [root]
+
+    while stack:
+        obj = stack.pop()
+        obj_id = id(obj)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+
+        if isinstance(obj, np.ndarray):
+            continue
+
+        if isinstance(obj, dict):
+            for k, v in list(obj.items()):
+                if isinstance(v, np.ndarray) and not v.flags.owndata:
+                    obj[k] = v.copy()
+                elif id(v) not in seen:
+                    stack.append(v)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                if isinstance(v, np.ndarray) and not v.flags.owndata:
+                    obj[i] = v.copy()
+                elif id(v) not in seen:
+                    stack.append(v)
+        elif hasattr(obj, '__dict__'):
+            for attr, v in list(obj.__dict__.items()):
+                if isinstance(v, np.ndarray) and not v.flags.owndata:
+                    setattr(obj, attr, v.copy())
+                elif id(v) not in seen:
+                    stack.append(v)
 
 
 class MesherSuite:
@@ -171,6 +217,10 @@ class SolverSuite:
             cache['solutions'][project_name] = solver.solve(problem)
 
         return cache
+
+    def setup(self, cache, project_name):
+        """Fix numpy array views in cache after unpickling."""
+        _fix_numpy_array_views(cache)
 
     def time_solver_solve(self, cache, project_name):
         """Time the complete FEM solving pipeline."""
