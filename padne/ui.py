@@ -747,7 +747,7 @@ class RenderedMesh:
 
         n_edges = 0
         n_boundary = 0
-        values_dict = values.values  # Cache dict access
+        values_array = values.values  # Direct numpy array access
 
         for i_face, face in enumerate(msh.faces):
             for i_edge, edge in enumerate(face.edges):
@@ -756,7 +756,7 @@ class RenderedMesh:
                 p = vertex.p
                 triangle_vertices[i_face * 6 + i_edge * 2] = p.x
                 triangle_vertices[i_face * 6 + i_edge * 2 + 1] = p.y
-                triangle_colors[i_face * 3 + i_edge] = values_dict[vertex]
+                triangle_colors[i_face * 3 + i_edge] = values_array[vertex.i]
 
                 # Edge data
                 v2 = edge.next.origin
@@ -804,11 +804,11 @@ class RenderedMesh:
 
         n_edges = 0
         n_boundary = 0
-        values_dict = values.values  # Cache dict access
+        values_array = values.values  # Direct numpy array access
 
         for i_face, face in enumerate(msh.faces):
             # TwoForm: one color per face (cache outside inner loop)
-            face_color = values_dict[face]
+            face_color = values_array[face.i]
 
             for i_edge, edge in enumerate(face.edges):
                 # Triangle vertex
