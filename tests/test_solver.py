@@ -2010,3 +2010,12 @@ class TestSolutionPickling:
 
             # Check disconnected meshes
             assert len(unpick_ls.disconnected_meshes) == len(orig_ls.disconnected_meshes)
+
+
+@for_all_kicad_projects(exclude=["unterminated_current_loop"])
+def test_solution_residual(project):
+    prob = kicad.load_kicad_project(project.pro_path)
+    solution = solver.solve(prob)
+
+    assert solution.solver_info.residual_norm < 1e-9, \
+        f"Residual too large: {solution.solver_info.residual_norm}"

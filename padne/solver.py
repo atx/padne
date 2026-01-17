@@ -30,6 +30,13 @@ class SolverWarning(Warning):
     pass
 
 
+@dataclass(frozen=True)
+class SolverInfo:
+    """Diagnostic information from the solver."""
+    ground_node_current: float  # Should be ~0 for well-posed problems
+    residual_norm: float        # ||L @ v - r||, should be ~0 for solved systems
+
+
 @dataclass
 class LayerSolution:
     meshes: list[mesh.Mesh]
@@ -42,6 +49,7 @@ class LayerSolution:
 class Solution:
     problem: problem.Problem
     layer_solutions: list[LayerSolution]
+    solver_info: SolverInfo
 
 
 def construct_strtrees_from_layers(layers: list[problem.Layer]
@@ -803,9 +811,19 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
     log.info("Solving the system of equations")
-    v = scipy.sparse.linalg.spsolve(L.tocsc(), r)
+    L_csc = L.tocsc()
+    v = scipy.sparse.linalg.spsolve(L_csc, r)
 
-    if not np.isclose(v[-1], 0):
+    # Compute solver diagnostics
+    ground_node_current = v[-1]
+    residual = L_csc @ v - r
+    residual_norm = np.linalg.norm(residual)
+    solver_info = SolverInfo(
+        ground_node_current=ground_node_current,
+        residual_norm=residual_norm,
+    )
+
+    if not np.isclose(ground_node_current, 0):
         # This is a warning, but we still continue to produce the solution object
         # since it may still be useful for the user.
         warnings.warn(
@@ -827,4 +845,4 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
         disconnected_meshes_by_layer
     )
 
-    return Solution(problem=prob, layer_solutions=layer_solutions)
+    return Solution(problem=prob, layer_solutions=layer_solutions, solver_info=solver_info)
