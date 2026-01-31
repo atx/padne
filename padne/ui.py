@@ -1693,6 +1693,26 @@ class MeshViewer(QOpenGLWidget):
         self.offset_y += dy_world
         self.update()
 
+    def _zoomToScreenPoint(self, screen_x: float, screen_y: float, zoom_by: float) -> None:
+        """
+        Zoom the viewport, keeping the specified screen point fixed.
+
+        Args:
+            screen_x: X coordinate in screen/widget pixels
+            screen_y: Y coordinate in screen/widget pixels
+            zoom_by: Zoom factor to apply (>1 zooms in, <1 zooms out)
+        """
+        screen_pos = QtCore.QPointF(screen_x, screen_y)
+        world_before = self._screenToWorld(screen_pos)
+
+        self.scale *= zoom_by
+
+        world_after = self._screenToWorld(screen_pos)
+
+        # Adjust offset to keep world_before at the same screen position
+        self.offset_x += (world_after.x - world_before.x)
+        self.offset_y += (world_after.y - world_before.y)
+
     def setMinValueFromWorldPoint(self, world_point: mesh.Point) -> None:
         """
         Sets the minimum value of the color scale from a world point.
@@ -1738,15 +1758,14 @@ class MeshViewer(QOpenGLWidget):
         self.update()
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
-        """Handle mouse wheel for zooming."""
+        """Handle mouse wheel for zooming towards cursor position."""
         # User manually zoomed - disable automatic scaling
         self.needs_initial_autoscale = False
 
-        zoom_factor = 1.2
-        if event.angleDelta().y() > 0:
-            self.scale *= zoom_factor
-        else:
-            self.scale /= zoom_factor
+        cursor_pos = event.position()
+        zoom_factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
+        self._zoomToScreenPoint(cursor_pos.x(), cursor_pos.y(), zoom_factor)
+
         self.update()
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
