@@ -367,11 +367,6 @@ void setup_mesher(Mesher& mesher,
         )
     );
 
-    // Now we insert the seeds
-    // Theoretically, it should not be necessary to insert _all_ the seeds,
-    // since we have a single connected component. The python code
-    // should just give us a single representative_point to use instead
-    // TODO
     set_mesher_seeds(mesher, seeds);
 }
 

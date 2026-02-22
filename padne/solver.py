@@ -251,9 +251,6 @@ def generate_meshes_for_problem(prob: problem.Problem,
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
-        # TODO: collect_seed_points should just return a list
-        # having per-layer seed points. This is a bit dumb.
-        # But since we do not have many layers, it is not a big bottleneck.
         seed_points_in_layer = [
             shapely.geometry.Point(p.x, p.y)
             for p in collect_seed_points(prob, layer)
@@ -492,7 +489,6 @@ def stamp_network_into_system(network: problem.Network,
                 # for the i_p and i_n nodes. Imagine we placed it to the right hand
                 # side where source currents live, but since it is an unknown,
                 # it has to live in the system matrix
-                # TODO: Explain this better
                 L[i_p, i_v] = 1
                 L[i_n, i_v] = -1
             case problem.VoltageRegulator(v_p=v_p, v_n=v_n,
@@ -565,7 +561,7 @@ def produce_layer_solutions(layers: list[problem.Layer],
                             vindex: VertexIndexer,
                             meshes: list[mesh.Mesh],
                             mesh_index_to_layer_index: list[int],
-                            v: np.array,
+                            v: np.ndarray,
                             disconnected_meshes_by_layer: list[list[mesh.Mesh]]) -> list[LayerSolution]:
     layer_solutions = []
     for layer_i, layer in enumerate(layers):
@@ -827,8 +823,8 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
         # This is a warning, but we still continue to produce the solution object
         # since it may still be useful for the user.
         warnings.warn(
-            f"Ground node current is not zero ({v[-1]} A), this may indicate an issue with the problem being solved."
-            "Check for unterminated current loops or floating connected components."
+            f"Ground node current is not zero ({v[-1]} A), this may indicate an issue with the problem being solved. "
+            "Check for unterminated current loops or floating connected components. "
             "This may be harmless if the current is small, but it may indicate an ill-conditioned system.",
             SolverWarning
         )

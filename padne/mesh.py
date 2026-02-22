@@ -201,7 +201,6 @@ class IndexStore[T: HasIndex]:
         return index_type(len(self._idx_to_obj))
 
     def add(self, obj: T) -> None:
-        # TODO: maybe we should assert that obj.i is not set already?
         obj.i = self.next_index
         self._idx_to_obj.append(obj)
 

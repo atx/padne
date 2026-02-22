@@ -1605,7 +1605,6 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
     Returns:
         Dictionary mapping layer names to Layer objects
     """
-    # TODO: Rename this function...
     layer_dict = {}
     for plotted_layer in plotted_layers:
         stackup_layer = next(
@@ -1706,7 +1705,6 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
         networks.append(network)
 
     # Get all layers as a list
-    # TODO: Sort them using the stackup
     layer_names_in_order = list(layer_dict.keys())
     layer_names_in_order.sort(key=lambda name: stackup.index_by_name(name))
 
