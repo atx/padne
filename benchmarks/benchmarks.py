@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 import numpy as np
 import shapely.geometry
-from padne.mesh import Mesher, ZeroForm, TwoForm
+from padne.mesh import Mesher, Mesh, Point, ZeroForm, TwoForm
 from padne import kicad, solver, problem
 import padne.ui as ui
 import padne._cgal as cgal
@@ -179,6 +179,53 @@ class MesherSuite:
     peakmem_mesh_generation.param_names = ['geometry', 'config']
 
 
+class FromTriangleSoupSuite:
+    """Benchmarks for Mesh.from_triangle_soup() half-edge topology construction."""
+
+    def setup(self, *_):
+        small_rect = shapely.geometry.box(0, 0, 30, 30)
+        large_rect = shapely.geometry.box(0, 0, 100, 100)
+        outer = shapely.geometry.box(0, 0, 80, 80)
+        hole = shapely.geometry.Point(40, 40).buffer(25)
+        rect_with_hole = outer.difference(hole)
+
+        geometries = {
+            'small_rect': small_rect,
+            'large_rect': large_rect,
+            'rect_with_hole': rect_with_hole,
+        }
+
+        config = Mesher.Config(
+            minimum_angle=20.0,
+            maximum_size=0.6,
+            variable_density_min_distance=0.5,
+            variable_density_max_distance=3.0,
+            variable_size_maximum_factor=3.0,
+            distance_map_quantization=1.0,
+        )
+        mesher = Mesher(config)
+
+        self.triangle_soups = {}
+        for name, geometry in geometries.items():
+            vertices, segments, seeds = mesher._prepare_polygon_for_cgal(geometry)
+            if config.is_variable_density:
+                distance_map = cgal.PolyBoundaryDistanceMap(geometry, config.distance_map_quantization)
+            else:
+                distance_map = None
+            cgal_output = cgal.mesh(config, vertices, segments, seeds, distance_map)
+            points = [Point(*p) for p in cgal_output['vertices']]
+            triangles = cgal_output['triangles']
+            self.triangle_soups[name] = (points, triangles)
+
+    def time_from_triangle_soup(self, geometry_name):
+        """Time Mesh.from_triangle_soup() topology construction."""
+        points, triangles = self.triangle_soups[geometry_name]
+        Mesh.from_triangle_soup(points, triangles)
+
+    time_from_triangle_soup.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_from_triangle_soup.param_names = ['geometry']
+
+
 class KicadSuite:
     """Benchmarks for KiCad project loading with different test projects."""
 
@@ -342,6 +389,42 @@ class KicadRenderSuite:
     # Parameters for extract_board_outline
     time_extract_board_outline.params = ['castellated_vias_internal_cutout']
     time_extract_board_outline.param_names = ['project']
+
+
+class PunchViaHolesSuite:
+    """Benchmarks for punch_via_holes() Shapely boolean operations."""
+
+    def setup(self, *_):
+        test_projects = _kicad_test_projects()
+        project_names = ['many_meshes_many_vias', 'via_tht_4layer', 'overlapping_vias']
+
+        self.plotted_layers = {}
+        self.via_specs = {}
+
+        for project_name in project_names:
+            project = test_projects[project_name]
+            board = pcbnew.LoadBoard(str(project.pcb_path))
+
+            via_specs = (kicad.extract_via_specs_from_pcb(board)
+                         + kicad.extract_tht_pad_specs_from_pcb(board))
+            plotted_layers = kicad.render_gerbers_from_kicad(
+                board, kicad.copper_layers(board)
+            )
+
+            self.plotted_layers[project_name] = plotted_layers
+            self.via_specs[project_name] = via_specs
+
+    def time_punch_via_holes(self, project_name):
+        """Time via hole punching for different projects."""
+        kicad.punch_via_holes(
+            self.plotted_layers[project_name],
+            self.via_specs[project_name]
+        )
+
+    time_punch_via_holes.params = [
+        'many_meshes_many_vias', 'via_tht_4layer', 'overlapping_vias'
+    ]
+    time_punch_via_holes.param_names = ['project']
 
 
 class LaplaceOperatorSuite:
@@ -686,3 +769,28 @@ class RenderedMeshSuite(_MeshWithFormsSuiteBase):
 
     time_prepare_two_form.params = ['small_rect', 'large_rect', 'rect_with_hole']
     time_prepare_two_form.param_names = ['geometry']
+
+
+class NFormSuite(_MeshWithFormsSuiteBase):
+    """Benchmarks for n-form operations (exterior derivatives, arithmetic, etc.)."""
+
+    def time_zero_form_exterior_derivative(self, geometry_name):
+        """Time ZeroForm.d() exterior derivative computation."""
+        self.zero_forms[geometry_name].d()
+
+    time_zero_form_exterior_derivative.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_zero_form_exterior_derivative.param_names = ['geometry']
+
+
+class PowerDensitySuite(_MeshWithFormsSuiteBase):
+    """Benchmarks for power density computation (P = σ|∇V|²)."""
+
+    # Copper conductivity in S/m
+    CONDUCTIVITY = 5.96e7
+
+    def time_compute_power_density(self, geometry_name):
+        """Time solver.compute_power_density() for different mesh sizes."""
+        solver.compute_power_density(self.zero_forms[geometry_name], self.CONDUCTIVITY)
+
+    time_compute_power_density.params = ['small_rect', 'large_rect', 'rect_with_hole']
+    time_compute_power_density.param_names = ['geometry']
