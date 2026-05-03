@@ -20,7 +20,7 @@ from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout,
-    QToolBar, QToolButton, QMenu, QMessageBox
+    QToolBar, QToolButton, QMenu, QMessageBox, QLineEdit
 )
 from PySide6.QtCore import QTimer
 
@@ -1713,6 +1713,26 @@ class MeshViewer(QOpenGLWidget):
         self.offset_x += (world_after.x - world_before.x)
         self.offset_y += (world_after.y - world_before.y)
 
+    @Slot(float)
+    def setMinValue(self, value: float) -> None:
+        """Sets the minimum of the color scale; clamps max upward if needed."""
+        self.current_rendering_mode.min_value = value
+        if value > self.current_rendering_mode.max_value:
+            self.current_rendering_mode.max_value = value
+
+        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
+        self.update()
+
+    @Slot(float)
+    def setMaxValue(self, value: float) -> None:
+        """Sets the maximum of the color scale; clamps min downward if needed."""
+        self.current_rendering_mode.max_value = value
+        if value < self.current_rendering_mode.min_value:
+            self.current_rendering_mode.min_value = value
+
+        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
+        self.update()
+
     def setMinValueFromWorldPoint(self, world_point: mesh.Point) -> None:
         """
         Sets the minimum value of the color scale from a world point.
@@ -1723,17 +1743,9 @@ class MeshViewer(QOpenGLWidget):
             world_point: The point in world coordinates.
         """
         value = self._getNearestValue(world_point.x, world_point.y)
-
         if value is None:
             return
-
-        self.current_rendering_mode.min_value = value
-        # Enforce min_value <= max_value
-        if value > self.current_rendering_mode.max_value:
-            self.current_rendering_mode.max_value = value
-
-        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
-        self.update()
+        self.setMinValue(value)
 
     def setMaxValueFromWorldPoint(self, world_point: mesh.Point) -> None:
         """
@@ -1745,17 +1757,9 @@ class MeshViewer(QOpenGLWidget):
             world_point: The point in world coordinates.
         """
         value = self._getNearestValue(world_point.x, world_point.y)
-
         if value is None:
             return
-
-        self.current_rendering_mode.max_value = value
-        # Enforce min_value <= max_value
-        if value < self.current_rendering_mode.min_value:
-            self.current_rendering_mode.min_value = value
-
-        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
-        self.update()
+        self.setMaxValue(value)
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         """Handle mouse wheel for zooming towards cursor position."""
@@ -1915,11 +1919,88 @@ class MeshViewer(QOpenGLWidget):
             gl.glUniform3fv(color_map_uniform, 256, colors)
 
 
+class EditableValueLabel(QLabel):
+    """A QLabel that turns into a QLineEdit on double-click for in-place value editing."""
+
+    valueEdited = Signal(float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.value = 0.0
+        self.unit = ""
+        self._editor: Optional[QLineEdit] = None
+        self.setCursor(Qt.IBeamCursor)
+        self.setToolTip("Double-click to edit")
+        self._refreshText()
+
+    def setValue(self, value: float, unit: str) -> None:
+        self.value = value
+        self.unit = unit
+        self._refreshText()
+
+    def _refreshText(self) -> None:
+        self.setText(units.Value(self.value, self.unit).pretty_format())
+
+    def _editorText(self) -> str:
+        # pretty_format uses "μ" but units.Value.parse only knows "u"; substitute so the
+        # pre-filled text round-trips through the parser if the user just hits Enter.
+        return units.Value(self.value, self.unit).pretty_format().replace("μ", "u")
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._editor is not None:
+            return
+        editor = QLineEdit(self._editorText(), self.parentWidget())
+        editor.setAlignment(self.alignment())
+        editor.setFont(self.font())
+        editor.setGeometry(self.geometry())
+        editor.selectAll()
+        editor.editingFinished.connect(self._commitEditor)
+        editor.installEventFilter(self)
+        self._editor = editor
+        self.hide()
+        editor.show()
+        editor.setFocus(Qt.MouseFocusReason)
+
+    def eventFilter(self, watched, event):
+        if watched is self._editor and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self._cancelEditor()
+                return True
+        return super().eventFilter(watched, event)
+
+    def _commitEditor(self) -> None:
+        if self._editor is None:
+            return
+        text = self._editor.text()
+        self._destroyEditor()
+        try:
+            parsed = units.Value.parse(text)
+        except ValueError:
+            return
+        self.valueEdited.emit(parsed.value)
+
+    def _cancelEditor(self) -> None:
+        self._destroyEditor()
+
+    def _destroyEditor(self) -> None:
+        if self._editor is None:
+            return
+        editor = self._editor
+        self._editor = None
+        # Avoid re-entering _commitEditor when the editor loses focus during teardown.
+        editor.editingFinished.disconnect(self._commitEditor)
+        editor.removeEventFilter(self)
+        editor.deleteLater()
+        self.show()
+
+
 class ColorScaleWidget(QWidget):
     """Widget that displays a color scale with delta and absolute range."""
 
     # Signal to notify when unit is changed manually
     unitChanged = Signal(str)
+    minValueEdited = Signal(float)
+    maxValueEdited = Signal(float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1931,9 +2012,9 @@ class ColorScaleWidget(QWidget):
         self.setMinimumWidth(110)
         self.setMinimumHeight(200)
 
-        # New labels
-        self.delta_label = None
-        self.range_label = None
+        self.delta_label: Optional[QLabel] = None
+        self.max_label: Optional[EditableValueLabel] = None
+        self.min_label: Optional[EditableValueLabel] = None
 
         self.setupUI()
 
@@ -1950,14 +2031,26 @@ class ColorScaleWidget(QWidget):
         # This stretch is where we'll paint our gradient
         layout.addStretch(10)
 
-        # Range label at the bottom showing absolute min/max values
-        self.range_label = QLabel(f"Range: 0 {self.unit} - 0 {self.unit}")
-        self.range_label.setAlignment(Qt.AlignCenter)
-        # Make range label slightly smaller font
-        font = self.range_label.font()
-        font.setPointSize(font.pointSize() - 1)
-        self.range_label.setFont(font)
-        layout.addWidget(self.range_label)
+        # Range labels at the bottom: max above arrow above min, each editable.
+        smaller_font = self.font()
+        smaller_font.setPointSize(smaller_font.pointSize() - 1)
+
+        self.max_label = EditableValueLabel(self)
+        self.max_label.setAlignment(Qt.AlignCenter)
+        self.max_label.setFont(smaller_font)
+        self.max_label.valueEdited.connect(self.maxValueEdited)
+        layout.addWidget(self.max_label)
+
+        arrow_label = QLabel("↑")
+        arrow_label.setAlignment(Qt.AlignCenter)
+        arrow_label.setFont(smaller_font)
+        layout.addWidget(arrow_label)
+
+        self.min_label = EditableValueLabel(self)
+        self.min_label.setAlignment(Qt.AlignCenter)
+        self.min_label.setFont(smaller_font)
+        self.min_label.valueEdited.connect(self.minValueEdited)
+        layout.addWidget(self.min_label)
 
     @Slot(float, float)
     def setRange(self, v_min, v_max):
@@ -1983,11 +2076,10 @@ class ColorScaleWidget(QWidget):
         """Update the delta and range labels."""
         delta = self.v_max - self.v_min
         delta_str = units.Value(delta, self.unit).pretty_format(decimal_places=2)
-        min_str = units.Value(self.v_min, self.unit).pretty_format()
-        max_str = units.Value(self.v_max, self.unit).pretty_format()
 
         self.delta_label.setText(f"Δ = {delta_str}")
-        self.range_label.setText(f"{max_str}\n  ↑\n{min_str}")
+        self.max_label.setValue(self.v_max, self.unit)
+        self.min_label.setValue(self.v_min, self.unit)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         """Paint the color gradient scale."""
@@ -1997,10 +2089,10 @@ class ColorScaleWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         # Find the rectangle where we should draw the gradient
-        # This should be between the delta_label and range_label
+        # This should be between the delta_label and the max_label of the range stack
         content_rect = self.rect()
         top_margin = self.delta_label.y() + self.delta_label.height() + 2  # +2 for spacing
-        bottom_margin = self.height() - self.range_label.y() + 2  # +2 for spacing
+        bottom_margin = self.height() - self.max_label.y() + 2  # +2 for spacing
 
         # Calculate the gradient bar rectangle centered horizontally
         bar_width = 20
@@ -2126,6 +2218,8 @@ class MainWindow(QMainWindow):
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
         self.mesh_viewer.unitChanged.connect(self.color_scale.setUnit)
         self.mesh_viewer.colorMapChanged.connect(self.color_scale.setColorMap)
+        self.color_scale.minValueEdited.connect(self.mesh_viewer.setMinValue)
+        self.color_scale.maxValueEdited.connect(self.mesh_viewer.setMaxValue)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
