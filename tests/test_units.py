@@ -25,6 +25,9 @@ class TestParsing:
             # Units with prefixes
             ("100mA", 0.1, "A"),
             ("50uV", 0.00005, "V"),
+            # The Unicode micro sign is accepted in addition to the ASCII "u"
+            # so values produced by pretty_format() can be round-tripped.
+            ("50μV", 0.00005, "V"),
             ("2kR", 2000.0, "R"),
             ("1MV", 1000000.0, "V"),
             ("10nA", 1e-8, "A"),
@@ -151,7 +154,7 @@ class TestPrettyFormatDecimalPlaces:
     def test_specified_decimal_places(self):
         """Test formatting with specified decimal places."""
         value = units.Value(23.97654, "V")
-        
+
         # Test various decimal place counts
         assert value.pretty_format(0) == "24 V"
         assert value.pretty_format(1) == "24.0 V"
@@ -166,7 +169,7 @@ class TestPrettyFormatDecimalPlaces:
         assert small_value.pretty_format(1) == "24.0 μV"
         assert small_value.pretty_format(2) == "23.97 μV"
         assert small_value.pretty_format(4) == "23.9700 μV"
-        
+
         # Large value that gets kilo prefix
         large_value = units.Value(2397.654, "V")  # 2.397654 kV
         assert large_value.pretty_format(1) == "2.4 kV"
@@ -182,10 +185,10 @@ class TestPrettyFormatDecimalPlaces:
     def test_decimal_places_preserves_trailing_zeros(self):
         """Test that specified decimal places preserves trailing zeros."""
         value = units.Value(24.0, "V")
-        
+
         # With smart formatting, trailing zeros are removed
         assert value.pretty_format() == "24 V"
-        
+
         # With specified decimal places, trailing zeros are preserved
         assert value.pretty_format(0) == "24 V"
         assert value.pretty_format(1) == "24.0 V"
@@ -194,7 +197,7 @@ class TestPrettyFormatDecimalPlaces:
     def test_decimal_places_zero_value(self):
         """Test that zero is handled correctly with decimal places."""
         value = units.Value(0.0, "V")
-        
+
         # Zero should always be formatted as "0 unit" regardless of decimal places
         assert value.pretty_format(0) == "0 V"
         assert value.pretty_format(3) == "0 V"
@@ -203,7 +206,7 @@ class TestPrettyFormatDecimalPlaces:
     def test_decimal_places_very_small_values(self):
         """Test decimal places with very small values treated as zero."""
         value = units.Value(1e-15, "V")
-        
+
         # Very small values should be treated as zero regardless of decimal places
         assert value.pretty_format(0) == "0 V"
         assert value.pretty_format(5) == "0 V"
@@ -212,10 +215,10 @@ class TestPrettyFormatDecimalPlaces:
         """Test that smart precision and specified precision give different results."""
         # Value that would normally be formatted with 2 decimals in smart mode
         value = units.Value(12.345678, "V")
-        
+
         # Smart precision (should give 2 decimals for values 10-100)
         assert value.pretty_format() == "12.35 V"
-        
+
         # Specified precision
         assert value.pretty_format(1) == "12.3 V"
         assert value.pretty_format(4) == "12.3457 V"
@@ -228,9 +231,37 @@ class TestPrettyFormatDecimalPlaces:
         assert boundary_value.pretty_format(0) == "1000 V"  # Rounds up to 1000
         assert boundary_value.pretty_format(1) == "1000.0 V"
         assert boundary_value.pretty_format(3) == "999.999 V"
-        
+
         # Value just over 1000 (gets kilo prefix)
         kilo_value = units.Value(1000.001, "V")
         assert kilo_value.pretty_format(0) == "1 kV"
         assert kilo_value.pretty_format(3) == "1.000 kV"
         assert kilo_value.pretty_format(6) == "1.000001 kV"
+
+
+class TestParseFormatRoundtrip:
+    """Pretty-formatted output should be re-parseable back to the same Value.
+
+    This locks in the contract between the parser's prefix table and the
+    formatter's prefix table now that they share a single source of truth.
+    """
+
+    @pytest.mark.parametrize(
+        "value, unit",
+        [
+            (1.0, "V"),
+            (2.5e-9, "A"),       # n
+            (3.3e-6, "V"),       # μ — was previously not parseable
+            (4.7e-3, "A"),       # m
+            (1.5e3, "V"),        # k
+            (2.2e6, "R"),        # M
+            (1.0e9, "A"),        # G
+            (5.0e12, "V"),       # T
+            (-7.5e-6, "A"),
+        ]
+    )
+    def test_roundtrip(self, value, unit):
+        formatted = units.Value(value, unit).pretty_format()
+        reparsed = units.Value.parse(formatted)
+        assert reparsed.unit == unit
+        assert reparsed.value == pytest.approx(value)

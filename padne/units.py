@@ -2,10 +2,33 @@ import re
 from dataclasses import dataclass
 
 
-# SI Prefixes and their multipliers
-_SI_PREFIXES = {
-    'T': 1e12, 'G': 1e9, 'M': 1e6, 'k': 1e3,
-    'm': 1e-3, 'u': 1e-6, 'n': 1e-9, 'p': 1e-12,
+# Single source of truth for SI prefixes: (display symbol, decimal exponent).
+# The empty-prefix entry is only used for formatting (the base unit case).
+_SI_PREFIXES: tuple[tuple[str, int], ...] = (
+    ("T", 12),
+    ("G", 9),
+    ("M", 6),
+    ("k", 3),
+    ("", 0),
+    ("m", -3),
+    ("μ", -6),
+    ("n", -9),
+    ("p", -12),
+)
+
+# Alternative spellings accepted on input. "u" is the ASCII fallback for "μ".
+_PARSE_PREFIX_ALIASES = {"u": "μ"}
+
+_PREFIX_TO_MULTIPLIER: dict[str, float] = {
+    prefix: 10.0 ** exponent for prefix, exponent in _SI_PREFIXES if prefix
+}
+_PREFIX_TO_MULTIPLIER.update({
+    alias: _PREFIX_TO_MULTIPLIER[canonical]
+    for alias, canonical in _PARSE_PREFIX_ALIASES.items()
+})
+
+_EXPONENT_TO_PREFIX: dict[int, str] = {
+    exponent: prefix for prefix, exponent in _SI_PREFIXES
 }
 
 _KNOWN_UNITS = {
@@ -22,7 +45,7 @@ class Value:
     def parse(cls, s: str) -> "Value":
         """
         Parse a string containing a value with optional SI prefix and unit.
-        
+
         Examples:
             "100mA" -> Value(value=0.1, unit="A")
             "0.1A" -> Value(value=0.1, unit="A")
@@ -30,13 +53,13 @@ class Value:
             "100 mA" -> Value(value=0.1, unit="A")
             "50uV" -> Value(value=0.00005, unit="V")
             "10" -> Value(value=10.0, unit="")
-        
+
         Args:
             s: String to parse
-            
+
         Returns:
             Value object with parsed value and unit
-            
+
         Raises:
             ValueError: If the string cannot be parsed
         """
@@ -56,9 +79,9 @@ class Value:
         # Check for SI prefix
         last_character = s[-1]
         multiplier = 1.0
-        if last_character in _SI_PREFIXES:
+        if last_character in _PREFIX_TO_MULTIPLIER:
             s = s[:-1]
-            multiplier = _SI_PREFIXES[last_character]
+            multiplier = _PREFIX_TO_MULTIPLIER[last_character]
 
         # Great, the rest is just a float
         value = float(s) * multiplier
@@ -89,19 +112,6 @@ class Value:
         """
         if self.value == 0:
             return f"0 {self.unit}"
-
-        # Define SI prefixes and their corresponding powers of 10
-        prefixes = {
-            -12: "p",  # pico
-            -9: "n",   # nano
-            -6: "μ",   # micro
-            -3: "m",   # milli
-            0: "",     # base unit
-            3: "k",    # kilo
-            6: "M",    # mega
-            9: "G",    # giga
-            12: "T"    # tera
-        }
 
         # Determine the appropriate prefix for the value
         abs_value = abs(self.value)
@@ -141,4 +151,4 @@ class Value:
             formatted_value = "-" + formatted_value
 
         # Return the formatted string with prefix and unit
-        return f"{formatted_value} {prefixes[exponent]}{self.unit}"
+        return f"{formatted_value} {_EXPONENT_TO_PREFIX[exponent]}{self.unit}"
