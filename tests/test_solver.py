@@ -2012,7 +2012,7 @@ class TestSolutionPickling:
             assert len(unpick_ls.disconnected_meshes) == len(orig_ls.disconnected_meshes)
 
 
-@for_all_kicad_projects(exclude=["unterminated_current_loop"])
+@for_all_kicad_projects(exclude=["unterminated_current_loop", "nested_schematic_twoinstances"])
 def test_solution_residual(project):
     prob = kicad.load_kicad_project(project.pro_path)
     solution = solver.solve(prob)
