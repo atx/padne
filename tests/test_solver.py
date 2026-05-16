@@ -1099,7 +1099,8 @@ class TestSolverEndToEnd:
                                      "empty_via",
                                      "broken_trace_geometry",
                                      "many_meshes",
-                                     "many_meshes_many_vias"])
+                                     "many_meshes_many_vias",
+                                     "test_set_1"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
