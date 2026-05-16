@@ -56,9 +56,10 @@ test = [
 bench = [
     "asv>=0.6.0",
 ]
-# docs = [
-#     "sphinx",
-# ]
+docs = [
+    "sphinx>=7,<9",
+    "furo>=2024.0",
+]
 
 # Project URLs (Optional)
 [project.urls]
