@@ -60,6 +60,7 @@ docs = [
     "sphinx>=7,<9",
     "furo>=2024.0",
     "sphinx-autoapi>=3.0",
+    "sphinx-autobuild>=2024.0",
     "sphinx-design>=0.5",
 ]
 
