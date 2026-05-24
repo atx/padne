@@ -1,12 +1,13 @@
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/iostream.h>
-#include <pybind11/embed.h>
-#include <pybind11/operators.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/vector.h>
+#include <iostream>
 #include <iterator>
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <streambuf>
+#include <utility>
 
 
 //#define CGAL_USE_BASIC_VIEWER
@@ -28,8 +29,60 @@
 #include <CGAL/draw_constrained_triangulation_2.h>
 #endif
 
-namespace py = pybind11;
-using namespace pybind11::literals;
+namespace nb = nanobind;
+using namespace nb::literals;
+
+// Replacement for pybind11's scoped_ostream_redirect: routes std::cout (or
+// another std::ostream) through a Python file-like object for the lifetime
+// of the instance.
+// The mostly just serves for debugging allowing us to std::cout in C++.
+// TODO: This should be dropped and replaced with a more robust logging system.
+class scoped_ostream_redirect {
+public:
+    explicit scoped_ostream_redirect(
+        std::ostream& stream = std::cout,
+        nb::object py_stream = nb::module_::import_("sys").attr("stdout"))
+        : stream_(stream),
+          buf_(std::move(py_stream)),
+          old_buf_(stream.rdbuf(&buf_)) {}
+
+    ~scoped_ostream_redirect() { stream_.rdbuf(old_buf_); }
+
+    scoped_ostream_redirect(const scoped_ostream_redirect&) = delete;
+    scoped_ostream_redirect& operator=(const scoped_ostream_redirect&) = delete;
+
+private:
+    class py_streambuf : public std::streambuf {
+    public:
+        explicit py_streambuf(nb::object stream) : py_stream_(std::move(stream)) {}
+
+    protected:
+        std::streamsize xsputn(const char* s, std::streamsize n) override {
+            nb::gil_scoped_acquire gil;
+            py_stream_.attr("write")(nb::str(s, static_cast<size_t>(n)));
+            return n;
+        }
+        int_type overflow(int_type c) override {
+            if (c != traits_type::eof()) {
+                char ch = static_cast<char>(c);
+                xsputn(&ch, 1);
+            }
+            return c;
+        }
+        int sync() override {
+            nb::gil_scoped_acquire gil;
+            py_stream_.attr("flush")();
+            return 0;
+        }
+
+    private:
+        nb::object py_stream_;
+    };
+
+    std::ostream& stream_;
+    py_streambuf buf_;
+    std::streambuf* old_buf_;
+};
 
 // Type definitions
 typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
@@ -51,10 +104,10 @@ private:
     Polygon_with_holes_2 polygon_with_holes;
     std::vector<Segment_2> all_edges;  // All edges for distance calculations
 
-    void extract_polygon_from_shapely(py::object shapely_polygon);
+    void extract_polygon_from_shapely(nb::object shapely_polygon);
 
 public:
-    CGALPolygon(py::object shapely_polygon);
+    CGALPolygon(nb::object shapely_polygon);
     bool contains(double x, double y) const;
     double distance_to_boundary(double x, double y) const;
 };
@@ -77,7 +130,7 @@ private:
     int grid_to_index(int grid_i, int grid_j) const;
 
 public:
-    PolyBoundaryDistanceMap(py::object polygon, double quantization);
+    PolyBoundaryDistanceMap(nb::object polygon, double quantization);
     double query(double x, double y) const;  // Bilinear interpolation
 
     // Property accessors
@@ -342,19 +395,19 @@ static void set_mesher_seeds(Mesher& mesher,
 }
 
 void setup_mesher(Mesher& mesher,
-                  const py::object& py_config,
+                  const nb::object& py_config,
                   const std::vector<std::pair<double, double>>& seeds,
                   const PolyBoundaryDistanceMap* distance_map_ptr) {
     // Extract standard parameters
-    auto minimum_angle = py_config.attr("minimum_angle").cast<float>();
+    auto minimum_angle = nb::cast<float>(py_config.attr("minimum_angle"));
     auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
     auto b = 1 / (4*B*B);
-    auto maximum_size = py_config.attr("maximum_size").cast<float>();
+    auto maximum_size = nb::cast<float>(py_config.attr("maximum_size"));
 
     // Extract variable density parameters
-    auto min_distance = py_config.attr("variable_density_min_distance").cast<double>();
-    auto max_distance = py_config.attr("variable_density_max_distance").cast<double>();
-    auto size_factor = py_config.attr("variable_size_maximum_factor").cast<double>();
+    auto min_distance = nb::cast<double>(py_config.attr("variable_density_min_distance"));
+    auto max_distance = nb::cast<double>(py_config.attr("variable_density_max_distance"));
+    auto size_factor = nb::cast<double>(py_config.attr("variable_size_maximum_factor"));
 
     mesher.set_criteria(Criteria(
             b,
@@ -371,18 +424,18 @@ void setup_mesher(Mesher& mesher,
 }
 
 
-std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
+std::pair<nb::list, nb::list> convert_meshing_result_to_python(CDT &cdt)
 {
-    py::list py_vertices;
+    nb::list py_vertices;
     std::map<Vertex_handle, int> vertex_index_map;
     for (auto it = cdt.finite_vertices_begin(); it != cdt.finite_vertices_end(); ++it) {
         Point p = it->point();
         auto key = it->handle();
         vertex_index_map[key] = py_vertices.size();
-        py_vertices.append(py::make_tuple(p.x(), p.y()));
+        py_vertices.append(nb::make_tuple(p.x(), p.y()));
     }
 
-    py::list py_triangles;
+    nb::list py_triangles;
     for (auto it = cdt.finite_faces_begin(); it != cdt.finite_faces_end(); ++it) {
         if (!it->is_in_domain()) {
             continue; // Skip faces that are not in the domain
@@ -395,7 +448,7 @@ std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
         auto i1 = vertex_index_map[v1];
         auto i2 = vertex_index_map[v2];
 
-        py::tuple triangle = py::make_tuple(i0, i1, i2);
+        nb::tuple triangle = nb::make_tuple(i0, i1, i2);
         py_triangles.append(triangle);
     }
 
@@ -405,25 +458,19 @@ std::pair<py::list, py::list> convert_meshing_result_to_python(CDT &cdt)
 
 
 
-py::dict mesh(const py::object& py_config,
+nb::dict mesh(const nb::object& py_config,
               const std::vector<std::pair<double, double>>& vertices,
               const std::vector<std::pair<int, int>>& segments,
               const std::vector<std::pair<double, double>>& seeds,
-              const py::object& distance_map_obj) {
+              const PolyBoundaryDistanceMap* distance_map_ptr) {
 
     // Redirect via python during the scope of this function
-    py::scoped_ostream_redirect stream_redirect;
+    scoped_ostream_redirect stream_redirect;
 
     CDT cdt;
     setup_cdt(cdt, vertices, segments, seeds);
 
     Mesher mesher(cdt);
-
-    // Check if distance_map_obj is None, and extract pointer if not
-    const PolyBoundaryDistanceMap* distance_map_ptr = nullptr;
-    if (!distance_map_obj.is_none()) {
-        distance_map_ptr = &distance_map_obj.cast<const PolyBoundaryDistanceMap&>();
-    }
 
     setup_mesher(mesher, py_config, seeds, distance_map_ptr);
 
@@ -435,24 +482,24 @@ py::dict mesh(const py::object& py_config,
 
     auto [py_vertices, py_triangles] = convert_meshing_result_to_python(cdt);
 
-    py::dict result;
+    nb::dict result;
     result["vertices"] = py_vertices;
     result["triangles"] = py_triangles;
     return result;
 }
 
 // PolyBoundaryDistanceMap implementation
-PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(py::object polygon, double quantization)
+PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(nb::object polygon, double quantization)
     : quantization(quantization), cgal_polygon(polygon) {
 
     // Extract bounding box from polygon.bounds
     // Also add a margin such that coordinates "too far out" are reliably zero
     auto margin = 2 * quantization;
-    py::tuple bounds = polygon.attr("bounds");
-    min_x = bounds[0].cast<double>() - margin;
-    min_y = bounds[1].cast<double>() - margin;
-    max_x = bounds[2].cast<double>() + margin;
-    max_y = bounds[3].cast<double>() + margin;
+    nb::tuple bounds = polygon.attr("bounds");
+    min_x = nb::cast<double>(bounds[0]) - margin;
+    min_y = nb::cast<double>(bounds[1]) - margin;
+    max_x = nb::cast<double>(bounds[2]) + margin;
+    max_y = nb::cast<double>(bounds[3]) + margin;
 
     // Calculate grid dimensions
     width = static_cast<int>(std::ceil((max_x - min_x) / quantization));
@@ -544,30 +591,30 @@ int PolyBoundaryDistanceMap::grid_to_index(int grid_i, int grid_j) const {
 // Helper function to convert Shapely coordinate list to CGAL Polygon_2
 // NOTE: Shapely includes duplicate closing coordinate, but CGAL Polygon_2 is implicitly closed
 // We must skip the last coordinate to avoid creating zero-length edges
-static Polygon_2 shapely_coords_to_cgal_polygon(py::object coords) {
+static Polygon_2 shapely_coords_to_cgal_polygon(nb::object coords) {
     Polygon_2 polygon;
-    py::list coords_list = py::list(coords);
+    nb::list coords_list = nb::list(coords);
     size_t num_coords = coords_list.size();
 
     // Skip last coordinate (duplicate closing point)
     for (size_t i = 0; i < num_coords - 1; ++i) {
-        py::tuple pt = coords_list[i].cast<py::tuple>();
-        double x = pt[0].cast<double>();
-        double y = pt[1].cast<double>();
+        nb::tuple pt = nb::cast<nb::tuple>(coords_list[i]);
+        double x = nb::cast<double>(pt[0]);
+        double y = nb::cast<double>(pt[1]);
         polygon.push_back(Point(x, y));
     }
 
     return polygon;
 }
 
-CGALPolygon::CGALPolygon(py::object shapely_polygon) {
+CGALPolygon::CGALPolygon(nb::object shapely_polygon) {
     extract_polygon_from_shapely(shapely_polygon);
 }
 
-void CGALPolygon::extract_polygon_from_shapely(py::object shapely_polygon) {
+void CGALPolygon::extract_polygon_from_shapely(nb::object shapely_polygon) {
     // Extract exterior coordinates
-    py::object exterior = shapely_polygon.attr("exterior");
-    py::object coords = exterior.attr("coords");
+    nb::object exterior = shapely_polygon.attr("exterior");
+    nb::object coords = exterior.attr("coords");
 
     // Convert exterior to CGAL polygon
     Polygon_2 outer_boundary = shapely_coords_to_cgal_polygon(coords);
@@ -584,9 +631,9 @@ void CGALPolygon::extract_polygon_from_shapely(py::object shapely_polygon) {
 
     // Extract holes if any
     std::vector<Polygon_2> holes;
-    py::object interiors = shapely_polygon.attr("interiors");
-    for (auto interior : interiors) {
-        py::object hole_coords = interior.attr("coords");
+    nb::object interiors = shapely_polygon.attr("interiors");
+    for (nb::handle interior : interiors) {
+        nb::object hole_coords = interior.attr("coords");
 
         Polygon_2 hole = shapely_coords_to_cgal_polygon(hole_coords);
 
@@ -641,10 +688,10 @@ double CGALPolygon::distance_to_boundary(double x, double y) const {
     return std::sqrt(min_squared_dist);
 }
 
-// PYBIND11_MODULE defines the module initialization function.
-// The first argument (R"_core") MUST match the first argument of pybind11_add_module in CMakeLists.txt.
+// NB_MODULE defines the module initialization function.
+// The first argument ("_cgal") MUST match the first argument of nanobind_add_module in CMakeLists.txt.
 // The 'm' variable is the module object.
-PYBIND11_MODULE(_cgal, m) {
+NB_MODULE(_cgal, m) {
     // Optional: Add a docstring to the module.
     m.doc() = R"pbdoc(
         Padne internal libcgal wrapper
@@ -655,19 +702,23 @@ PYBIND11_MODULE(_cgal, m) {
            :toctree: _generate
     )pbdoc";
 
-    m.def("mesh", &mesh, R"pbdoc(
+    m.def("mesh", &mesh,
+          "config"_a, "vertices"_a, "segments"_a, "seeds"_a,
+          "distance_map"_a.none(),
+          R"pbdoc(
         Meshes a set of points and segments using CGAL.
         Args:
-            mesher: The mesher object to use.
+            config: Mesher configuration object.
             vertices: A list of vertices (points).
             segments: A list of segments (edges).
             seeds: A list of seed points for the meshing process.
+            distance_map: Optional PolyBoundaryDistanceMap, or None.
         Returns:
             A dictionary containing the results of the meshing process.
     )pbdoc");
 
-    py::class_<CGALPolygon>(m, "CGALPolygon")
-        .def(py::init<py::object>(), "shapely_polygon"_a,
+    nb::class_<CGALPolygon>(m, "CGALPolygon")
+        .def(nb::init<nb::object>(), "shapely_polygon"_a,
              "Create CGAL polygon from Shapely polygon")
         .def("contains", &CGALPolygon::contains, "x"_a, "y"_a,
              "Check if point (x,y) is inside polygon")
@@ -675,20 +726,20 @@ PYBIND11_MODULE(_cgal, m) {
              "x"_a, "y"_a,
              "Compute distance from point to nearest boundary");
 
-    py::class_<PolyBoundaryDistanceMap>(m, "PolyBoundaryDistanceMap")
-        .def(py::init<py::object, double>(),
+    nb::class_<PolyBoundaryDistanceMap>(m, "PolyBoundaryDistanceMap")
+        .def(nb::init<nb::object, double>(),
              "polygon"_a, "quantization"_a,
              "Create distance map from shapely polygon")
         .def("query", &PolyBoundaryDistanceMap::query,
              "x"_a, "y"_a,
              "Query distance at point using bilinear interpolation")
-        .def_property_readonly("min_x", &PolyBoundaryDistanceMap::get_min_x)
-        .def_property_readonly("max_x", &PolyBoundaryDistanceMap::get_max_x)
-        .def_property_readonly("min_y", &PolyBoundaryDistanceMap::get_min_y)
-        .def_property_readonly("max_y", &PolyBoundaryDistanceMap::get_max_y)
-        .def_property_readonly("quantization", &PolyBoundaryDistanceMap::get_quantization)
-        .def_property_readonly("width", &PolyBoundaryDistanceMap::get_width)
-        .def_property_readonly("height", &PolyBoundaryDistanceMap::get_height);
+        .def_prop_ro("min_x", &PolyBoundaryDistanceMap::get_min_x)
+        .def_prop_ro("max_x", &PolyBoundaryDistanceMap::get_max_x)
+        .def_prop_ro("min_y", &PolyBoundaryDistanceMap::get_min_y)
+        .def_prop_ro("max_y", &PolyBoundaryDistanceMap::get_max_y)
+        .def_prop_ro("quantization", &PolyBoundaryDistanceMap::get_quantization)
+        .def_prop_ro("width", &PolyBoundaryDistanceMap::get_width)
+        .def_prop_ro("height", &PolyBoundaryDistanceMap::get_height);
 
     m.attr("cgal_version") = CGAL_VERSION_STR;
 
