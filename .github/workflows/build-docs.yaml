@@ -29,7 +29,7 @@ jobs:
 
     - name: Build HTML documentation
       run: |
-        sphinx-build -b html docs docs/_build/html
+        make -C docs html
 
     - name: Upload documentation artifact
       uses: actions/upload-artifact@v4
