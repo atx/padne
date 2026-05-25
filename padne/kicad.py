@@ -79,6 +79,13 @@ pcbnew = find_pcbnew_module()
 COPPER_CONDUCTIVITY = 5.95e4
 
 
+def is_kicad_version_at_least(major: int, minor: int) -> bool:
+    installed_major, installed_minor = (
+        int(x) for x in pcbnew.GetMajorMinorVersion().split(".")[:2]
+    )
+    return (installed_major, installed_minor) >= (major, minor)
+
+
 def nm_to_mm(f: float) -> float:
     return f / 1000000
 
@@ -1389,7 +1396,13 @@ def extract_board_outline(board: pcbnew.BOARD) -> Optional[shapely.geometry.Mult
 
     outline_set = pcbnew.SHAPE_POLY_SET()
 
-    if not board.GetBoardPolygonOutlines(outline_set):
+    # KiCad 10 added a required `aInferOutlineIfNecessary` argument; pass True
+    # to match the implicit KiCad 9 behavior.
+    if is_kicad_version_at_least(10, 0):
+        ok = board.GetBoardPolygonOutlines(outline_set, True)
+    else:
+        ok = board.GetBoardPolygonOutlines(outline_set)
+    if not ok:
         # No outline defined or it is malformed in some way
         log.debug("No valid board outline found")
         return None
