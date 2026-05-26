@@ -1,5 +1,10 @@
 name: 'Setup padne'
 description: 'Install system dependencies, KiCad, and padne itself'
+inputs:
+  kicad-version:
+    description: 'KiCad major.minor version to install (e.g. 9.0, 10.0)'
+    required: false
+    default: '9.0'
 runs:
   using: 'composite'
   steps:
@@ -12,7 +17,7 @@ runs:
     - name: Add KiCad PPA and install KiCad
       shell: bash
       run: |
-        sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
+        sudo add-apt-repository --yes ppa:kicad/kicad-${{ inputs.kicad-version }}-releases
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends kicad
 

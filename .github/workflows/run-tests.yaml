@@ -7,8 +7,12 @@ permissions:
 
 jobs:
   build_and_test:
-    name: "Run Tests"
+    name: "Run Tests (KiCad ${{ matrix.kicad-version }})"
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        kicad-version: ['9.0', '10.0']
     steps:
     - name: Check out repository
       uses: actions/checkout@v4
@@ -17,6 +21,8 @@ jobs:
 
     - name: Setup Padne
       uses: ./.github/actions/setup-padne
+      with:
+        kicad-version: ${{ matrix.kicad-version }}
 
     - name: Run tests with pytest and generate report
       run: |
@@ -26,8 +32,8 @@ jobs:
       uses: dorny/test-reporter@v1
       if: always() # Always run this step to publish results, even if tests fail
       with:
-        name: Pytest Results
+        name: Pytest Results (KiCad ${{ matrix.kicad-version }})
         path: pytest-results.xml
         reporter: java-junit
         fail-on-error: 'true'
-        badge-title: 'Tests'
+        badge-title: 'Tests (KiCad ${{ matrix.kicad-version }})'
