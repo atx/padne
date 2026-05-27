@@ -17,7 +17,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        # Full history + tags so setuptools-scm computes the real version
+        # Polyversion enumerates refs from the local repo; needs full history + tags.
         fetch-depth: 0
 
     - name: Setup Padne
@@ -27,13 +27,13 @@ jobs:
       run: |
         pip3 install --break-system-packages --user -e .[docs]
 
-    - name: Build HTML documentation
+    - name: Build multi-version documentation
       run: |
-        make -C docs html
+        make -C docs polyversion
 
     - name: Upload documentation artifact
       uses: actions/upload-artifact@v4
       with:
         name: padne-docs
-        path: docs/_build/html
+        path: docs/_build/polyversion
         retention-days: 90

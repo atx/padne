@@ -1,0 +1,29 @@
+{# Version switcher rendered when docs are built by sphinx-polyversion.
+   The `revisions`/`branches`/`tags`/`current` variables come from poly.py's
+   `data` factory and are merged into html_context by sphinx_polyversion.load
+   (called from conf.py). On non-polyversion builds the guard skips the block. #}
+{% if revisions is defined and revisions %}
+{# Pre-compute the relative path back up to the multi-version output root.
+   `pagename` looks like `index` or `api/autoapi/padne/cli/index`; one extra
+   `..` accounts for the per-version subdir (master/, v0.3/, ...). #}
+{% set _pv_root = '../' * (pagename.count('/') + 1) %}
+<div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Versions</span></p>
+  <ul>
+    {% if tags %}
+      {% for rev in tags %}
+      <li class="toctree-l1{% if current and rev.name == current.name %} current current-page{% endif %}">
+        <a class="reference internal" href="{{ _pv_root }}{{ rev.name }}/index.html">{{ rev.name }}</a>
+      </li>
+      {% endfor %}
+    {% endif %}
+    {% if branches %}
+      {% for rev in branches %}
+      <li class="toctree-l1{% if current and rev.name == current.name %} current current-page{% endif %}">
+        <a class="reference internal" href="{{ _pv_root }}{{ rev.name }}/index.html">{{ rev.name }} <em>(dev)</em></a>
+      </li>
+      {% endfor %}
+    {% endif %}
+  </ul>
+</div>
+{% endif %}

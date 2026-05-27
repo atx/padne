@@ -1,14 +1,44 @@
 """Sphinx configuration for padne documentation."""
 
-from importlib.metadata import version as _pkg_version
+import os
+import subprocess
 from pathlib import Path
+
+from sphinx_polyversion import load as _poly_load
+# Importing GitRef registers it (and GitRefType) with sphinx_polyversion's
+# global JSON decoder; without it `load()` returns plain dicts.
+from sphinx_polyversion.git import GitRef as _GitRef  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 project = "padne"
 author = "Josef Gajdusek"
 copyright = "2026, Josef Gajdusek"
 
-release = _pkg_version("padne")
-version = ".".join(release.split(".")[:2])
+
+def _local_git_label() -> str:
+    """Return the tag at HEAD if any, else the branch name, else 'unknown'."""
+    repo = Path(__file__).resolve().parent.parent
+    for cmd in (
+        ["git", "describe", "--exact-match", "--tags", "HEAD"],
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+    ):
+        result = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return "unknown"
+
+
+# When invoked by sphinx-polyversion, derive the version label and the linkcode
+# git ref from the ref currently being built. Otherwise look at git directly —
+# tag name if HEAD is on a tag, branch name otherwise. Avoids the misleading
+# `0.3` that setuptools-scm produces for unreleased dev commits.
+if "POLYVERSION_DATA" in os.environ:
+    _poly = _poly_load(globals())
+    release = _poly["current"].name
+else:
+    release = _local_git_label()
+
+version = release
+_GIT_REF = release
 
 extensions = [
     "autoapi.extension",
@@ -18,11 +48,26 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "_polyversion", "Thumbs.db", ".DS_Store"]
 
 html_theme = "furo"
 html_static_path = ["_static"]
 html_title = f"padne {version}"
+
+# Mirrors Furo's default sidebar list from `furo/theme/furo/theme.conf`, plus
+# our `sidebar/versions.html` partial after the navigation tree. Furo has no
+# hook to append a single item, so the whole list is redeclared.
+html_sidebars = {
+    "**": [
+        "sidebar/brand.html",
+        "sidebar/search.html",
+        "sidebar/scroll-start.html",
+        "sidebar/navigation.html",
+        "sidebar/versions.html",
+        "sidebar/scroll-end.html",
+        "sidebar/variant-selector.html",
+    ],
+}
 html_theme_options = {
     "announcement": "This documentation is currently a work in progress stub.",
     "footer_icons": [
@@ -53,7 +98,6 @@ autoapi_options = [
 ]
 
 _REPO_URL = "https://github.com/atx/padne"
-_GIT_REF = "master"
 _AUTOAPI_DIR = (Path(__file__).resolve().parent / ".." / "padne").resolve()
 _AUTOAPI_OBJECTS: dict = {}
 
