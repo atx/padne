@@ -56,9 +56,14 @@ test = [
 bench = [
     "asv>=0.6.0",
 ]
-# docs = [
-#     "sphinx",
-# ]
+docs = [
+    "sphinx>=7,<9",
+    "furo>=2024.0",
+    "sphinx-autoapi>=3.0",
+    "sphinx-autobuild>=2024.0",
+    "sphinx-design>=0.5",
+    "sphinx-polyversion>=2.0",
+]
 
 # Project URLs (Optional)
 [project.urls]
