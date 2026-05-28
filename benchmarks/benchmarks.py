@@ -13,6 +13,60 @@ import pcbnew
 from tests.conftest import _kicad_test_projects
 
 
+def _box(size: float) -> shapely.geometry.Polygon:
+    """A `size`x`size` square anchored at the origin."""
+    return shapely.geometry.box(0, 0, size, size)
+
+
+def _rect_with_circular_hole() -> shapely.geometry.Polygon:
+    """80x80 square with a 50mm-diameter hole at (40, 40)."""
+    return _box(80).difference(shapely.geometry.Point(40, 40).buffer(25))
+
+
+def _pinned_default_mesher_config() -> "Mesher.Config":
+    """
+    Mesher.Config with current defaults written out explicitly.
+
+    Pinned so that benchmark numbers stay comparable across commits even if
+    Mesher.Config defaults change. Keep this in sync with the project's
+    intended baseline, NOT with whatever the defaults happen to be today.
+    """
+    return Mesher.Config(
+        minimum_angle=20.0,
+        maximum_size=0.6,
+        variable_density_min_distance=0.5,
+        variable_density_max_distance=3.0,
+        variable_size_maximum_factor=3.0,
+        distance_map_quantization=1.0,
+    )
+
+
+def _load_problems(project_names: list) -> dict:
+    """
+    Load multiple test projects into a `{name: Problem}` dict.
+
+    Scans the test-project directory only once per call, unlike repeated
+    `_kicad_test_projects()` lookups.
+    """
+    test_projects = _kicad_test_projects()
+    return {
+        name: kicad.load_kicad_project(test_projects[name].pro_path)
+        for name in project_names
+    }
+
+
+def _solver_prelude(prob: problem.Problem):
+    """
+    Run the pre-meshing phases of `solver.solve` and return their results.
+
+    Returns (strtrees, connectivity_graph, connected_layer_mesh_pairs).
+    """
+    strtrees = solver.construct_strtrees_from_layers(prob.layers)
+    connectivity_graph = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+    connected_pairs = solver.find_connected_layer_geom_indices(connectivity_graph)
+    return strtrees, connectivity_graph, connected_pairs
+
+
 def _fix_numpy_array_views(root):
     """
     Iteratively walk an object graph and copy any numpy arrays that don't own their data.
@@ -65,17 +119,9 @@ class MesherSuite:
 
     def setup(self, *_):
         """Create the three test geometries once for all benchmarks."""
-        # 1. Normal rectangle: 30x30mm
-        self.normal_rectangle = shapely.geometry.box(0, 0, 30, 30)
-
-        # 2. Large rectangle: 100x100mm
-        self.large_rectangle = shapely.geometry.box(0, 0, 100, 100)
-
-        # 3. Large rectangle with circular hole: 80x80mm with 50mm diameter hole
-        outer = shapely.geometry.box(0, 0, 80, 80)
-        # Create circle centered at (40, 40) with 25mm radius (50mm diameter)
-        hole = shapely.geometry.Point(40, 40).buffer(25)
-        self.rectangle_with_hole = outer.difference(hole)
+        self.normal_rectangle = _box(30)
+        self.large_rectangle = _box(100)
+        self.rectangle_with_hole = _rect_with_circular_hole()
 
         # Store geometries in a dict for parametrized access
         self.geometries = {
@@ -183,26 +229,13 @@ class FromTriangleSoupSuite:
     """Benchmarks for Mesh.from_triangle_soup() half-edge topology construction."""
 
     def setup(self, *_):
-        small_rect = shapely.geometry.box(0, 0, 30, 30)
-        large_rect = shapely.geometry.box(0, 0, 100, 100)
-        outer = shapely.geometry.box(0, 0, 80, 80)
-        hole = shapely.geometry.Point(40, 40).buffer(25)
-        rect_with_hole = outer.difference(hole)
-
         geometries = {
-            'small_rect': small_rect,
-            'large_rect': large_rect,
-            'rect_with_hole': rect_with_hole,
+            'small_rect': _box(30),
+            'large_rect': _box(100),
+            'rect_with_hole': _rect_with_circular_hole(),
         }
 
-        config = Mesher.Config(
-            minimum_angle=20.0,
-            maximum_size=0.6,
-            variable_density_min_distance=0.5,
-            variable_density_max_distance=3.0,
-            variable_size_maximum_factor=3.0,
-            distance_map_quantization=1.0,
-        )
+        config = _pinned_default_mesher_config()
         mesher = Mesher(config)
 
         self.triangle_soups = {}
@@ -250,20 +283,15 @@ class SolverSuite:
 
     def setup_cache(self):
         """Cache loaded projects and pre-computed solutions for benchmarks."""
-        test_projects = _kicad_test_projects()
         # Expanded project list to include simple_geometry
         project_names = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
 
-        cache = {'problems': {}, 'solutions': {}}
-
-        for project_name in project_names:
-            project = test_projects[project_name]
-            problem = kicad.load_kicad_project(project.pro_path)
-            cache['problems'][project_name] = problem
+        problems = _load_problems(project_names)
+        return {
+            'problems': problems,
             # Pre-compute solutions for memory benchmarks
-            cache['solutions'][project_name] = solver.solve(problem)
-
-        return cache
+            'solutions': {name: solver.solve(prob) for name, prob in problems.items()},
+        }
 
     def setup(self, cache, project_name):
         """Fix numpy array views in cache after unpickling."""
@@ -432,9 +460,10 @@ class LaplaceOperatorSuite:
 
     def setup(self, *_):
         """Create synthetic meshes for Laplace operator benchmarks."""
-        # Create synthetic rectangle geometries
+        # Geometries here are different from the other suites (aspect ratios
+        # chosen to stress Laplace assembly, not mesher quality).
         self.small_rectangle = shapely.geometry.box(0, 0, 10, 10)   # 10x10mm
-        self.big_rectangle = shapely.geometry.box(0, 0, 100, 100)   # 100x100mm
+        self.big_rectangle = _box(100)                              # 100x100mm
         self.long_rectangle = shapely.geometry.box(0, 0, 1, 100)    # 1x100mm
 
         self.geometries = {
@@ -443,19 +472,8 @@ class LaplaceOperatorSuite:
             'long_rectangle': self.long_rectangle
         }
 
-        # Explicitly specify default Mesher config parameters to avoid benchmark
-        # performance changes if defaults change
-        config = Mesher.Config(
-            minimum_angle=20.0,
-            maximum_size=0.6,
-            variable_density_min_distance=0.5,
-            variable_density_max_distance=3.0,
-            variable_size_maximum_factor=3.0,
-            distance_map_quantization=1.0
-        )
-
         # Generate meshes for each geometry
-        mesher = Mesher(config)
+        mesher = Mesher(_pinned_default_mesher_config())
         self.meshes = {}
         for name, geometry in self.geometries.items():
             self.meshes[name] = mesher.poly_to_mesh(geometry)
@@ -479,19 +497,14 @@ class ConnectivitySuite:
 
     def setup_cache(self):
         """Cache loaded projects and connectivity graphs for benchmarks."""
-        test_projects = _kicad_test_projects()
         project_names = ['simple_geometry', 'disconnected_components', 'two_big_planes', 'via_tht_4layer', 'many_meshes', 'many_meshes_many_vias']
 
-        cache = {'problems': {}, 'connectivity_graphs': {}}
+        problems = _load_problems(project_names)
+        connectivity_graphs = {}
+        for name, prob in problems.items():
+            _, connectivity_graphs[name], _ = _solver_prelude(prob)
 
-        for project_name in project_names:
-            project = test_projects[project_name]
-            cache['problems'][project_name] = kicad.load_kicad_project(project.pro_path)
-            strtrees = solver.construct_strtrees_from_layers(cache['problems'][project_name].layers)
-            cache['connectivity_graphs'][project_name] = \
-                solver.ConnectivityGraph.create_from_problem(cache['problems'][project_name], strtrees)
-
-        return cache
+        return {'problems': problems, 'connectivity_graphs': connectivity_graphs}
 
     def time_connectivity_graph_construction(self, cache, project_name):
         """Time construction of connectivity graph from layer geometry."""
@@ -517,30 +530,19 @@ class MeshGenerationSuite:
 
     def setup_cache(self):
         """Cache loaded projects and pre-computed data for mesh generation benchmarks."""
-        test_projects = _kicad_test_projects()
         project_names = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
 
-        cache = {
-            'problems': {},
-            'strtrees': {},
-            'connected_layer_mesh_pairs': {}
+        problems = _load_problems(project_names)
+        strtrees = {}
+        connected_pairs = {}
+        for name, prob in problems.items():
+            strtrees[name], _, connected_pairs[name] = _solver_prelude(prob)
+
+        return {
+            'problems': problems,
+            'strtrees': strtrees,
+            'connected_layer_mesh_pairs': connected_pairs,
         }
-
-        for project_name in project_names:
-            project = test_projects[project_name]
-            problem = kicad.load_kicad_project(project.pro_path)
-            cache['problems'][project_name] = problem
-
-            # Pre-compute STRtrees
-            strtrees = solver.construct_strtrees_from_layers(problem.layers)
-            cache['strtrees'][project_name] = strtrees
-
-            # Pre-compute connectivity graph and connected pairs
-            connectivity_graph = solver.ConnectivityGraph.create_from_problem(problem, strtrees)
-            connected_pairs = solver.find_connected_layer_geom_indices(connectivity_graph)
-            cache['connected_layer_mesh_pairs'][project_name] = connected_pairs
-
-        return cache
 
     def time_generate_meshes_for_problem(self, cache, project_name):
         """Time mesh generation for different KiCad projects."""
@@ -574,12 +576,9 @@ class DistanceMapSuite:
 
     def setup(self, *_):
         """Create polygons and distance maps for benchmarking."""
-        # Create the same geometries as MeshMemorySuite
-        self.small_rectangle = shapely.geometry.box(0, 0, 30, 30)
-        self.large_rectangle = shapely.geometry.box(0, 0, 100, 100)
-        outer = shapely.geometry.box(0, 0, 80, 80)
-        hole = shapely.geometry.Point(40, 40).buffer(25)
-        self.rectangle_with_hole = outer.difference(hole)
+        self.small_rectangle = _box(30)
+        self.large_rectangle = _box(100)
+        self.rectangle_with_hole = _rect_with_circular_hole()
 
         self.geometries = {
             'small_rect': self.small_rectangle,
@@ -625,12 +624,9 @@ class _MeshWithFormsSuiteBase:
 
     def setup(self, *_):
         """Create geometries, meshes, and forms for benchmarking."""
-        # Create geometries
-        self.small_rect = shapely.geometry.box(0, 0, 30, 30)
-        self.large_rect = shapely.geometry.box(0, 0, 100, 100)
-        outer = shapely.geometry.box(0, 0, 80, 80)
-        hole = shapely.geometry.Point(40, 40).buffer(25)
-        self.rect_with_hole = outer.difference(hole)
+        self.small_rect = _box(30)
+        self.large_rect = _box(100)
+        self.rect_with_hole = _rect_with_circular_hole()
 
         self.geometries = {
             'small_rect': self.small_rect,
@@ -638,16 +634,7 @@ class _MeshWithFormsSuiteBase:
             'rect_with_hole': self.rect_with_hole
         }
 
-        # Use explicit config for reproducibility
-        config = Mesher.Config(
-            minimum_angle=20.0,
-            maximum_size=0.6,
-            variable_density_min_distance=0.5,
-            variable_density_max_distance=3.0,
-            variable_size_maximum_factor=3.0,
-            distance_map_quantization=1.0
-        )
-        mesher = Mesher(config)
+        mesher = Mesher(_pinned_default_mesher_config())
 
         # Build meshes and forms
         self.meshes = {}

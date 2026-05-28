@@ -710,6 +710,41 @@ def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.T
     return power_density
 
 
+def allocate_system(vindex: VertexIndexer,
+                    node_indexer: NodeIndexer
+                    ) -> tuple[scipy.sparse.lil_matrix, np.ndarray]:
+    """
+    Allocate the global system matrix L and right-hand side vector r.
+
+    The size accounts for mesh vertices, internal network nodes, extra
+    variables for voltage sources/regulators, plus one ground-node row.
+    """
+    N = len(vindex.global_index_to_vertex_index) + \
+        node_indexer.internal_node_count + \
+        len(node_indexer.extra_source_to_global_index) + \
+        1  # +1 for the ground node
+    log.info(f"System matrix size: {N}x{N} variables")
+    L = scipy.sparse.lil_matrix((N, N), dtype=DTYPE)
+    r = np.zeros(N, dtype=DTYPE)
+    return L, r
+
+
+def solve_system(L: scipy.sparse.lil_matrix,
+                 r: np.ndarray) -> tuple[np.ndarray, SolverInfo]:
+    """
+    Solve L * v = r and return the solution vector together with diagnostics.
+    """
+    L_csc = L.tocsc()
+    v = scipy.sparse.linalg.spsolve(L_csc, r)
+
+    residual_norm = np.linalg.norm(L_csc @ v - r)
+    solver_info = SolverInfo(
+        ground_node_current=v[-1],
+        residual_norm=residual_norm,
+    )
+    return v, solver_info
+
+
 def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = None) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -768,13 +803,7 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # where L is the "laplace operator",
     # v is the voltage vector and
     # r is the right-hand side "source" vector
-    N = len(vindex.global_index_to_vertex_index) + \
-        node_indexer.internal_node_count + \
-        len(node_indexer.extra_source_to_global_index) + \
-        1  # +1 for the ground node
-    log.info(f"System matrix size: {N}x{N} variables")
-    L = scipy.sparse.lil_matrix((N, N), dtype=DTYPE)
-    r = np.zeros(N, dtype=DTYPE)
+    L, r = allocate_system(vindex, node_indexer)
 
     # Now we compute the Laplace operator for each mesh and insert it into the
     # global L matrix.
@@ -807,23 +836,13 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
     log.info("Solving the system of equations")
-    L_csc = L.tocsc()
-    v = scipy.sparse.linalg.spsolve(L_csc, r)
+    v, solver_info = solve_system(L, r)
 
-    # Compute solver diagnostics
-    ground_node_current = v[-1]
-    residual = L_csc @ v - r
-    residual_norm = np.linalg.norm(residual)
-    solver_info = SolverInfo(
-        ground_node_current=ground_node_current,
-        residual_norm=residual_norm,
-    )
-
-    if not np.isclose(ground_node_current, 0):
+    if not np.isclose(solver_info.ground_node_current, 0):
         # This is a warning, but we still continue to produce the solution object
         # since it may still be useful for the user.
         warnings.warn(
-            f"Ground node current is not zero ({v[-1]} A), this may indicate an issue with the problem being solved. "
+            f"Ground node current is not zero ({solver_info.ground_node_current} A), this may indicate an issue with the problem being solved. "
             "Check for unterminated current loops or floating connected components. "
             "This may be harmless if the current is small, but it may indicate an ill-conditioned system.",
             SolverWarning
