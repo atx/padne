@@ -55,18 +55,6 @@ def _load_problems(project_names: list) -> dict:
     }
 
 
-def _solver_prelude(prob: problem.Problem):
-    """
-    Run the pre-meshing phases of `solver.solve` and return their results.
-
-    Returns (strtrees, connectivity_graph, connected_layer_mesh_pairs).
-    """
-    strtrees = solver.construct_strtrees_from_layers(prob.layers)
-    connectivity_graph = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
-    connected_pairs = solver.find_connected_layer_geom_indices(connectivity_graph)
-    return strtrees, connectivity_graph, connected_pairs
-
-
 def _fix_numpy_array_views(root):
     """
     Iteratively walk an object graph and copy any numpy arrays that don't own their data.
@@ -502,7 +490,7 @@ class ConnectivitySuite:
         problems = _load_problems(project_names)
         connectivity_graphs = {}
         for name, prob in problems.items():
-            _, connectivity_graphs[name], _ = _solver_prelude(prob)
+            _, connectivity_graphs[name], _ = solver.compute_connectivity(prob)
 
         return {'problems': problems, 'connectivity_graphs': connectivity_graphs}
 
@@ -536,7 +524,7 @@ class MeshGenerationSuite:
         strtrees = {}
         connected_pairs = {}
         for name, prob in problems.items():
-            strtrees[name], _, connected_pairs[name] = _solver_prelude(prob)
+            strtrees[name], _, connected_pairs[name] = solver.compute_connectivity(prob)
 
         return {
             'problems': problems,
@@ -569,6 +557,104 @@ class MeshGenerationSuite:
 
     track_mesh_count.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
     track_mesh_count.param_names = ['project']
+
+
+class SystemAssemblySuite:
+    """
+    Benchmarks for the phases between meshing and the layer-solution
+    construction: dead-network filtering, NodeIndexer construction,
+    sparse-matrix assembly, and the linear solve.
+
+    `setup_cache` walks through every phase from problem loading up to a
+    fully-assembled `(L, r)` system per project. Each timed method then
+    re-runs (or directly consumes) the phase it wants to isolate.
+    """
+
+    PARAMS = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
+
+    def setup_cache(self):
+        cache = {}
+        for name, prob in _load_problems(self.PARAMS).items():
+            strtrees, _, connected_pairs = solver.compute_connectivity(prob)
+            mesher = Mesher(_pinned_default_mesher_config())
+            meshes, m2l = solver.generate_meshes_for_problem(
+                prob, mesher, connected_pairs, strtrees
+            )
+            vindex = solver.VertexIndexer.create(meshes)
+            filtered_networks = solver.filter_dead_networks(prob, strtrees, connected_pairs)
+            node_indexer = solver.NodeIndexer.create(
+                prob, meshes, m2l, vindex, filtered_networks
+            )
+            L, r = solver.assemble_system(
+                prob, meshes, m2l, vindex, filtered_networks, node_indexer
+            )
+
+            cache[name] = {
+                'problem': prob,
+                'meshes': meshes,
+                'mesh_index_to_layer_index': m2l,
+                'vindex': vindex,
+                'strtrees': strtrees,
+                'connected_pairs': connected_pairs,
+                'filtered_networks': filtered_networks,
+                'node_indexer': node_indexer,
+                'L': L,
+                'r': r,
+            }
+        return cache
+
+    def setup(self, cache, project_name):
+        _fix_numpy_array_views(cache)
+
+    def time_network_filtering(self, cache, project_name):
+        """Time `solver.filter_dead_networks` over all networks of a project."""
+        st = cache[project_name]
+        solver.filter_dead_networks(st['problem'], st['strtrees'], st['connected_pairs'])
+
+    time_network_filtering.params = PARAMS
+    time_network_filtering.param_names = ['project']
+
+    def time_node_indexer_create(self, cache, project_name):
+        """Time `NodeIndexer.create` (KD-trees per layer + Connection lookup)."""
+        st = cache[project_name]
+        solver.NodeIndexer.create(
+            st['problem'],
+            st['meshes'],
+            st['mesh_index_to_layer_index'],
+            st['vindex'],
+            st['filtered_networks'],
+        )
+
+    time_node_indexer_create.params = PARAMS
+    time_node_indexer_create.param_names = ['project']
+
+    def time_assemble_system(self, cache, project_name):
+        """Time `solver.assemble_system` (allocate + Laplacians + networks +
+        ground node). Excludes tocsc and spsolve."""
+        st = cache[project_name]
+        solver.assemble_system(
+            st['problem'], st['meshes'], st['mesh_index_to_layer_index'],
+            st['vindex'], st['filtered_networks'], st['node_indexer'],
+        )
+
+    time_assemble_system.params = PARAMS
+    time_assemble_system.param_names = ['project']
+
+    def time_solve_system(self, cache, project_name):
+        """Time `solver.solve_system` (tocsc + spsolve + residual norm) on a
+        pre-assembled `(L, r)`."""
+        st = cache[project_name]
+        solver.solve_system(st['L'], st['r'])
+
+    time_solve_system.params = PARAMS
+    time_solve_system.param_names = ['project']
+
+    def track_system_matrix_size(self, cache, project_name):
+        """Track the dimension N of the global system matrix."""
+        return cache[project_name]['L'].shape[0]
+
+    track_system_matrix_size.params = PARAMS
+    track_system_matrix_size.param_names = ['project']
 
 
 class DistanceMapSuite:

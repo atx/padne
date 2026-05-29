@@ -242,6 +242,24 @@ def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
     return layer_mesh_pairs
 
 
+def compute_connectivity(prob: problem.Problem
+                         ) -> tuple[list[shapely.strtree.STRtree],
+                                    ConnectivityGraph,
+                                    set[tuple[int, int]]]:
+    """
+    Run the geometric-connectivity pre-pass.
+
+    Builds an STRtree per layer, derives the connectivity graph that links
+    layer geometries via lumped-element networks, and flattens the connected
+    set into the (layer_i, geom_i) pairs reachable from a driven network.
+
+    Returns (strtrees, connectivity_graph, connected_layer_mesh_pairs).
+    """
+    strtrees = construct_strtrees_from_layers(prob.layers)
+    cg = ConnectivityGraph.create_from_problem(prob, strtrees)
+    return strtrees, cg, find_connected_layer_geom_indices(cg)
+
+
 def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
                                 connected_layer_mesh_pairs: set[tuple[int, int]],
@@ -633,6 +651,23 @@ def network_has_a_dead_terminal(network: problem.Network,
     return False
 
 
+def filter_dead_networks(prob: problem.Problem,
+                         strtrees: list[shapely.strtree.STRtree],
+                         connected_layer_mesh_pairs: set[tuple[int, int]]
+                         ) -> list[problem.Network]:
+    """
+    Drop networks whose connections all lie on disconnected copper.
+
+    A network with at least one connection on dead copper would contribute
+    rows that cannot be solved meaningfully, so it is excluded from the
+    system. See `network_has_a_dead_terminal` for the per-network check.
+    """
+    return [
+        net for net in prob.networks
+        if not network_has_a_dead_terminal(net, prob, connected_layer_mesh_pairs, strtrees)
+    ]
+
+
 def find_best_ground_node_index(prob: problem.Problem, node_indexer: NodeIndexer) -> int:
     max_voltage = float('-inf')
     ground_node_index = 0  # Default to the first node
@@ -745,6 +780,38 @@ def solve_system(L: scipy.sparse.lil_matrix,
     return v, solver_info
 
 
+def assemble_system(prob: problem.Problem,
+                    meshes: list[mesh.Mesh],
+                    mesh_index_to_layer_index: list[int],
+                    vindex: VertexIndexer,
+                    filtered_networks: list[problem.Network],
+                    node_indexer: NodeIndexer
+                    ) -> tuple[scipy.sparse.lil_matrix, np.ndarray]:
+    """
+    Allocate (L, r) and stamp the mesh Laplacians, all networks, and the
+    ground node. Returns the system ready to be passed to `solve_system`.
+    """
+    # TODO: I am not a big fan of just passing a raw list of conductances
+    # around like this...
+    mesh_conductances = [
+        prob.layers[mesh_index_to_layer_index[i]].conductance
+        for i in range(len(meshes))
+    ]
+    L, r = allocate_system(vindex, node_indexer)
+    # Compute the Laplace operator for each mesh and insert it into the
+    # global L matrix.
+    process_mesh_laplace_operators(meshes, mesh_conductances, vindex, L)
+    # Now, we process the Networks, directly inserting them in-place into the
+    # system matrix. Esthetically, it would be nicer to construct them first
+    # and then insert them, but this requires a bit of extra work with regards
+    # to handling nodes that have Connections and nodes that do not.
+    for network in filtered_networks:
+        stamp_network_into_system(network, node_indexer, L, r)
+    # TODO: Implement a better way to pick the ground node.
+    setup_ground_node(find_best_ground_node_index(prob, node_indexer), L, r)
+    return L, r
+
+
 def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = None) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -762,13 +829,12 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # Note that if mesher_config = None, default parameters are used.
     mesher = mesh.Mesher(mesher_config)
 
+    log.info("Constructing connectivity graph and finding connected layers")
+    strtrees, _, connected_layer_mesh_pairs = compute_connectivity(prob)
+
     # As a first step, we flatten the Layer-Mesh tree to get a flat list of meshes.
     # We also keep track of which layer each mesh belongs to.
     # This will be needed later when we construct the final solution object.
-    log.info("Constructing connectivity graph and finding connected layers")
-    strtrees = construct_strtrees_from_layers(prob.layers)
-    connectivity_graph = ConnectivityGraph.create_from_problem(prob, strtrees)
-    connected_layer_mesh_pairs = find_connected_layer_geom_indices(connectivity_graph)
     log.info("Meshing the connected components")
     meshes, mesh_index_to_layer_index = \
         generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs, strtrees)
@@ -783,15 +849,12 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     log.info("Indexing vertices and connections")
     vindex = VertexIndexer.create(meshes)
 
-    log.info("Processing lumped element networks")
     # Now we need to filter out the lumped element networks that are not connected
     # to any of the meshes that we are driving with a source.
-    filtered_networks = [
-        net
-        for net in prob.networks
-        if not network_has_a_dead_terminal(net, prob, connected_layer_mesh_pairs, strtrees)
-    ]
+    log.info("Processing lumped element networks")
+    filtered_networks = filter_dead_networks(prob, strtrees, connected_layer_mesh_pairs)
     log.info(f"Filtered networks: {len(filtered_networks)}/{len(prob.networks)}")
+
     # Next, we construct the _internal_ system of equations for each of the
     # network.
     log.info("Constructing node index for networks")
@@ -803,35 +866,11 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # where L is the "laplace operator",
     # v is the voltage vector and
     # r is the right-hand side "source" vector
-    L, r = allocate_system(vindex, node_indexer)
-
-    # Now we compute the Laplace operator for each mesh and insert it into the
-    # global L matrix.
-    log.info("Constructing the Laplace operators")
-    # TODO: I am not a big fan of just passing a raw list of conductances
-    # around like this...
-    mesh_conductances = [
-        prob.layers[mesh_index_to_layer_index[i]].conductance
-        for i in range(len(meshes))
-    ]
-    process_mesh_laplace_operators(meshes, mesh_conductances, vindex, L)
-
-    # Now, we process the Networks, directly inserting them in-place into the
-    # system matrix. Esthetically, it would be nicer to construct them first
-    # and then insert them, but this requires a bit of extra work with regards
-    # to handling nodes that have Connections and nodes that do not.
-    log.info("Processing networks")
-    for network in filtered_networks:
-        # First, we need to insert the network elements into the system matrix
-        # This is done in-place, so we do not need to worry about the size of the
-        # matrix. The only thing we need to worry about is that the indices are
-        # correct.
-        stamp_network_into_system(network, node_indexer, L, r)
-
-    # TODO: Implement a better way to pick the ground node.
-    i_gnd = find_best_ground_node_index(prob, node_indexer)
-    log.debug(f"Ground node global index: {i_gnd}")
-    setup_ground_node(i_gnd, L, r)
+    log.info("Assembling the global system")
+    L, r = assemble_system(
+        prob, meshes, mesh_index_to_layer_index, vindex,
+        filtered_networks, node_indexer,
+    )
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
