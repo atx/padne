@@ -8,6 +8,9 @@ padne is a KiCad-native power delivery network analysis tool. It uses the finite
 
 ![image](https://github.com/atx/padne/actions/workflows/run-tests.yaml/badge.svg) ![image](https://github.com/atx/padne/actions/workflows/build-binary.yaml/badge.svg)
 
+> [!NOTE]
+> Full documentation — installation, user guide, and directive reference — lives at [**padne.atx.name**](https://padne.atx.name).
+
 ## Features
  - **KiCad Native** - Loads KiCad projects directly
  - **2.5D FEM Solver** - Uses the finite element method to quickly solve the Laplace equation
