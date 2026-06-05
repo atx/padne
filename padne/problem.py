@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 # and later to the FEM solver.
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Layer:
     """
     Represents a single copper layer of the input circuit board.
