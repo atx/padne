@@ -109,6 +109,82 @@ class Session:
                     existing.process_time += proc
                     existing.call_count += 1
 
+    def format_summary(self) -> str:
+        """Return a tree-shaped table of recorded stages.
+
+        Keys are split on '.' to form a hierarchy; siblings are sorted by
+        descending perf time (a branch's sort key is the sum of its
+        descendants' perf time, with leaf keys contributing their own
+        recorded perf time)."""
+        with self.durations as d:
+            snapshot = {
+                k: (v.call_count, v.perf_time, v.process_time)
+                for k, v in d.items()
+            }
+        if not snapshot:
+            return "(no stages recorded)"
+
+        tree: dict = {}
+        for key in snapshot:
+            node = tree
+            for part in key.split("."):
+                node = node.setdefault(part, {})
+
+        def subtree_perf(parts: list[str]) -> float:
+            full = ".".join(parts)
+            if full in snapshot:
+                return snapshot[full][1]
+            prefix = full + "."
+            return sum(
+                perf for k, (_, perf, _) in snapshot.items()
+                if k.startswith(prefix)
+            )
+
+        rows: list[tuple[str, tuple[int, float, float] | None]] = []
+
+        def walk(subtree: dict, parts: list[str], indent: str) -> None:
+            items = sorted(
+                subtree.items(),
+                key=lambda kv: subtree_perf(parts + [kv[0]]),
+                reverse=True,
+            )
+            for i, (name, children) in enumerate(items):
+                is_last = i == len(items) - 1
+                connector = "└── " if is_last else "├── "
+                full_key = ".".join(parts + [name])
+                rows.append((indent + connector + name, snapshot.get(full_key)))
+                if children:
+                    walk(
+                        children, parts + [name],
+                        indent + ("    " if is_last else "│   "),
+                    )
+
+        roots = sorted(
+            tree.items(),
+            key=lambda kv: subtree_perf([kv[0]]),
+            reverse=True,
+        )
+        for name, children in roots:
+            rows.append((name, snapshot.get(name)))
+            if children:
+                walk(children, [name], "")
+
+        label_width = max(len("stage"), max(len(label) for label, _ in rows))
+        lines = [
+            f"{'stage':<{label_width}}  {'perf':>11}  {'cpu':>11}  {'calls':>6}",
+            f"{'-' * label_width}  {'-' * 11}  {'-' * 11}  {'-' * 6}",
+        ]
+        for label, data in rows:
+            if data is None:
+                lines.append(f"{label:<{label_width}}")
+            else:
+                calls, perf, cpu = data
+                lines.append(
+                    f"{label:<{label_width}}  "
+                    f"{perf:>10.4f}s  {cpu:>10.4f}s  {calls:>6d}"
+                )
+        return "\n".join(lines)
+
 
 class _NullSession:
     """Stand-in returned when no timing_session is active. Mirrors the

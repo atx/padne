@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Optional, Iterator, ClassVar, Iterable, Union
 
 from . import problem, units
+from .context import stage_timer
 
 
 log = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
         yield layer_id
 
 
+@stage_timer
 def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
                                    copper_conductivity: float = COPPER_CONDUCTIVITY
                                    ) -> Stackup:
@@ -1052,6 +1054,7 @@ def process_directives(directives: list[Directive]) -> Directives:
                       probe_specs=probe_specs)
 
 
+@stage_timer
 def build_schema_hierarchy(sch_file_path: pathlib.Path,
                            sheet_name: str = "Root") -> SchemaInstance:
     """
@@ -1260,6 +1263,7 @@ class PlottedGerberLayer:
     geometry: shapely.geometry.MultiPolygon
 
 
+@stage_timer
 def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> list[PlottedGerberLayer]:
     """
     Generate Gerber files from a KiCad PCB file and convert them to PlottedGerberLayer objects.
@@ -1284,6 +1288,7 @@ def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> 
         return extract_layers_from_gerbers(board, gerber_layers)
 
 
+@stage_timer
 def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: Path):
     """
     Plot copper layers of a KiCad board to Gerber files.
@@ -1351,6 +1356,7 @@ def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile
     return result.shape
 
 
+@stage_timer
 def gerber_file_to_shapely(gerber_path: Path) -> Optional[shapely.geometry.MultiPolygon]:
     """Loads data from a Gerber file and converts it to a Shapely geometry."""
     gerber_data = pygerber.gerber.api.GerberFile.from_file(gerber_path)
@@ -1396,6 +1402,7 @@ def gerber_file_to_shapely(gerber_path: Path) -> Optional[shapely.geometry.Multi
     return geometry
 
 
+@stage_timer
 def extract_layers_from_gerbers(board,
                                 gerber_layers: dict[int, Path]
                                 ) -> list[PlottedGerberLayer]:
@@ -1585,6 +1592,7 @@ def process_via_spec(via_spec: ViaSpec,
     return resistor_stack
 
 
+@stage_timer
 def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
                     via_specs: list[ViaSpec]) -> list[PlottedGerberLayer]:
 
@@ -1689,6 +1697,7 @@ def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
     )
 
 
+@stage_timer
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.

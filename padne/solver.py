@@ -13,7 +13,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import problem, mesh
+from . import problem, mesh, context
+from .context import stage_timer
 
 log = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[
     return seed_points
 
 
+@stage_timer
 def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
     """
     Compute the Laplace operator for a given mesh. This is in "mesh-local"
@@ -242,6 +244,7 @@ def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
     return layer_mesh_pairs
 
 
+@stage_timer
 def compute_connectivity(prob: problem.Problem
                          ) -> tuple[list[shapely.strtree.STRtree],
                                     ConnectivityGraph,
@@ -260,6 +263,7 @@ def compute_connectivity(prob: problem.Problem
     return strtrees, cg, find_connected_layer_geom_indices(cg)
 
 
+@stage_timer
 def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
                                 connected_layer_mesh_pairs: set[tuple[int, int]],
@@ -318,6 +322,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
     return meshes, mesh_index_to_layer_index
 
 
+@stage_timer
 def generate_disconnected_meshes(prob: problem.Problem,
                                  connected_layer_mesh_pairs: set[tuple[int, int]],
                                  ) -> list[list[mesh.Mesh]]:
@@ -575,6 +580,7 @@ def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
             L[global_i, global_j] += v
 
 
+@stage_timer
 def produce_layer_solutions(layers: list[problem.Layer],
                             vindex: VertexIndexer,
                             meshes: list[mesh.Mesh],
@@ -651,6 +657,7 @@ def network_has_a_dead_terminal(network: problem.Network,
     return False
 
 
+@stage_timer
 def filter_dead_networks(prob: problem.Problem,
                          strtrees: list[shapely.strtree.STRtree],
                          connected_layer_mesh_pairs: set[tuple[int, int]]
@@ -725,6 +732,7 @@ def compute_triangle_gradient(vertices: list[mesh.Vertex],
     return mesh.Vector(partial_x, partial_y)
 
 
+@stage_timer
 def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.TwoForm:
     """
     Compute the power density at the mesh faces.
@@ -764,6 +772,7 @@ def allocate_system(vindex: VertexIndexer,
     return L, r
 
 
+@stage_timer
 def solve_system(L: scipy.sparse.lil_matrix,
                  r: np.ndarray) -> tuple[np.ndarray, SolverInfo]:
     """
@@ -780,6 +789,7 @@ def solve_system(L: scipy.sparse.lil_matrix,
     return v, solver_info
 
 
+@stage_timer
 def assemble_system(prob: problem.Problem,
                     meshes: list[mesh.Mesh],
                     mesh_index_to_layer_index: list[int],
@@ -812,6 +822,7 @@ def assemble_system(prob: problem.Problem,
     return L, r
 
 
+@stage_timer
 def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = None) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -858,9 +869,10 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # Next, we construct the _internal_ system of equations for each of the
     # network.
     log.info("Constructing node index for networks")
-    node_indexer = NodeIndexer.create(
-        prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
-    )
+    with context.stage_timer("node_indexing"):
+        node_indexer = NodeIndexer.create(
+            prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
+        )
 
     # We are solving the equation L * v = r
     # where L is the "laplace operator",

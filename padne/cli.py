@@ -14,7 +14,7 @@ import padne.solver
 import padne.ui
 import padne.mesh
 import padne.paraview
-from padne import __version__
+from padne import __version__, context
 
 
 def setup_logging(debug_mode: bool) -> None:
@@ -194,20 +194,22 @@ def handle_errors(func):
 @handle_errors
 def do_gui(args: argparse.Namespace) -> int:
     log = logging.getLogger(__name__)
-    log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
-    prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
-    log.info("Solving problem for GUI...")
-    mesher_config = mesher_config_from_args(args)
+    with context.timing_session() as session:
+        log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
+        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+        log.info("Solving problem for GUI...")
+        mesher_config = mesher_config_from_args(args)
 
-    # Capture warnings emitted during solving
-    with collect_warnings() as warns:
-        solution = padne.solver.solve(prob, mesher_config=mesher_config)
+        # Capture warnings emitted during solving
+        with collect_warnings() as warns:
+            solution = padne.solver.solve(prob, mesher_config=mesher_config)
 
-    captured_warnings = [
-        msg
-        for msg in warns
-        if issubclass(msg.category, padne.solver.SolverWarning)
-    ]
+        captured_warnings = [
+            msg
+            for msg in warns
+            if issubclass(msg.category, padne.solver.SolverWarning)
+        ]
+    log.info("Stage timings:\n%s", session.format_summary())
 
     return padne.ui.main(solution, captured_warnings)
 
@@ -215,13 +217,15 @@ def do_gui(args: argparse.Namespace) -> int:
 @handle_errors
 def do_solve(args: argparse.Namespace) -> None:
     log = logging.getLogger(__name__)
-    log.info(f"Loading KiCad project: {args.kicad_pro_file}")
-    prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
-    log.info("Solving problem...")
-    mesher_config = mesher_config_from_args(args)
-    solution = padne.solver.solve(prob, mesher_config=mesher_config)
-    with open(args.output_file, "wb") as f:
-        pickle.dump(solution, f)
+    with context.timing_session() as session:
+        log.info(f"Loading KiCad project: {args.kicad_pro_file}")
+        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+        log.info("Solving problem...")
+        mesher_config = mesher_config_from_args(args)
+        solution = padne.solver.solve(prob, mesher_config=mesher_config)
+        with open(args.output_file, "wb") as f:
+            pickle.dump(solution, f)
+    log.info("Stage timings:\n%s", session.format_summary())
     log.info(f"Solution saved to {args.output_file}")
 
 
