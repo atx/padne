@@ -14,7 +14,7 @@ import padne.solver
 import padne.ui
 import padne.mesh
 import padne.paraview
-from padne import __version__, context
+from padne import __version__, context, parallel
 
 
 def setup_logging(debug_mode: bool) -> None:
@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         "--version",
         action="version",
         version=f"padne {__version__}"
+    )
+    parser.add_argument(
+        "-j", "--jobs",
+        type=int,
+        default=parallel.config().jobs,
+        help="Number of parallel jobs"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -250,6 +256,7 @@ def do_paraview(args: argparse.Namespace) -> None:
 def main() -> None:
     args = parse_args()
     setup_logging(args.debug)
+    parallel.configure(jobs=args.jobs)
 
     log = logging.getLogger(__name__)
     log.debug(f"Parsed arguments: {args}")

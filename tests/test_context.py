@@ -254,6 +254,85 @@ class TestConcurrentMerging:
             assert "test_context.from_worker" in d
 
 
+class TestSnapshotAndMerge:
+    # snapshot()/merge() exist to ship timings across process boundaries
+    # (padne.parallel sends worker-session snapshots back to the parent).
+
+    def test_snapshot_is_independent_copy(self):
+        with context.timing_session() as s:
+            with context.stage_timer("stage"):
+                pass
+        snap = s.snapshot()
+        snap["test_context.stage"].call_count = 999
+        with s.durations as d:
+            assert d["test_context.stage"].call_count == 1
+
+    def test_merge_adds_new_and_accumulates_existing(self):
+        with context.timing_session() as s1:
+            with context.stage_timer("shared"):
+                pass
+            with context.stage_timer("only_in_first"):
+                pass
+        with context.timing_session() as s2:
+            with context.stage_timer("shared"):
+                pass
+
+        s2.merge(s1.snapshot())
+
+        with s2.durations as d:
+            assert d["test_context.shared"].call_count == 2
+            assert d["test_context.only_in_first"].call_count == 1
+
+    def test_merge_sums_times(self):
+        with context.timing_session() as s1:
+            with context.stage_timer("timed"):
+                time.sleep(0.02)
+        with context.timing_session() as s2:
+            with context.stage_timer("timed"):
+                time.sleep(0.02)
+
+        before = s2.snapshot()["test_context.timed"].perf_time
+        s2.merge(s1.snapshot())
+        after = s2.snapshot()["test_context.timed"].perf_time
+        assert after > before
+
+    def test_merge_does_not_mutate_source_snapshot_owner(self):
+        # Merging a snapshot into another session must leave the donor
+        # session untouched (Duration objects must not be shared).
+        with context.timing_session() as s1:
+            with context.stage_timer("donor"):
+                pass
+        snap = s1.snapshot()
+
+        with context.timing_session() as s2:
+            pass
+        s2.merge(snap)
+        s2.merge(snap)
+
+        with s1.durations as d:
+            assert d["test_context.donor"].call_count == 1
+        with s2.durations as d:
+            assert d["test_context.donor"].call_count == 2
+
+    def test_merge_durations_into_active_session(self):
+        with context.timing_session() as donor:
+            with context.stage_timer("from_worker"):
+                pass
+        snap = donor.snapshot()
+
+        with context.timing_session() as s:
+            context.merge_durations(snap)
+        with s.durations as d:
+            assert d["test_context.from_worker"].call_count == 1
+
+    def test_merge_durations_no_op_without_session(self):
+        with context.timing_session() as donor:
+            with context.stage_timer("dropped"):
+                pass
+        # Must not raise outside a session
+        context.merge_durations(donor.snapshot())
+
+
 class TestLockedObject:
 
     def test_yields_underlying_object(self):

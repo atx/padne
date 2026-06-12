@@ -38,7 +38,7 @@ import contextlib
 import inspect
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Generic, TypeVar
 
 
@@ -108,6 +108,25 @@ class Session:
                     existing.perf_time += perf
                     existing.process_time += proc
                     existing.call_count += 1
+
+    def snapshot(self) -> dict[str, "Session.Duration"]:
+        """Return an independent copy of the recorded durations. Used to
+        ship timings across process boundaries (see padne.parallel)."""
+        with self.durations as d:
+            return {k: replace(v) for k, v in d.items()}
+
+    def merge(self, snapshot: dict[str, "Session.Duration"]) -> None:
+        """Accumulate durations from another session's snapshot into this
+        one. Times sum and call counts add, same as repeated stage entries."""
+        with self.durations as d:
+            for key, duration in snapshot.items():
+                existing = d.get(key)
+                if existing is None:
+                    d[key] = replace(duration)
+                else:
+                    existing.perf_time += duration.perf_time
+                    existing.process_time += duration.process_time
+                    existing.call_count += duration.call_count
 
     def format_summary(self) -> str:
         """Return a tree-shaped table of recorded stages.
@@ -226,6 +245,13 @@ def timing_session():
         yield _active
     finally:
         _active = None
+
+
+def merge_durations(snapshot: dict[str, Session.Duration]) -> None:
+    """Merge a durations snapshot into the active session. No-op when no
+    session is active, mirroring the stage_timer behavior."""
+    if _active is not None:
+        _active.merge(snapshot)
 
 
 def _caller_module_name() -> str:
