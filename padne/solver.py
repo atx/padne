@@ -80,7 +80,8 @@ class ConnectivityGraph:
         layer_i: int  # Index of the layer in the Problem
         geom_i: int   # Index of this particular polygon in the layer.geoms tuple
         is_root: bool = False
-        neighbors: set["ConnectivityGraph.Node"] = field(default_factory=set)
+        # repr=False to avoid cyclic references
+        neighbors: set["ConnectivityGraph.Node"] = field(default_factory=set, repr=False)
 
     @classmethod
     def create_from_problem(cls,
@@ -131,7 +132,7 @@ class ConnectivityGraph:
 
         return cls(nodes=nodes)
 
-    def compute_connected_nodes(self) -> list[Node]:
+    def compute_connected_nodes(self) -> list["ConnectivityGraph.Node"]:
         """
         Return a list of all nodes that are either root nodes themselves
         or are connected to a root node via any connection.
@@ -273,22 +274,22 @@ def generate_meshes_for_problem(prob: problem.Problem,
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
-        seed_points_in_layer = [
-            shapely.geometry.Point(p.x, p.y)
-            for p in collect_seed_points(prob, layer)
-        ]
+        seed_points_in_layer = collect_seed_points(prob, layer)
 
         geom_to_seed_points = collections.defaultdict(list)
 
         for seed_point in seed_points_in_layer:
-            candidates = strtrees[layer_i].query(seed_point)
+            # Shapely point only used for the spatial queries below; the mesher
+            # downstream expects mesh.Point seeds.
+            shapely_point = shapely.geometry.Point(seed_point.x, seed_point.y)
+            candidates = strtrees[layer_i].query(shapely_point)
 
             for geom_i in candidates:
                 if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                     # This geometry is not even connected to any driven
                     # network, so we can just skip it.
                     continue
-                if not layer.geoms[geom_i].contains(seed_point):
+                if not layer.geoms[geom_i].contains(shapely_point):
                     continue
 
                 # This seed point is inside the geometry, so we stick it in

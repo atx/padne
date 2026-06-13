@@ -24,7 +24,7 @@ class Vector:
     def dot(self, other: "Vector") -> float:
         return self.dx * other.dx + self.dy * other.dy
 
-    def __add__(self, other: "Vector") -> "Vector":
+    def __add__(self, other: object) -> "Vector":
         if not isinstance(other, Vector):
             raise TypeError("Addition is only defined for Vectors")
         return Vector(self.dx + other.dx, self.dy + other.dy)
@@ -54,7 +54,7 @@ class Point:
     def distance(self, other: "Point") -> float:
         return np.sqrt((self.x - other.x) ** 2 + (self.y - other.y) ** 2)
 
-    def __sub__(self, other: "Point") -> Vector:
+    def __sub__(self, other: object) -> Vector:
         if not isinstance(other, Point):
             raise TypeError("Subtraction is only defined for Points")
         return Vector(self.x - other.x, self.y - other.y)
@@ -220,7 +220,7 @@ class IndexStore[T: HasIndex]:
 
     def __contains__(self, obj: T) -> bool:
         """Check if an object is in the index store."""
-        return 0 <= obj.i < len(self._idx_to_obj) and self._idx_to_obj[obj.i] is obj
+        return bool(0 <= obj.i < len(self._idx_to_obj) and self._idx_to_obj[obj.i] is obj)
 
     def items(self) -> Iterator[tuple[index_type, T]]:
         for idx, obj in enumerate(self._idx_to_obj):
@@ -709,7 +709,7 @@ class Mesher:
 
     def _prepare_polygon_for_cgal(self,
                                   poly: shapely.geometry.Polygon,
-                                  seed_points: list[Point] = []) -> tuple[list, list, list]:
+                                  seed_points: list[Point | shapely.geometry.Point] = []) -> tuple[list, list, list]:
         """
         Convert a Shapely polygon to vertices, segments, and seeds for CGAL.
 
@@ -754,7 +754,7 @@ class Mesher:
 
     def poly_to_mesh(self,
                      poly: shapely.geometry.Polygon,
-                     seed_points: list[Point] = []) -> Mesh:
+                     seed_points: list[Point | shapely.geometry.Point] = []) -> Mesh:
         """
         Convert a Shapely polygon to a triangular mesh.
 
