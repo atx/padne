@@ -2,18 +2,15 @@
 import numpy as np
 import shapely.geometry
 import padne._cgal as cgal
+import padne._mesh as _mesh
 
 from dataclasses import dataclass, field
-from typing import Optional, Iterable, Iterator, Protocol
+from typing import Optional, Iterator
 
 # The purpose of this module is to generate triangular meshes from Shapely
 # (multi)polygons
 
-index_type = np.uint64
-
-
-class HasIndex(Protocol):
-    i: index_type
+index_type = np.uint32
 
 
 @dataclass(frozen=True)
@@ -69,313 +66,210 @@ class Point:
         return shapely.geometry.Point(self.x, self.y)
 
 
-@dataclass(eq=False, repr=False)
-class Vertex:
-    p: Point
-    out: Optional["HalfEdge"] = None
-    i: index_type = field(default=index_type(0))
-
-    def orbit(self) -> Iterator["HalfEdge"]:
-        edge = self.out
-        while True:
-            yield edge
-            edge = edge.twin.next
-            if edge == self.out:
-                break
+# The half-edge data structures are implemented in C++ (padne/cpp/_mesh.cpp)
+# as struct-of-arrays index storage. Vertex/HalfEdge/Face are lightweight
+# value-type handles into that storage
+#
+# The algorithmic methods below are implemented in Python and attached onto
+# the bound types; they are kept verbatim from the original pure-Python
+# implementation. They will be moved into C++ in later commits.
+Mesh = _mesh.Mesh
+Vertex = _mesh.Vertex
+HalfEdge = _mesh.HalfEdge
+Face = _mesh.Face
 
 
-@dataclass(eq=False, repr=False)
-class HalfEdge:
-    origin: Vertex
-    twin: Optional["HalfEdge"] = None
-    next: Optional["HalfEdge"] = None
-    prev: Optional["HalfEdge"] = None
-    face: Optional["Face"] = None
-    i: index_type = field(default=index_type(0))
-
-    def __getstate__(self):
-        # We _do not_ pickle the twin/next/prev halfedges explicitly
-        # to avoid reaching recursion depth limits
-        # The Mesh class performs additional bookkeeping and rehydration
-        # to ensure that the topology is properly unpickled.
-        state = self.__dict__.copy()
-        censor_keys = ["next", "prev", "twin"]
-        for key in censor_keys:
-            state[key] = id(state[key])
-        return state
-
-    @property
-    def is_boundary(self) -> bool:
-        return self.face.is_boundary
-
-    @staticmethod
-    def connect(e1: "HalfEdge", e2: "HalfEdge") -> None:
-        e1.next = e2
-        e2.prev = e1
-
-    def walk(self) -> Iterator["HalfEdge"]:
-        edge = self
-        while True:
-            yield edge
-            edge = edge.next
-            if edge == self:
-                break
-
-    def cotan(self) -> float:
-        """
-        Compute the cotangent weight for this half-edge.
-        """
-        vertex_i = self.origin
-        # Grab the vertex on the other side of the edge
-        vertex_k = self.twin.origin
-        ratio = 0.
-        for other in [self.next.next, self.twin.next.next]:
-            if other.next.face.is_boundary:
-                # Do not include boundary edges
-                continue
-            vi = vertex_i.p - other.origin.p
-            vk = vertex_k.p - other.origin.p
-            ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
-        return ratio
+def _extend(cls, name):
+    """Attach a method or property to one of the C++-bound mesh types."""
+    def deco(obj):
+        setattr(cls, name, obj)
+        return obj
+    return deco
 
 
-@dataclass(eq=False)
-class Face:
-    edge: HalfEdge = None
-    is_boundary: bool = False
-    i: index_type = field(default=index_type(0))
-
-    @property
-    def edges(self):
-        edge = self.edge
-        while True:
-            yield edge
-            edge = edge.next
-            if edge == self.edge:
-                break
-
-    @property
-    def vertices(self):
-        for edge in self.edges:
-            yield edge.origin
-
-    @property
-    def centroid(self) -> Point:
-        """
-        Compute the centroid of the face using the average of vertex coordinates.
-        """
-        x_sum = 0.0
-        y_sum = 0.0
-        count = 0
-        for vertex in self.vertices:
-            x_sum += vertex.p.x
-            y_sum += vertex.p.y
-            count += 1
-        return Point(x_sum / count, y_sum / count)
-
-    @property
-    def area(self) -> float:
-        """
-        Compute the area using the shoelace formula.
-        Returns the absolute value to ensure positive area regardless of vertex order.
-        """
-        area = 0.0
-        for edge in self.edges:
-            p1 = edge.origin.p
-            p2 = edge.next.origin.p
-            area += (p1.x * p2.y - p2.x * p1.y)
-        return 0.5 * abs(area)
+@_extend(Vertex, "p")
+@property
+def _(self) -> Point:
+    return Point(self._x, self._y)
 
 
-class IndexStore[T: HasIndex]:
+@_extend(Vertex, "orbit")
+def _(self) -> Iterator["HalfEdge"]:
+    edge = self.out
+    while True:
+        yield edge
+        edge = edge.twin.next
+        if edge == self.out:
+            break
+
+
+@_extend(HalfEdge, "is_boundary")
+@property
+def _(self) -> bool:
+    return self.face.is_boundary
+
+
+@_extend(HalfEdge, "connect")
+@staticmethod
+def _(e1: "HalfEdge", e2: "HalfEdge") -> None:
+    e1.next = e2
+    e2.prev = e1
+
+
+@_extend(HalfEdge, "walk")
+def _(self) -> Iterator["HalfEdge"]:
+    edge = self
+    while True:
+        yield edge
+        edge = edge.next
+        if edge == self:
+            break
+
+
+@_extend(HalfEdge, "cotan")
+def _(self) -> float:
     """
-    A simple class that stores objects with indices.
+    Compute the cotangent weight for this half-edge.
     """
-
-    def __init__(self):
-        self._idx_to_obj: list[T] = []
-
-    @property
-    def next_index(self) -> index_type:
-        """Get the next available index without adding an object."""
-        return index_type(len(self._idx_to_obj))
-
-    def add(self, obj: T) -> None:
-        obj.i = self.next_index
-        self._idx_to_obj.append(obj)
-
-    def to_index(self, obj: T) -> index_type:
-        """Get the index of an object. This is for backwards compatibility, otherwise use obj.i directly."""
-        return obj.i
-
-    def to_object(self, idx: int | index_type) -> T:
-        """Get the object at a given index."""
-        return self._idx_to_obj[int(idx)]
-
-    def __len__(self) -> int:
-        return len(self._idx_to_obj)
-
-    def __iter__(self) -> Iterator[T]:
-        return iter(self._idx_to_obj)
-
-    def __contains__(self, obj: T) -> bool:
-        """Check if an object is in the index store."""
-        return bool(0 <= obj.i < len(self._idx_to_obj) and self._idx_to_obj[obj.i] is obj)
-
-    def items(self) -> Iterator[tuple[index_type, T]]:
-        for idx, obj in enumerate(self._idx_to_obj):
-            yield index_type(idx), obj
+    vertex_i = self.origin
+    # Grab the vertex on the other side of the edge
+    vertex_k = self.twin.origin
+    ratio = 0.
+    for other in [self.next.next, self.twin.next.next]:
+        if other.next.face.is_boundary:
+            # Do not include boundary edges
+            continue
+        vi = vertex_i.p - other.origin.p
+        vk = vertex_k.p - other.origin.p
+        ratio += abs(vi.dot(vk) / (vi ^ vk)) / 2
+    return ratio
 
 
-class Mesh:
-    def __init__(self):
-        self.vertices = IndexStore[Vertex]()
-        self.halfedges = IndexStore[HalfEdge]()
-        self.faces = IndexStore[Face]()
-        self.boundaries = IndexStore[Face]()
-        self._edge_map: dict[tuple[int, int], HalfEdge] = {}
+@_extend(Face, "edges")
+@property
+def _(self):
+    edge = self.edge
+    while True:
+        yield edge
+        edge = edge.next
+        if edge == self.edge:
+            break
 
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        # Will be important for rehydrating the mesh
-        ids_to_hedges = {
-            id(hedge): hedge for hedge in state["halfedges"]
-        }
-        state["_ids_to_hedges"] = ids_to_hedges
-        return state
 
-    def __setstate__(self, state):
-        _ids_to_hedges = state.pop("_ids_to_hedges")
-        # Rehydrate the halfedges
-        for hedge in state["halfedges"]:
-            # This should be set to id(...) in the __getstate__ method
-            # of HalfEdge
-            assert isinstance(hedge.next, int) and isinstance(hedge.prev, int) \
-                and isinstance(hedge.twin, int), "HalfEdge state is not properly serialized"
-            hedge.next = _ids_to_hedges[hedge.next]
-            hedge.prev = _ids_to_hedges[hedge.prev]
-            hedge.twin = _ids_to_hedges[hedge.twin]
+@_extend(Face, "vertices")
+@property
+def _(self):
+    for edge in self.edges:
+        yield edge.origin
 
-        self.__dict__.update(state)
 
-    def make_vertex(self, p: Point) -> Vertex:
-        v = Vertex(p)
-        self.vertices.add(v)
-        return v
+@_extend(Face, "centroid")
+@property
+def _(self) -> Point:
+    """
+    Compute the centroid of the face using the average of vertex coordinates.
+    """
+    x_sum = 0.0
+    y_sum = 0.0
+    count = 0
+    for vertex in self.vertices:
+        x_sum += vertex.p.x
+        y_sum += vertex.p.y
+        count += 1
+    return Point(x_sum / count, y_sum / count)
 
-    def connect_vertices(self, v1: Vertex, v2: Vertex) -> HalfEdge:
-        """
-        Return a half-edge between the two vertices v1 and v2. If the half
-        edge does not exist, create it. The twin half-edge is also created.
-        """
-        key12 = (self.vertices.to_index(v1), self.vertices.to_index(v2))
-        key21 = (key12[1], key12[0])
-        if key12 in self._edge_map:
-            assert key21 in self._edge_map, "Inconsistent half edge state"
-            return self._edge_map[key12]
 
-        # Assert that the twin also does not exist. It should not be possible
-        # to have one without the other
-        assert key21 not in self._edge_map, "Inconsistent half edge state"
+@_extend(Face, "area")
+@property
+def _(self) -> float:
+    """
+    Compute the area using the shoelace formula.
+    Returns the absolute value to ensure positive area regardless of vertex order.
+    """
+    area = 0.0
+    for edge in self.edges:
+        p1 = edge.origin.p
+        p2 = edge.next.origin.p
+        area += (p1.x * p2.y - p2.x * p1.y)
+    return 0.5 * abs(area)
 
-        e12 = HalfEdge(v1)
-        self.halfedges.add(e12)
-        e21 = HalfEdge(v2)
-        self.halfedges.add(e21)
-        e12.twin = e21
-        e21.twin = e12
 
-        self._edge_map[key12] = e12
-        self._edge_map[key21] = e21
+@_extend(Mesh, "from_triangle_soup")
+@classmethod
+def _(cls,
+      points: list[Point],
+      triangles: list[tuple[int, int, int]]) -> "Mesh":
+    mesh = cls()
 
-        # Update the vertex out pointers
-        if v1.out is None:
-            v1.out = e12
-        if v2.out is None:
-            v2.out = e21
+    # First we create the vertices
+    vertices = [mesh.make_vertex(p) for p in points]
 
-        return e12
+    for tri in triangles:
+        assert len(tri) == 3
+        v1, v2, v3 = [vertices[i] for i in tri]
 
-    def euler_characteristic(self) -> int:
-        return len(self.vertices) - len(self.halfedges) // 2 + len(self.faces)
-
-    @classmethod
-    def from_triangle_soup(cls,
-                           points: list[Point],
-                           triangles: list[tuple[int, int, int]]) -> "Mesh":
-        mesh = cls()
-
-        # First we create the vertices
-        vertices = [mesh.make_vertex(p) for p in points]
-
-        for tri in triangles:
-            assert len(tri) == 3
-            v1, v2, v3 = [vertices[i] for i in tri]
-
-            vertex_edge_pairs = [(v1, v2), (v2, v3), (v3, v1)]
-            # Create the _interior_ half-edges
-            face = Face()
-            mesh.faces.add(face)
-            current_hedges = []
-            for u, v in vertex_edge_pairs:
-                hedge = mesh.connect_vertices(u, v)
-                u.out = hedge
-                face.edge = hedge  # We just get the last one
-                hedge.face = face
-                current_hedges.append(hedge)
-
-            # Next, connect the interior hedges in a loop
-            for h1, h2 in zip(current_hedges, current_hedges[1:] + [current_hedges[0]]):
-                HalfEdge.connect(h1, h2)
-
-        # Now, comes the final stage, where we need to produce the boundary
-        # edges. We do this by iterating over all half-edges and checking if
-        # they have a twin. Then we handle the boundary connectivity update
-
-        boundary_hedges = set()
-        vertex_to_boundary_hedge = {}
-        for hedge in mesh.halfedges:
-            if hedge.face is not None:
-                continue
-            boundary_hedges.add(hedge)
-
-            if hedge.origin in vertex_to_boundary_hedge:
-                raise ValueError("Non-manifold mesh")
-
-            vertex_to_boundary_hedge[hedge.origin] = hedge
-
-        boundary_hedges = set(hedge for hedge in mesh.halfedges if hedge.face is None)
-        while boundary_hedges:
-            hedge = boundary_hedges.pop()
-
-            # Okay, we have an as of yet unprocessed boundary hedge. Now we
-            # need to effectively "walk aournd" the boundary. We assume that
-            # there is always at most one "outgoing" boundary edge per vertex
-
-            face = Face(is_boundary=True)
-            mesh.boundaries.add(face)
-            face.edge = hedge
+        vertex_edge_pairs = [(v1, v2), (v2, v3), (v3, v1)]
+        # Create the _interior_ half-edges
+        face = mesh.make_face()
+        current_hedges = []
+        for u, v in vertex_edge_pairs:
+            hedge = mesh.connect_vertices(u, v)
+            u.out = hedge
+            face.edge = hedge  # We just get the last one
             hedge.face = face
+            current_hedges.append(hedge)
 
-            hedge_prev = hedge
-            while True:
-                vertex_next = hedge_prev.twin.origin
-                hedge_next = vertex_to_boundary_hedge.get(vertex_next)
-                if hedge_next not in boundary_hedges:
-                    # We have reached the end of the boundary
-                    break
+        # Next, connect the interior hedges in a loop
+        for h1, h2 in zip(current_hedges, current_hedges[1:] + [current_hedges[0]]):
+            HalfEdge.connect(h1, h2)
 
-                boundary_hedges.remove(hedge_next)
+    # Now, comes the final stage, where we need to produce the boundary
+    # edges. We do this by iterating over all half-edges and checking if
+    # they have a twin. Then we handle the boundary connectivity update
 
-                assert hedge_next.next is None  # Sanity check, should not happen since we checked earlier
-                HalfEdge.connect(hedge_prev, hedge_next)
-                hedge_next.face = face
-                hedge_prev = hedge_next
+    boundary_hedges = set()
+    vertex_to_boundary_hedge = {}
+    for hedge in mesh.halfedges:
+        if hedge.face is not None:
+            continue
+        boundary_hedges.add(hedge)
 
-            # And finally, connect the last edge to the first
-            HalfEdge.connect(hedge_prev, hedge)
+        if hedge.origin in vertex_to_boundary_hedge:
+            raise ValueError("Non-manifold mesh")
 
-        return mesh
+        vertex_to_boundary_hedge[hedge.origin] = hedge
+
+    boundary_hedges = set(hedge for hedge in mesh.halfedges if hedge.face is None)
+    while boundary_hedges:
+        hedge = boundary_hedges.pop()
+
+        # Okay, we have an as of yet unprocessed boundary hedge. Now we
+        # need to effectively "walk aournd" the boundary. We assume that
+        # there is always at most one "outgoing" boundary edge per vertex
+
+        face = mesh.make_face(is_boundary=True)
+        face.edge = hedge
+        hedge.face = face
+
+        hedge_prev = hedge
+        while True:
+            vertex_next = hedge_prev.twin.origin
+            hedge_next = vertex_to_boundary_hedge.get(vertex_next)
+            if hedge_next not in boundary_hedges:
+                # We have reached the end of the boundary
+                break
+
+            boundary_hedges.remove(hedge_next)
+
+            assert hedge_next.next is None  # Sanity check, should not happen since we checked earlier
+            HalfEdge.connect(hedge_prev, hedge_next)
+            hedge_next.face = face
+            hedge_prev = hedge_next
+
+        # And finally, connect the last edge to the first
+        HalfEdge.connect(hedge_prev, hedge)
+
+    return mesh
 
 
 @dataclass

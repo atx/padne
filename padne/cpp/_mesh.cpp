@@ -1,0 +1,498 @@
+// Index-based half-edge mesh storage in struct-of-arrays form.
+//
+// The mesh topology lives in flat uint32 index arrays owned by the Mesh
+// object. The Python-facing Vertex/HalfEdge/Face types are value-type proxy
+// handles (owning Python Mesh reference + index); they compare and hash by
+// (mesh, index), not by object identity.
+//
+// Layout invariants:
+//  - Twin half-edges are allocated in adjacent pairs, so twin(i) == i ^ 1
+//    and no twin array is needed.
+//  - he_face entries reference the interior face store, or the boundary
+//    face store when BOUNDARY_BIT is set. INVALID means "no face yet".
+//  - INVALID marks unset references in all index arrays.
+//
+// Algorithmic methods (orbit, walk, cotan, area, from_triangle_soup, ...)
+// are attached to these types from padne/mesh.py so that they stay identical
+// to the original pure-Python implementation for now.
+
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <stdexcept>
+#include <unordered_map>
+#include <vector>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+namespace nb = nanobind;
+using namespace nb::literals;
+
+namespace {
+
+constexpr uint32_t INVALID = UINT32_MAX;
+constexpr uint32_t BOUNDARY_BIT = 0x80000000u;
+
+uint64_t edge_key(uint32_t a, uint32_t b) {
+    return (uint64_t(a) << 32) | uint64_t(b);
+}
+
+struct Mesh {
+    std::vector<double> vertex_x, vertex_y;
+    std::vector<uint32_t> vertex_out;
+    std::vector<uint32_t> he_origin, he_next, he_prev, he_face;
+    std::vector<uint32_t> face_edge;
+    std::vector<uint32_t> boundary_edge;
+    // Maps (origin index, target index) to the half-edge index, in both
+    // directions. Used by connect_vertices to deduplicate edges.
+    std::unordered_map<uint64_t, uint32_t> edge_map;
+
+    uint32_t n_vertices() const { return uint32_t(vertex_x.size()); }
+    uint32_t n_halfedges() const { return uint32_t(he_origin.size()); }
+    uint32_t n_faces(bool boundary) const {
+        return uint32_t((boundary ? boundary_edge : face_edge).size());
+    }
+
+    void rebuild_edge_map() {
+        edge_map.clear();
+        edge_map.reserve(he_origin.size());
+        for (uint32_t i = 0; i < n_halfedges(); i++)
+            edge_map[edge_key(he_origin[i], he_origin[i ^ 1])] = i;
+    }
+};
+
+// Returns the registered Python object wrapping this Mesh instance. All Mesh
+// instances are created from Python, so the lookup cannot fail in practice.
+nb::object mesh_object(const Mesh &m) {
+    nb::object obj = nb::find(&m);
+    if (!obj.is_valid())
+        throw std::runtime_error("Mesh instance is not registered with Python");
+    return obj;
+}
+
+// Value-type proxy handles. `owner` keeps the Python Mesh (and thus `m`)
+// alive and is what gets pickled; `m` is cached for direct array access.
+
+struct VertexRef {
+    nb::object owner;
+    Mesh *m = nullptr;
+    uint32_t i = 0;
+};
+
+struct HalfEdgeRef {
+    nb::object owner;
+    Mesh *m = nullptr;
+    uint32_t i = 0;
+};
+
+struct FaceRef {
+    nb::object owner;
+    Mesh *m = nullptr;
+    uint32_t i = 0;
+    bool is_boundary = false;
+};
+
+uint32_t encode_face(const FaceRef &f) {
+    return f.is_boundary ? (f.i | BOUNDARY_BIT) : f.i;
+}
+
+std::optional<FaceRef> decode_face(const nb::object &owner, Mesh *m, uint32_t raw) {
+    if (raw == INVALID)
+        return std::nullopt;
+    return FaceRef{owner, m, raw & ~BOUNDARY_BIT, bool(raw & BOUNDARY_BIT)};
+}
+
+std::optional<HalfEdgeRef> decode_halfedge(const nb::object &owner, Mesh *m, uint32_t raw) {
+    if (raw == INVALID)
+        return std::nullopt;
+    return HalfEdgeRef{owner, m, raw};
+}
+
+template <typename Ref>
+void check_same_mesh(const Mesh *m, const Ref &ref) {
+    if (ref.m != m)
+        throw std::invalid_argument("Object belongs to a different mesh");
+}
+
+template <typename Ref>
+uint32_t encode_optional(const Mesh *m, const std::optional<Ref> &ref) {
+    if (!ref.has_value())
+        return INVALID;
+    check_same_mesh(m, *ref);
+    return ref->i;
+}
+
+Py_hash_t mix_hash(const Mesh *m, uint32_t i, uint32_t salt) {
+    uint64_t h = uint64_t(uintptr_t(m));
+    h ^= (uint64_t(i) + salt) * 0x9E3779B97F4A7C15ull;
+    h ^= h >> 29;
+    Py_hash_t result = Py_hash_t(h);
+    if (result == -1)
+        result = -2;
+    return result;
+}
+
+// Resolves a half-edge index for `__contains__`-style checks: false for
+// objects of the wrong type or from a different mesh.
+template <typename Ref>
+bool try_ref(nb::object obj, Ref &out) {
+    return nb::try_cast<Ref>(obj, out, false);
+}
+
+// Object stores exposed as mesh.vertices/halfedges/faces/boundaries. These
+// provide the read-only parts of the original IndexStore API; objects are
+// created through the Mesh methods instead of IndexStore.add().
+
+struct VertexStore {
+    nb::object owner;
+    Mesh *m;
+};
+
+struct HalfEdgeStore {
+    nb::object owner;
+    Mesh *m;
+};
+
+struct FaceStore {
+    nb::object owner;
+    Mesh *m;
+    bool boundary;
+};
+
+struct VertexIter {
+    nb::object owner;
+    Mesh *m;
+    uint32_t pos = 0;
+};
+
+struct HalfEdgeIter {
+    nb::object owner;
+    Mesh *m;
+    uint32_t pos = 0;
+};
+
+struct FaceIter {
+    nb::object owner;
+    Mesh *m;
+    bool boundary;
+    uint32_t pos = 0;
+};
+
+// Translates Python-style (possibly negative) indices, mirroring the
+// original list-backed IndexStore behavior.
+uint32_t resolve_index(int64_t idx, uint32_t size, const char *what) {
+    if (idx < 0)
+        idx += int64_t(size);
+    if (idx < 0 || idx >= int64_t(size))
+        throw std::out_of_range(what);
+    return uint32_t(idx);
+}
+
+template <typename T>
+nb::bytes vector_to_bytes(const std::vector<T> &v) {
+    return nb::bytes(reinterpret_cast<const char *>(v.data()), v.size() * sizeof(T));
+}
+
+template <typename T>
+std::vector<T> bytes_to_vector(const nb::bytes &b) {
+    if (b.size() % sizeof(T) != 0)
+        throw std::invalid_argument("Corrupt mesh pickle data");
+    std::vector<T> v(b.size() / sizeof(T));
+    std::memcpy(v.data(), b.c_str(), b.size());
+    return v;
+}
+
+} // namespace
+
+NB_MODULE(_mesh, m) {
+    m.doc() = "Struct-of-arrays half-edge mesh storage for padne. "
+              "Use padne.mesh instead of this module directly.";
+
+    nb::class_<VertexRef>(m, "Vertex")
+        .def_prop_ro("_x", [](const VertexRef &v) { return v.m->vertex_x[v.i]; })
+        .def_prop_ro("_y", [](const VertexRef &v) { return v.m->vertex_y[v.i]; })
+        .def_prop_ro("i", [](const VertexRef &v) { return v.i; })
+        .def_prop_rw("out",
+            [](const VertexRef &v) {
+                return decode_halfedge(v.owner, v.m, v.m->vertex_out[v.i]);
+            },
+            [](VertexRef &v, std::optional<HalfEdgeRef> hedge) {
+                v.m->vertex_out[v.i] = encode_optional(v.m, hedge);
+            })
+        .def("__eq__", [](const VertexRef &a, nb::object obj) {
+            VertexRef b;
+            return try_ref(obj, b) && a.m == b.m && a.i == b.i;
+        })
+        .def("__hash__", [](const VertexRef &v) { return mix_hash(v.m, v.i, 1); })
+        .def("__getstate__", [](const VertexRef &v) {
+            return nb::make_tuple(v.owner, v.i);
+        })
+        .def("__setstate__", [](VertexRef &v, nb::tuple state) {
+            nb::object owner = state[0];
+            new (&v) VertexRef{owner, &nb::cast<Mesh &>(owner), nb::cast<uint32_t>(state[1])};
+        });
+
+    nb::class_<HalfEdgeRef>(m, "HalfEdge")
+        .def_prop_ro("origin", [](const HalfEdgeRef &h) {
+            return VertexRef{h.owner, h.m, h.m->he_origin[h.i]};
+        })
+        .def_prop_ro("twin", [](const HalfEdgeRef &h) {
+            return HalfEdgeRef{h.owner, h.m, h.i ^ 1};
+        })
+        .def_prop_ro("i", [](const HalfEdgeRef &h) { return h.i; })
+        .def_prop_rw("next",
+            [](const HalfEdgeRef &h) {
+                return decode_halfedge(h.owner, h.m, h.m->he_next[h.i]);
+            },
+            [](HalfEdgeRef &h, std::optional<HalfEdgeRef> other) {
+                h.m->he_next[h.i] = encode_optional(h.m, other);
+            })
+        .def_prop_rw("prev",
+            [](const HalfEdgeRef &h) {
+                return decode_halfedge(h.owner, h.m, h.m->he_prev[h.i]);
+            },
+            [](HalfEdgeRef &h, std::optional<HalfEdgeRef> other) {
+                h.m->he_prev[h.i] = encode_optional(h.m, other);
+            })
+        .def_prop_rw("face",
+            [](const HalfEdgeRef &h) {
+                return decode_face(h.owner, h.m, h.m->he_face[h.i]);
+            },
+            [](HalfEdgeRef &h, std::optional<FaceRef> face) {
+                if (!face.has_value()) {
+                    h.m->he_face[h.i] = INVALID;
+                    return;
+                }
+                check_same_mesh(h.m, *face);
+                h.m->he_face[h.i] = encode_face(*face);
+            })
+        .def("__eq__", [](const HalfEdgeRef &a, nb::object obj) {
+            HalfEdgeRef b;
+            return try_ref(obj, b) && a.m == b.m && a.i == b.i;
+        })
+        .def("__hash__", [](const HalfEdgeRef &h) { return mix_hash(h.m, h.i, 2); })
+        .def("__getstate__", [](const HalfEdgeRef &h) {
+            return nb::make_tuple(h.owner, h.i);
+        })
+        .def("__setstate__", [](HalfEdgeRef &h, nb::tuple state) {
+            nb::object owner = state[0];
+            new (&h) HalfEdgeRef{owner, &nb::cast<Mesh &>(owner), nb::cast<uint32_t>(state[1])};
+        });
+
+    nb::class_<FaceRef>(m, "Face")
+        .def_prop_ro("is_boundary", [](const FaceRef &f) { return f.is_boundary; })
+        .def_prop_ro("i", [](const FaceRef &f) { return f.i; })
+        .def_prop_rw("edge",
+            [](const FaceRef &f) {
+                auto &edges = f.is_boundary ? f.m->boundary_edge : f.m->face_edge;
+                return decode_halfedge(f.owner, f.m, edges[f.i]);
+            },
+            [](FaceRef &f, std::optional<HalfEdgeRef> hedge) {
+                auto &edges = f.is_boundary ? f.m->boundary_edge : f.m->face_edge;
+                edges[f.i] = encode_optional(f.m, hedge);
+            })
+        .def("__eq__", [](const FaceRef &a, nb::object obj) {
+            FaceRef b;
+            return try_ref(obj, b) && a.m == b.m && a.i == b.i
+                && a.is_boundary == b.is_boundary;
+        })
+        .def("__hash__", [](const FaceRef &f) {
+            return mix_hash(f.m, f.i, f.is_boundary ? 4 : 3);
+        })
+        .def("__getstate__", [](const FaceRef &f) {
+            return nb::make_tuple(f.owner, f.i, f.is_boundary);
+        })
+        .def("__setstate__", [](FaceRef &f, nb::tuple state) {
+            nb::object owner = state[0];
+            new (&f) FaceRef{owner, &nb::cast<Mesh &>(owner),
+                             nb::cast<uint32_t>(state[1]), nb::cast<bool>(state[2])};
+        });
+
+    nb::class_<VertexIter>(m, "VertexIter")
+        .def("__iter__", [](VertexIter &it) -> VertexIter & { return it; })
+        .def("__next__", [](VertexIter &it) {
+            if (it.pos >= it.m->n_vertices())
+                throw nb::stop_iteration();
+            return VertexRef{it.owner, it.m, it.pos++};
+        });
+
+    nb::class_<HalfEdgeIter>(m, "HalfEdgeIter")
+        .def("__iter__", [](HalfEdgeIter &it) -> HalfEdgeIter & { return it; })
+        .def("__next__", [](HalfEdgeIter &it) {
+            if (it.pos >= it.m->n_halfedges())
+                throw nb::stop_iteration();
+            return HalfEdgeRef{it.owner, it.m, it.pos++};
+        });
+
+    nb::class_<FaceIter>(m, "FaceIter")
+        .def("__iter__", [](FaceIter &it) -> FaceIter & { return it; })
+        .def("__next__", [](FaceIter &it) {
+            if (it.pos >= it.m->n_faces(it.boundary))
+                throw nb::stop_iteration();
+            return FaceRef{it.owner, it.m, it.pos++, it.boundary};
+        });
+
+    nb::class_<VertexStore>(m, "VertexStore")
+        .def("__len__", [](const VertexStore &s) { return s.m->n_vertices(); })
+        .def("__iter__", [](const VertexStore &s) { return VertexIter{s.owner, s.m}; })
+        .def("__contains__", [](const VertexStore &s, nb::object obj) {
+            VertexRef v;
+            return try_ref(obj, v) && v.m == s.m;
+        })
+        .def("to_index", [](const VertexStore &, const VertexRef &v) { return v.i; })
+        .def("to_object", [](const VertexStore &s, int64_t idx) {
+            return VertexRef{s.owner, s.m, resolve_index(idx, s.m->n_vertices(), "vertex index out of range")};
+        })
+        .def("items", [](const VertexStore &s) {
+            nb::list items;
+            for (uint32_t i = 0; i < s.m->n_vertices(); i++)
+                items.append(nb::make_tuple(i, VertexRef{s.owner, s.m, i}));
+            return items;
+        })
+        .def_prop_ro("next_index", [](const VertexStore &s) { return s.m->n_vertices(); });
+
+    nb::class_<HalfEdgeStore>(m, "HalfEdgeStore")
+        .def("__len__", [](const HalfEdgeStore &s) { return s.m->n_halfedges(); })
+        .def("__iter__", [](const HalfEdgeStore &s) { return HalfEdgeIter{s.owner, s.m}; })
+        .def("__contains__", [](const HalfEdgeStore &s, nb::object obj) {
+            HalfEdgeRef h;
+            return try_ref(obj, h) && h.m == s.m;
+        })
+        .def("to_index", [](const HalfEdgeStore &, const HalfEdgeRef &h) { return h.i; })
+        .def("to_object", [](const HalfEdgeStore &s, int64_t idx) {
+            return HalfEdgeRef{s.owner, s.m, resolve_index(idx, s.m->n_halfedges(), "halfedge index out of range")};
+        })
+        .def("items", [](const HalfEdgeStore &s) {
+            nb::list items;
+            for (uint32_t i = 0; i < s.m->n_halfedges(); i++)
+                items.append(nb::make_tuple(i, HalfEdgeRef{s.owner, s.m, i}));
+            return items;
+        })
+        .def_prop_ro("next_index", [](const HalfEdgeStore &s) { return s.m->n_halfedges(); });
+
+    nb::class_<FaceStore>(m, "FaceStore")
+        .def("__len__", [](const FaceStore &s) { return s.m->n_faces(s.boundary); })
+        .def("__iter__", [](const FaceStore &s) { return FaceIter{s.owner, s.m, s.boundary}; })
+        .def("__contains__", [](const FaceStore &s, nb::object obj) {
+            FaceRef f;
+            return try_ref(obj, f) && f.m == s.m && f.is_boundary == s.boundary;
+        })
+        .def("to_index", [](const FaceStore &, const FaceRef &f) { return f.i; })
+        .def("to_object", [](const FaceStore &s, int64_t idx) {
+            return FaceRef{s.owner, s.m, resolve_index(idx, s.m->n_faces(s.boundary), "face index out of range"), s.boundary};
+        })
+        .def("items", [](const FaceStore &s) {
+            nb::list items;
+            for (uint32_t i = 0; i < s.m->n_faces(s.boundary); i++)
+                items.append(nb::make_tuple(i, FaceRef{s.owner, s.m, i, s.boundary}));
+            return items;
+        })
+        .def_prop_ro("next_index", [](const FaceStore &s) { return s.m->n_faces(s.boundary); });
+
+    nb::class_<Mesh>(m, "Mesh")
+        .def(nb::init<>())
+        .def_prop_ro("vertices", [](Mesh &m_) { return VertexStore{mesh_object(m_), &m_}; })
+        .def_prop_ro("halfedges", [](Mesh &m_) { return HalfEdgeStore{mesh_object(m_), &m_}; })
+        .def_prop_ro("faces", [](Mesh &m_) { return FaceStore{mesh_object(m_), &m_, false}; })
+        .def_prop_ro("boundaries", [](Mesh &m_) { return FaceStore{mesh_object(m_), &m_, true}; })
+        .def_prop_ro("_edge_map", [](Mesh &m_) {
+            // Test/introspection helper mirroring the original Python dict;
+            // rebuilt on every access, do not use in hot paths.
+            nb::object owner = mesh_object(m_);
+            nb::dict result;
+            for (const auto &[key, hedge_i] : m_.edge_map) {
+                nb::tuple py_key = nb::make_tuple(uint32_t(key >> 32), uint32_t(key));
+                result[py_key] = HalfEdgeRef{owner, &m_, hedge_i};
+            }
+            return result;
+        })
+        .def("make_vertex", [](Mesh &m_, nb::object p) {
+            uint32_t i = m_.n_vertices();
+            m_.vertex_x.push_back(nb::cast<double>(p.attr("x")));
+            m_.vertex_y.push_back(nb::cast<double>(p.attr("y")));
+            m_.vertex_out.push_back(INVALID);
+            return VertexRef{mesh_object(m_), &m_, i};
+        }, "p"_a)
+        .def("connect_vertices", [](Mesh &m_, const VertexRef &v1, const VertexRef &v2) {
+            check_same_mesh(&m_, v1);
+            check_same_mesh(&m_, v2);
+
+            uint64_t key12 = edge_key(v1.i, v2.i);
+            uint64_t key21 = edge_key(v2.i, v1.i);
+            auto found = m_.edge_map.find(key12);
+            if (found != m_.edge_map.end()) {
+                if (m_.edge_map.find(key21) == m_.edge_map.end())
+                    throw std::logic_error("Inconsistent half edge state");
+                return HalfEdgeRef{mesh_object(m_), &m_, found->second};
+            }
+            // It should not be possible to have one direction without the other
+            if (m_.edge_map.find(key21) != m_.edge_map.end())
+                throw std::logic_error("Inconsistent half edge state");
+
+            // Allocate the half-edge and its twin as an adjacent pair
+            uint32_t e12 = m_.n_halfedges();
+            uint32_t e21 = e12 + 1;
+            for (uint32_t origin : {v1.i, v2.i}) {
+                m_.he_origin.push_back(origin);
+                m_.he_next.push_back(INVALID);
+                m_.he_prev.push_back(INVALID);
+                m_.he_face.push_back(INVALID);
+            }
+            m_.edge_map[key12] = e12;
+            m_.edge_map[key21] = e21;
+
+            // Update the vertex out pointers
+            if (m_.vertex_out[v1.i] == INVALID)
+                m_.vertex_out[v1.i] = e12;
+            if (m_.vertex_out[v2.i] == INVALID)
+                m_.vertex_out[v2.i] = e21;
+
+            return HalfEdgeRef{mesh_object(m_), &m_, e12};
+        }, "v1"_a, "v2"_a)
+        .def("make_face", [](Mesh &m_, bool is_boundary) {
+            auto &edges = is_boundary ? m_.boundary_edge : m_.face_edge;
+            uint32_t i = uint32_t(edges.size());
+            edges.push_back(INVALID);
+            return FaceRef{mesh_object(m_), &m_, i, is_boundary};
+        }, "is_boundary"_a = false)
+        .def("euler_characteristic", [](const Mesh &m_) {
+            return int64_t(m_.n_vertices()) - int64_t(m_.n_halfedges()) / 2
+                + int64_t(m_.n_faces(false));
+        })
+        .def("__getstate__", [](const Mesh &m_) {
+            return nb::make_tuple(
+                vector_to_bytes(m_.vertex_x),
+                vector_to_bytes(m_.vertex_y),
+                vector_to_bytes(m_.vertex_out),
+                vector_to_bytes(m_.he_origin),
+                vector_to_bytes(m_.he_next),
+                vector_to_bytes(m_.he_prev),
+                vector_to_bytes(m_.he_face),
+                vector_to_bytes(m_.face_edge),
+                vector_to_bytes(m_.boundary_edge));
+        })
+        .def("__setstate__", [](Mesh &m_, nb::tuple state) {
+            new (&m_) Mesh();
+            m_.vertex_x = bytes_to_vector<double>(nb::cast<nb::bytes>(state[0]));
+            m_.vertex_y = bytes_to_vector<double>(nb::cast<nb::bytes>(state[1]));
+            m_.vertex_out = bytes_to_vector<uint32_t>(nb::cast<nb::bytes>(state[2]));
+            m_.he_origin = bytes_to_vector<uint32_t>(nb::cast<nb::bytes>(state[3]));
+            m_.he_next = bytes_to_vector<uint32_t>(nb::cast<nb::bytes>(state[4]));
+            m_.he_prev = bytes_to_vector<uint32_t>(nb::cast<nb::bytes>(state[5]));
+            m_.he_face = bytes_to_vector<uint32_t>(nb::cast<nb::bytes>(state[6]));
+            m_.face_edge = bytes_to_vector<uint32_t>(nb::cast<nb::bytes>(state[7]));
+            m_.boundary_edge = bytes_to_vector<uint32_t>(nb::cast<nb::bytes>(state[8]));
+
+            bool consistent = m_.vertex_x.size() == m_.vertex_y.size()
+                && m_.vertex_x.size() == m_.vertex_out.size()
+                && m_.he_origin.size() == m_.he_next.size()
+                && m_.he_origin.size() == m_.he_prev.size()
+                && m_.he_origin.size() == m_.he_face.size()
+                && m_.he_origin.size() % 2 == 0;
+            if (!consistent)
+                throw std::invalid_argument("Corrupt mesh pickle data");
+
+            m_.rebuild_edge_map();
+        });
+}

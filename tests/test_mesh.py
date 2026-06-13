@@ -6,7 +6,7 @@ import shapely.geometry
 
 from padne import kicad
 
-from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexStore, Mesh, \
+from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, Mesh, \
     Mesher, MeshingException, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon, index_type
 from unittest.mock import patch, Mock
 
@@ -130,30 +130,35 @@ class TestPoint:
         assert shapely_point3.y == -2.7
 
 
+def make_triangle(mesh: Mesh, p1: Point, p2: Point, p3: Point):
+    """Build a single (unregistered-boundary) triangle through the Mesh API.
+
+    Returns (vertices, halfedges, face) with the half-edges linked in a loop.
+    """
+    v1 = mesh.make_vertex(p1)
+    v2 = mesh.make_vertex(p2)
+    v3 = mesh.make_vertex(p3)
+
+    e12 = mesh.connect_vertices(v1, v2)
+    e23 = mesh.connect_vertices(v2, v3)
+    e31 = mesh.connect_vertices(v3, v1)
+
+    e12.next = e23
+    e23.next = e31
+    e31.next = e12
+
+    f = mesh.make_face()
+    f.edge = e12
+
+    return (v1, v2, v3), (e12, e23, e31), f
+
+
 class TestMeshStructure:
     def test_create_simple_mesh(self):
         # Create a simple triangular mesh
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-
-        # Create vertices
-        v1 = Vertex(p1)
-        v2 = Vertex(p2)
-        v3 = Vertex(p3)
-
-        # Create half-edges
-        e12 = HalfEdge(v1)
-        e23 = HalfEdge(v2)
-        e31 = HalfEdge(v3)
-
-        # Link half-edges
-        e12.next = e23
-        e23.next = e31
-        e31.next = e12
-
-        # Create face
-        f = Face(e12)
+        mesh = Mesh()
+        (v1, v2, v3), (e12, e23, e31), f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
 
         # Set faces for edges
         e12.face = f
@@ -180,9 +185,13 @@ class TestMeshStructure:
         assert e31.face == f
 
     def test_half_edge_boundary_property(self):
-        v = Vertex(Point(0.0, 0.0))
-        e1 = HalfEdge(v, face=Face())
-        e2 = HalfEdge(v, face=Face(is_boundary=True))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(0.0, 0.0))
+        v2 = mesh.make_vertex(Point(1.0, 0.0))
+        e1 = mesh.connect_vertices(v1, v2)
+        e2 = e1.twin
+        e1.face = mesh.make_face()
+        e2.face = mesh.make_face(is_boundary=True)
 
         assert not e1.is_boundary
         assert e2.is_boundary
@@ -190,95 +199,57 @@ class TestMeshStructure:
     def test_face_area(self):
         """Test area calculation for different face configurations."""
         # Create a simple triangular face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(2.0, 0.0))
-        v3 = Vertex(Point(0.0, 2.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(2.0, 0.0), Point(0.0, 2.0))
 
         # Area should be 2.0 (base * height / 2)
         assert f.area == 2.0
 
         # Test square face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(2.0, 0.0))
-        v3 = Vertex(Point(2.0, 2.0))
-        v4 = Vertex(Point(0.0, 2.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(0.0, 0.0))
+        v2 = mesh.make_vertex(Point(2.0, 0.0))
+        v3 = mesh.make_vertex(Point(2.0, 2.0))
+        v4 = mesh.make_vertex(Point(0.0, 2.0))
 
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-        e4 = HalfEdge(v4)
+        e1 = mesh.connect_vertices(v1, v2)
+        e2 = mesh.connect_vertices(v2, v3)
+        e3 = mesh.connect_vertices(v3, v4)
+        e4 = mesh.connect_vertices(v4, v1)
 
         e1.next = e2
         e2.next = e3
         e3.next = e4
         e4.next = e1
 
-        f = Face(e1)
+        f = mesh.make_face()
+        f.edge = e1
 
         # Area should be 4.0 (2 * 2)
         assert f.area == 4.0
 
         # Test face with negative area (vertices in clockwise order)
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(0.0, 2.0))
-        v3 = Vertex(Point(2.0, 0.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(0.0, 2.0), Point(2.0, 0.0))
 
         # Area should still be positive (2.0)
         assert f.area == 2.0
 
         # Test degenerate face (collinear points)
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
-        v3 = Vertex(Point(2.0, 0.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(2.0, 0.0))
 
         # Area should be 0.0
         assert f.area == 0.0
 
     def test_face_edges(self):
         # Create a triangular face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
-        v3 = Vertex(Point(0.0, 1.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, (e1, e2, e3), f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
 
         # Test edges iterator
         edges = list(f.edges)
@@ -289,19 +260,9 @@ class TestMeshStructure:
 
     def test_face_vertices(self):
         # Create a triangular face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
-        v3 = Vertex(Point(0.0, 1.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        (v1, v2, v3), _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
 
         # Test vertices iterator
         vertices = list(f.vertices)
@@ -312,29 +273,20 @@ class TestMeshStructure:
 
     def test_vertex_orbit(self):
         # Create a vertex with multiple outgoing edges
-        v_center = Vertex(Point(0.0, 0.0))
-        v1 = Vertex(Point(1.0, 0.0))
-        v2 = Vertex(Point(0.0, 1.0))
-        v3 = Vertex(Point(-1.0, 0.0))
+        mesh = Mesh()
+        v_center = mesh.make_vertex(Point(0.0, 0.0))
+        v1 = mesh.make_vertex(Point(1.0, 0.0))
+        v2 = mesh.make_vertex(Point(0.0, 1.0))
+        v3 = mesh.make_vertex(Point(-1.0, 0.0))
 
-        # Create half-edges
-        e_out1 = HalfEdge(v_center)
-        e_out2 = HalfEdge(v_center)
-        e_out3 = HalfEdge(v_center)
+        # Create half-edges (twins are created automatically)
+        e_out1 = mesh.connect_vertices(v_center, v1)
+        e_out2 = mesh.connect_vertices(v_center, v2)
+        e_out3 = mesh.connect_vertices(v_center, v3)
 
-        e_in1 = HalfEdge(v1)
-        e_in2 = HalfEdge(v2)
-        e_in3 = HalfEdge(v3)
-
-        # Set twins
-        e_out1.twin = e_in1
-        e_in1.twin = e_out1
-
-        e_out2.twin = e_in2
-        e_in2.twin = e_out2
-
-        e_out3.twin = e_in3
-        e_in3.twin = e_out3
+        e_in1 = e_out1.twin
+        e_in2 = e_out2.twin
+        e_in3 = e_out3.twin
 
         # Connect the edges
         e_in1.next = e_out2
@@ -353,9 +305,10 @@ class TestMeshStructure:
 
     def test_vertex_hashability(self):
         # Create vertices
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(1.0, 2.0))  # Same point, different object
-        v3 = Vertex(Point(3.0, 4.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(1.0, 2.0))  # Same point, different vertex
+        v3 = mesh.make_vertex(Point(3.0, 4.0))
 
         # Test hashability
         hash(v1)  # This should not raise an exception
@@ -377,12 +330,14 @@ class TestMeshStructure:
 
     def test_halfedge_hashability(self):
         # Create vertices and half-edges
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(0.0, 0.0))
+        v2 = mesh.make_vertex(Point(1.0, 0.0))
+        v3 = mesh.make_vertex(Point(0.0, 1.0))
 
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v1)  # Same origin, different object
-        e3 = HalfEdge(v2)
+        e1 = mesh.connect_vertices(v1, v2)
+        e2 = mesh.connect_vertices(v1, v3)  # Same origin, different edge
+        e3 = mesh.connect_vertices(v2, v3)
 
         # Test hashability
         hash(e1)  # This should not raise an exception
@@ -403,8 +358,9 @@ class TestMeshStructure:
 
     def test_face_hashability(self):
         # Create faces
-        f1 = Face()
-        f2 = Face()
+        mesh = Mesh()
+        f1 = mesh.make_face()
+        f2 = mesh.make_face()
 
         # Test hashability
         hash(f1)  # This should not raise an exception
@@ -814,126 +770,108 @@ class TestMesh:
 
 
 
-class TestIndexStore:
+class TestMeshStores:
+    """Tests for the index store views exposed as mesh.vertices etc."""
+
     def test_initialization(self):
-        store = IndexStore()
-        assert len(store) == 0
+        mesh = Mesh()
+        assert len(mesh.vertices) == 0
+        assert len(mesh.halfedges) == 0
+        assert len(mesh.faces) == 0
+        assert len(mesh.boundaries) == 0
 
     def test_add_single_object(self):
-        store = IndexStore()
-        v = Vertex(Point(1.0, 2.0))
-        store.add(v)
-        assert len(store) == 1
+        mesh = Mesh()
+        v = mesh.make_vertex(Point(1.0, 2.0))
+        assert len(mesh.vertices) == 1
         assert v.i == index_type(0)
 
     def test_add_multiple_objects(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
-        v3 = Vertex(Point(5.0, 6.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(3.0, 4.0))
+        v3 = mesh.make_vertex(Point(5.0, 6.0))
 
-        store.add(v1)
-        store.add(v2)
-        store.add(v3)
-
-        assert len(store) == 3
+        assert len(mesh.vertices) == 3
         assert v1.i == index_type(0)
         assert v2.i == index_type(1)
         assert v3.i == index_type(2)
 
     def test_to_index(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(3.0, 4.0))
 
-        store.add(v1)
-        store.add(v2)
-
-        assert store.to_index(v1) == index_type(0)
-        assert store.to_index(v2) == index_type(1)
+        assert mesh.vertices.to_index(v1) == index_type(0)
+        assert mesh.vertices.to_index(v2) == index_type(1)
 
     def test_to_object(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(3.0, 4.0))
 
-        store.add(v1)
-        store.add(v2)
-
-        assert store.to_object(0) is v1
-        assert store.to_object(1) is v2
-        assert store.to_object(index_type(0)) is v1
-        assert store.to_object(index_type(1)) is v2
+        assert mesh.vertices.to_object(0) == v1
+        assert mesh.vertices.to_object(1) == v2
+        assert mesh.vertices.to_object(index_type(0)) == v1
+        assert mesh.vertices.to_object(index_type(1)) == v2
 
         with pytest.raises(IndexError):
-            store.to_object(2)
+            mesh.vertices.to_object(2)
 
     def test_items(self):
-        store = IndexStore()
-        vertices = [Vertex(Point(float(i), float(i))) for i in range(3)]
+        mesh = Mesh()
+        vertices = [mesh.make_vertex(Point(float(i), float(i))) for i in range(3)]
 
-        for v in vertices:
-            store.add(v)
-
-        items = list(store.items())
+        items = list(mesh.vertices.items())
         assert len(items) == 3
 
         for i, (idx, obj) in enumerate(items):
             assert idx == index_type(i)
-            assert obj is vertices[i]
+            assert obj == vertices[i]
 
     def test_contains_added_object(self):
-        store = IndexStore()
-        v = Vertex(Point(1.0, 2.0))
-        store.add(v)
+        mesh = Mesh()
+        v = mesh.make_vertex(Point(1.0, 2.0))
 
-        assert v in store
+        assert v in mesh.vertices
 
-    def test_contains_not_added_object(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
+    def test_contains_other_mesh_object(self):
+        mesh = Mesh()
+        other_mesh = Mesh()
+        mesh.make_vertex(Point(1.0, 2.0))
+        v2 = other_mesh.make_vertex(Point(3.0, 4.0))
 
-        store.add(v1)
+        assert v2 not in mesh.vertices
 
-        assert v2 not in store
+    def test_contains_wrong_kind(self):
+        # Interior and boundary faces live in separate stores
+        mesh = Mesh()
+        face = mesh.make_face()
+        boundary = mesh.make_face(is_boundary=True)
 
-    def test_contains_wrong_index(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
-
-        store.add(v1)
-        store.add(v2)
-
-        # Manually corrupt the index - v2 claims to be at index 0
-        v2.i = index_type(0)
-        # Now v2 is not in the store because store[0] is v1, not v2
-        assert v2 not in store
+        assert face in mesh.faces
+        assert face not in mesh.boundaries
+        assert boundary in mesh.boundaries
+        assert boundary not in mesh.faces
 
     def test_next_index(self):
-        store = IndexStore()
-        assert store.next_index == index_type(0)
+        mesh = Mesh()
+        assert mesh.vertices.next_index == index_type(0)
 
-        v = Vertex(Point(1.0, 2.0))
-        store.add(v)
-        assert store.next_index == index_type(1)
+        mesh.make_vertex(Point(1.0, 2.0))
+        assert mesh.vertices.next_index == index_type(1)
 
-        v2 = Vertex(Point(3.0, 4.0))
-        store.add(v2)
-        assert store.next_index == index_type(2)
+        mesh.make_vertex(Point(3.0, 4.0))
+        assert mesh.vertices.next_index == index_type(2)
 
     def test_iteration(self):
-        store = IndexStore()
-        vertices = [Vertex(Point(float(i), float(i))) for i in range(5)]
+        mesh = Mesh()
+        vertices = [mesh.make_vertex(Point(float(i), float(i))) for i in range(5)]
 
-        for v in vertices:
-            store.add(v)
-
-        iterated = list(store)
+        iterated = list(mesh.vertices)
         assert len(iterated) == 5
         for i, v in enumerate(iterated):
-            assert v is vertices[i]
+            assert v == vertices[i]
 
 
 def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
@@ -1062,7 +1000,8 @@ class TestZeroForm:
         zf = ZeroForm(simple_mesh)
 
         # Create a vertex that's not in the mesh
-        invalid_vertex = Vertex(Point(999.0, 999.0))
+        other_mesh = Mesh()
+        invalid_vertex = other_mesh.make_vertex(Point(999.0, 999.0))
 
         with pytest.raises(KeyError):
             zf[invalid_vertex] = 1.0
@@ -1865,8 +1804,10 @@ class TestOneForm:
         of = OneForm(simple_mesh)
 
         # Create a half-edge that's not in the mesh
-        invalid_vertex = Vertex(Point(999.0, 999.0))
-        invalid_hedge = HalfEdge(invalid_vertex)
+        other_mesh = Mesh()
+        invalid_vertex = other_mesh.make_vertex(Point(999.0, 999.0))
+        other_vertex = other_mesh.make_vertex(Point(998.0, 998.0))
+        invalid_hedge = other_mesh.connect_vertices(invalid_vertex, other_vertex)
 
         with pytest.raises(KeyError):
             of[invalid_hedge] = 1.0
@@ -2251,9 +2192,8 @@ class TestTwoForm:
         tf = TwoForm(simple_mesh)
 
         # Create a face that's not in the mesh
-        invalid_vertex = Vertex(Point(999.0, 999.0))
-        invalid_hedge = HalfEdge(invalid_vertex)
-        invalid_face = Face(invalid_hedge)
+        other_mesh = Mesh()
+        invalid_face = other_mesh.make_face()
 
         with pytest.raises(KeyError):
             tf[invalid_face] = 1.0

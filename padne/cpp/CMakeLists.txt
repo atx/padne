@@ -12,6 +12,22 @@ list(APPEND CMAKE_PREFIX_PATH "${CGAL_DIR}")
 
 find_package(CGAL REQUIRED COMPONENTS Core)
 
+# Struct-of-arrays half-edge mesh storage (no CGAL dependency)
+nanobind_add_module(_mesh _mesh.cpp)
+target_compile_features(_mesh PRIVATE cxx_std_17)
+
+# Stub generation -> padne/_mesh.pyi
+nanobind_add_stub(
+    _mesh_stub
+    MODULE _mesh
+    OUTPUT _mesh.pyi
+    PYTHON_PATH $<TARGET_FILE_DIR:_mesh>
+    DEPENDS _mesh
+)
+
+install(TARGETS _mesh LIBRARY DESTINATION padne)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/_mesh.pyi DESTINATION padne)
+
 nanobind_add_module(_cgal _cgal.cpp)
 
 target_link_libraries(_cgal PRIVATE CGAL::CGAL_Core)

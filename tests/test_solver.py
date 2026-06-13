@@ -1037,16 +1037,22 @@ class TestComputePowerDensity:
         assert total_power > 0.0
 
 
+def make_gradient_vertices(points):
+    """Vertices for compute_triangle_gradient tests; they need a backing mesh."""
+    scratch = mesh.Mesh()
+    return [scratch.make_vertex(p) for p in points]
+
+
 class TestComputeTriangleGradient:
 
     def test_constant_function(self):
         """Test gradient of a constant function (should be zero)."""
         # Create three vertices for a simple triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),
-            mesh.Vertex(mesh.Point(1.0, 0.0)),
-            mesh.Vertex(mesh.Point(0.0, 1.0))
-        ]
+        vertices = make_gradient_vertices([
+            mesh.Point(0.0, 0.0),
+            mesh.Point(1.0, 0.0),
+            mesh.Point(0.0, 1.0)
+        ])
 
         # Constant function value of 5.0 at all vertices
         values = [5.0, 5.0, 5.0]
@@ -1060,11 +1066,11 @@ class TestComputeTriangleGradient:
     def test_linear_function_x(self):
         """Test gradient of f(x,y) = x (linear in x direction)."""
         # Create vertices for unit right triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 1
-            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 0
-        ]
+        vertices = make_gradient_vertices([
+            mesh.Point(0.0, 0.0),  # f = 0
+            mesh.Point(1.0, 0.0),  # f = 1
+            mesh.Point(0.0, 1.0)   # f = 0
+        ])
 
         # Function values: f(x,y) = x
         values = [0.0, 1.0, 0.0]
@@ -1078,11 +1084,11 @@ class TestComputeTriangleGradient:
     def test_linear_function_y(self):
         """Test gradient of f(x,y) = y (linear in y direction)."""
         # Create vertices for unit right triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 1
-        ]
+        vertices = make_gradient_vertices([
+            mesh.Point(0.0, 0.0),  # f = 0
+            mesh.Point(1.0, 0.0),  # f = 0
+            mesh.Point(0.0, 1.0)   # f = 1
+        ])
 
         # Function values: f(x,y) = y
         values = [0.0, 0.0, 1.0]
@@ -1096,11 +1102,11 @@ class TestComputeTriangleGradient:
     def test_linear_function_xy(self):
         """Test gradient of f(x,y) = x + y."""
         # Create vertices for unit right triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 1
-            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 1
-        ]
+        vertices = make_gradient_vertices([
+            mesh.Point(0.0, 0.0),  # f = 0
+            mesh.Point(1.0, 0.0),  # f = 1
+            mesh.Point(0.0, 1.0)   # f = 1
+        ])
 
         # Function values: f(x,y) = x + y
         values = [0.0, 1.0, 1.0]
