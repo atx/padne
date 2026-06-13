@@ -153,6 +153,23 @@ def make_triangle(mesh: Mesh, p1: Point, p2: Point, p3: Point):
     return (v1, v2, v3), (e12, e23, e31), f
 
 
+def make_square_with_center_mesh() -> Mesh:
+    """Unit square with a center vertex, split into four right-isosceles triangles.
+
+    Vertices 0..3 are the CCW corners, vertex 4 is the center (0.5, 0.5). The
+    boundary loop is fully constructed (via from_triangle_soup).
+    """
+    points = [
+        Point(0.0, 0.0),  # 0
+        Point(1.0, 0.0),  # 1
+        Point(1.0, 1.0),  # 2
+        Point(0.0, 1.0),  # 3
+        Point(0.5, 0.5),  # 4: center
+    ]
+    triangles = [(0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4)]
+    return Mesh.from_triangle_soup(points, triangles)
+
+
 class TestMeshStructure:
     def test_create_simple_mesh(self):
         # Create a simple triangular mesh
@@ -271,6 +288,16 @@ class TestMeshStructure:
         assert vertices[1] == v2
         assert vertices[2] == v3
 
+    def test_face_centroid(self):
+        """Centroid is the mean of the face's vertex coordinates."""
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(3.0, 0.0), Point(0.0, 6.0))
+
+        # Mean x = (0 + 3 + 0) / 3 = 1.0, mean y = (0 + 0 + 6) / 3 = 2.0
+        assert f.centroid.x == pytest.approx(1.0)
+        assert f.centroid.y == pytest.approx(2.0)
+
     def test_vertex_orbit(self):
         # Create a vertex with multiple outgoing edges
         mesh = Mesh()
@@ -302,6 +329,55 @@ class TestMeshStructure:
         assert orbit_edges[0] == e_out1
         assert orbit_edges[1] == e_out2
         assert orbit_edges[2] == e_out3
+
+    def test_vertex_orbit_boundary(self):
+        """Orbit of a boundary vertex visits every outgoing edge and terminates."""
+        mesh = make_square_with_center_mesh()
+        corner = mesh.vertices.to_object(0)
+
+        orbit = list(corner.orbit())
+
+        # Corner 0 connects to vertices 1 and 3 (along the boundary) and to the
+        # center vertex 4. The orbit must pass through the boundary half-edge
+        # and still close back onto its starting edge.
+        assert len(orbit) == 3
+        assert all(edge.origin == corner for edge in orbit)
+        assert {edge.twin.origin.i for edge in orbit} == {1, 3, 4}
+
+    def test_halfedge_cotan_interior_edge(self):
+        """cotan of an interior edge sums |cot|/2 over both opposite angles."""
+        mesh = make_square_with_center_mesh()
+        center = mesh.vertices.to_object(4)
+        corner = mesh.vertices.to_object(0)
+
+        # Edge center->corner is shared by two right-isosceles triangles; the
+        # opposite angle in each is 45 deg (cot = 1), so cotan = (1 + 1) / 2.
+        hedge = mesh.connect_vertices(center, corner)
+        assert hedge.cotan() == pytest.approx(1.0)
+
+    def test_halfedge_cotan_boundary_edge(self):
+        """cotan of a boundary edge counts only its single adjacent triangle."""
+        mesh = make_square_with_center_mesh()
+        v0 = mesh.vertices.to_object(0)
+        v1 = mesh.vertices.to_object(1)
+
+        # Edge 0->1 lies on the boundary, so only triangle (0, 1, 4) contributes;
+        # its opposite angle at the center is 90 deg (cot = 0).
+        hedge = mesh.connect_vertices(v0, v1)
+        assert hedge.cotan() == pytest.approx(0.0)
+
+    def test_halfedge_cotan_asymmetric_triangle(self):
+        """cotan on a boundary edge yields the expected non-trivial value."""
+        points = [Point(0.0, 0.0), Point(4.0, 0.0), Point(0.0, 3.0)]
+        mesh = Mesh.from_triangle_soup(points, [(0, 1, 2)])
+        v0 = mesh.vertices.to_object(0)
+        v1 = mesh.vertices.to_object(1)
+
+        # Only the single triangle contributes. Opposite vertex is (0, 3); the
+        # angle there between vectors (0, -3) and (4, -3) has cot = 9/12 = 0.75,
+        # so cotan = 0.75 / 2.
+        hedge = mesh.connect_vertices(v0, v1)
+        assert hedge.cotan() == pytest.approx(0.375)
 
     def test_vertex_hashability(self):
         # Create vertices
