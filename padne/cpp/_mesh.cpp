@@ -12,10 +12,11 @@
 //    face store when BOUNDARY_BIT is set. INVALID means "no face yet".
 //  - INVALID marks unset references in all index arrays.
 //
-// Algorithmic methods (orbit, walk, cotan, area, from_triangle_soup, ...)
-// are attached to these types from padne/mesh.py so that they stay identical
-// to the original pure-Python implementation for now.
+// Algorithmic methods (orbit, walk, area, from_triangle_soup, ...) are
+// attached to these types from padne/mesh.py so that they stay identical to
+// the original pure-Python implementation for now.
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -267,6 +268,32 @@ NB_MODULE(_mesh, m) {
                 check_same_mesh(h.m, *face);
                 h.m->he_face[h.i] = encode_face(*face);
             })
+        // Cotangent weight of this edge: sums |cot(opposite angle)| / 2 over
+        // the two adjacent triangles, skipping any side that is a boundary
+        // face. Mirrors the former pure-Python HalfEdge.cotan.
+        .def("cotan", [](const HalfEdgeRef &h) {
+            Mesh *m = h.m;
+            uint32_t vi = m->he_origin[h.i];
+            uint32_t vk = m->he_origin[h.i ^ 1];
+            double xi = m->vertex_x[vi], yi = m->vertex_y[vi];
+            double xk = m->vertex_x[vk], yk = m->vertex_y[vk];
+
+            double ratio = 0.0;
+            for (uint32_t start : {h.i, h.i ^ 1}) {
+                uint32_t other = m->he_next[m->he_next[start]];
+                // other.next is `start`'s own face; skip if it is a boundary.
+                if (m->he_face[m->he_next[other]] & BOUNDARY_BIT)
+                    continue;
+                uint32_t vo = m->he_origin[other];
+                double xo = m->vertex_x[vo], yo = m->vertex_y[vo];
+                double dix = xi - xo, diy = yi - yo;
+                double dkx = xk - xo, dky = yk - yo;
+                double dot = dix * dkx + diy * dky;
+                double cross = dix * dky - diy * dkx;
+                ratio += std::fabs(dot / cross) / 2.0;
+            }
+            return ratio;
+        })
         .def("__eq__", [](const HalfEdgeRef &a, nb::object obj) {
             HalfEdgeRef b;
             return try_ref(obj, b) && a.m == b.m && a.i == b.i;
