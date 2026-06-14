@@ -32,58 +32,6 @@
 namespace nb = nanobind;
 using namespace nb::literals;
 
-// Replacement for pybind11's scoped_ostream_redirect: routes std::cout (or
-// another std::ostream) through a Python file-like object for the lifetime
-// of the instance.
-// The mostly just serves for debugging allowing us to std::cout in C++.
-// TODO: This should be dropped and replaced with a more robust logging system.
-class scoped_ostream_redirect {
-public:
-    explicit scoped_ostream_redirect(
-        std::ostream& stream = std::cout,
-        nb::object py_stream = nb::module_::import_("sys").attr("stdout"))
-        : stream_(stream),
-          buf_(std::move(py_stream)),
-          old_buf_(stream.rdbuf(&buf_)) {}
-
-    ~scoped_ostream_redirect() { stream_.rdbuf(old_buf_); }
-
-    scoped_ostream_redirect(const scoped_ostream_redirect&) = delete;
-    scoped_ostream_redirect& operator=(const scoped_ostream_redirect&) = delete;
-
-private:
-    class py_streambuf : public std::streambuf {
-    public:
-        explicit py_streambuf(nb::object stream) : py_stream_(std::move(stream)) {}
-
-    protected:
-        std::streamsize xsputn(const char* s, std::streamsize n) override {
-            nb::gil_scoped_acquire gil;
-            py_stream_.attr("write")(nb::str(s, static_cast<size_t>(n)));
-            return n;
-        }
-        int_type overflow(int_type c) override {
-            if (c != traits_type::eof()) {
-                char ch = static_cast<char>(c);
-                xsputn(&ch, 1);
-            }
-            return c;
-        }
-        int sync() override {
-            nb::gil_scoped_acquire gil;
-            py_stream_.attr("flush")();
-            return 0;
-        }
-
-    private:
-        nb::object py_stream_;
-    };
-
-    std::ostream& stream_;
-    py_streambuf buf_;
-    std::streambuf* old_buf_;
-};
-
 // Type definitions
 typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
 typedef CGAL::Polygon_2<K> Polygon_2;
@@ -394,36 +342,6 @@ static void set_mesher_seeds(Mesher& mesher,
     mesher.set_seeds(seed_points.begin(), seed_points.end(), mark);
 }
 
-void setup_mesher(Mesher& mesher,
-                  const nb::object& py_config,
-                  const std::vector<std::pair<double, double>>& seeds,
-                  const PolyBoundaryDistanceMap* distance_map_ptr) {
-    // Extract standard parameters
-    auto minimum_angle = nb::cast<float>(py_config.attr("minimum_angle"));
-    auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
-    auto b = 1 / (4*B*B);
-    auto maximum_size = nb::cast<float>(py_config.attr("maximum_size"));
-
-    // Extract variable density parameters
-    auto min_distance = nb::cast<double>(py_config.attr("variable_density_min_distance"));
-    auto max_distance = nb::cast<double>(py_config.attr("variable_density_max_distance"));
-    auto size_factor = nb::cast<double>(py_config.attr("variable_size_maximum_factor"));
-
-    mesher.set_criteria(Criteria(
-            b,
-            maximum_size,
-            distance_map_ptr,
-            min_distance,
-            max_distance,
-            size_factor,
-            K()
-        )
-    );
-
-    set_mesher_seeds(mesher, seeds);
-}
-
-
 std::pair<nb::list, nb::list> convert_meshing_result_to_python(CDT &cdt)
 {
     nb::list py_vertices;
@@ -464,17 +382,33 @@ nb::dict mesh(const nb::object& py_config,
               const std::vector<std::pair<double, double>>& seeds,
               const PolyBoundaryDistanceMap* distance_map_ptr) {
 
-    // Redirect via python during the scope of this function
-    scoped_ostream_redirect stream_redirect;
+    // Pull the meshing criteria out of the Python config object while the GIL
+    // is held; everything below this point is pure C++.
+    const float minimum_angle = nb::cast<float>(py_config.attr("minimum_angle"));
+    const double B = 1.0 / (2 * sin(minimum_angle * M_PI / 180.0));
+    const double aspect_bound = 1.0 / (4 * B * B);
+    const float maximum_size = nb::cast<float>(py_config.attr("maximum_size"));
+    const double min_distance = nb::cast<double>(py_config.attr("variable_density_min_distance"));
+    const double max_distance = nb::cast<double>(py_config.attr("variable_density_max_distance"));
+    const double size_factor = nb::cast<double>(py_config.attr("variable_size_maximum_factor"));
 
     CDT cdt;
-    setup_cdt(cdt, vertices, segments, seeds);
+    {
+        // The CGAL meshing touches no Python state: the geometry inputs are
+        // owned C++ copies and the distance map is precomputed and kept alive
+        // by the caller. Releasing the GIL lets sibling meshing threads run
+        // concurrently. nb::gil_scoped_release re-acquires the GIL on scope
+        // exit, including while a C++ exception unwinds.
+        nb::gil_scoped_release nogil;
 
-    Mesher mesher(cdt);
+        setup_cdt(cdt, vertices, segments, seeds);
 
-    setup_mesher(mesher, py_config, seeds, distance_map_ptr);
-
-    mesher.refine_mesh();
+        Mesher mesher(cdt);
+        mesher.set_criteria(Criteria(aspect_bound, maximum_size, distance_map_ptr,
+                                     min_distance, max_distance, size_factor, K()));
+        set_mesher_seeds(mesher, seeds);
+        mesher.refine_mesh();
+    }
 
     // Okay, so for the result, we return
     // result["vertices"], which is a list of tuples (x, y) from the triangulation
@@ -508,8 +442,13 @@ PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(nb::object polygon, double quan
     // Initialize distance array
     distances.resize(width * height);
 
-    // Compute distances
-    compute_distances();
+    // Rasterizing the distance-to-boundary grid is the dominant cost of meshing
+    // a large region, and it is pure C++ (cgal_polygon holds no Python state by
+    // now). Drop the GIL so sibling meshing threads run concurrently.
+    {
+        nb::gil_scoped_release nogil;
+        compute_distances();
+    }
 }
 
 

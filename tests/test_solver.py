@@ -9,7 +9,7 @@ import pickle
 from dataclasses import dataclass
 from typing import Optional, Any
 
-from padne import solver, problem, mesh, kicad
+from padne import solver, problem, mesh, kicad, parallel
 from padne.kicad import ensure_geometry_is_multipolygon
 
 from conftest import for_all_kicad_projects
@@ -388,6 +388,51 @@ class TestSolverMeshLayer:
                     f"Connection point {conn_point_mesh} on layer {connection.layer.name} "
                     f"should be represented by a vertex in the mesh"
                 )
+
+    def test_threaded_meshing_matches_serial(self, kicad_test_projects):
+        """Meshing across worker threads (which release the GIL inside CGAL)
+        must produce the same meshes as meshing serially in one thread."""
+        project = kicad_test_projects["simple_geometry"]
+        prob = kicad.load_kicad_project(project.pro_path)
+        mesher = mesh.Mesher()
+        strtrees = solver.construct_strtrees_from_layers(prob.layers)
+        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        connected = solver.find_connected_layer_geom_indices(cg)
+
+        original_jobs = parallel.config().jobs
+
+        def mesh_with_jobs(jobs):
+            # configure() refuses to run while a pool is live, so tear down first.
+            parallel.shutdown()
+            parallel.configure(jobs=jobs)
+            try:
+                return solver.generate_meshes_for_problem(
+                    prob, mesher, connected, strtrees)
+            finally:
+                parallel.shutdown()
+
+        try:
+            serial_meshes, serial_layers = mesh_with_jobs(1)
+            threaded_meshes, threaded_layers = mesh_with_jobs(4)
+        finally:
+            parallel.shutdown()
+            parallel.configure(jobs=original_jobs)
+
+        # Compare geometric content rather than half-edge indices, since
+        # from_triangle_soup's internal numbering is not deterministic across
+        # builds. Keyed by rounded coordinates so it is numbering-invariant.
+        def geometry(m):
+            verts = sorted((round(v.p.x, 9), round(v.p.y, 9)) for v in m.vertices)
+            tris = sorted(
+                tuple(sorted((round(vt.p.x, 9), round(vt.p.y, 9)) for vt in f.vertices))
+                for f in m.faces
+            )
+            return verts, tris
+
+        assert threaded_layers == serial_layers
+        assert len(threaded_meshes) == len(serial_meshes)
+        for serial_m, threaded_m in zip(serial_meshes, threaded_meshes):
+            assert geometry(serial_m) == geometry(threaded_m)
 
 
 class TestProbeDirective:

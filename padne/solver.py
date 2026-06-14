@@ -13,7 +13,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import problem, mesh, context
+from . import problem, mesh, context, parallel
 from .context import stage_timer
 
 log = logging.getLogger(__name__)
@@ -270,7 +270,12 @@ def generate_meshes_for_problem(prob: problem.Problem,
                                 connected_layer_mesh_pairs: set[tuple[int, int]],
                                 strtrees: list[shapely.strtree.STRtree]
                                 ) -> tuple[list[mesh.Mesh], list[int]]:
-    meshes: list[mesh.Mesh] = []
+    # Collect the independent per-region meshing jobs first, then mesh them
+    # concurrently. poly_to_mesh's heavy CGAL work -- the distance-map
+    # rasterization and the Delaunay refinement -- releases the GIL (see _cgal),
+    # so threads parallelize it; the Python-side half-edge build stays GIL-bound
+    # and is effectively serialized, which is acceptable for now.
+    mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point]]] = []
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
@@ -313,12 +318,15 @@ def generate_meshes_for_problem(prob: problem.Problem,
             # TODO: Add a warning here if we detect the case above
             seed_points_in_geom = geom_to_seed_points[geom_i]
 
-            m = mesher.poly_to_mesh(
-                layer.geoms[geom_i],
-                seed_points_in_geom
-            )
-            meshes.append(m)
+            mesh_jobs.append((layer.geoms[geom_i], seed_points_in_geom))
             mesh_index_to_layer_index.append(layer_i)
+
+    # Mesh the regions concurrently. thread_map runs serially in-thread when
+    # jobs == 1, so single-job runs keep clean tracebacks and full coverage.
+    meshes = parallel.thread_map(
+        lambda job: mesher.poly_to_mesh(job[0], job[1]),
+        mesh_jobs,
+    )
 
     return meshes, mesh_index_to_layer_index
 

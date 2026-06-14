@@ -12,6 +12,11 @@ list(APPEND CMAKE_PREFIX_PATH "${CGAL_DIR}")
 
 find_package(CGAL REQUIRED COMPONENTS Core)
 
+# Required so CGAL guards its internal global state for concurrent meshing
+# (padne.parallel meshes regions in parallel threads while _cgal.mesh holds the
+# GIL released). Pulls in pthread on Linux.
+find_package(Threads REQUIRED)
+
 # Struct-of-arrays half-edge mesh storage (no CGAL dependency)
 nanobind_add_module(_mesh _mesh.cpp)
 target_compile_features(_mesh PRIVATE cxx_std_17)
@@ -30,11 +35,13 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/_mesh.pyi DESTINATION padne)
 
 nanobind_add_module(_cgal _cgal.cpp)
 
-target_link_libraries(_cgal PRIVATE CGAL::CGAL_Core)
+target_link_libraries(_cgal PRIVATE CGAL::CGAL_Core Threads::Threads)
 target_compile_features(_cgal PRIVATE cxx_std_17)
 
-# Enable CGAL's internal assertion checking to catch geometric degeneracies
-target_compile_definitions(_cgal PRIVATE CGAL_DEBUG=1)
+# CGAL_DEBUG enables CGAL's internal assertion checking to catch geometric
+# degeneracies. CGAL_HAS_THREADS makes CGAL's global state thread-safe, which
+# is required because we mesh independent regions concurrently.
+target_compile_definitions(_cgal PRIVATE CGAL_DEBUG=1 CGAL_HAS_THREADS)
 
 # Stub generation -> padne/_cgal.pyi
 nanobind_add_stub(
