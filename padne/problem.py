@@ -90,11 +90,8 @@ class Network:
                     raise TypeError("Terminal must be a NodeID")
                 node_set.add(terminal)
 
-        # Do not allow floating elements
-        for connection in self.connections:
-            if connection.node_id not in node_set:
-                raise ValueError("Connection must be connected to at least one element")
-
+        # Connections need not be owned by an element: a PROBE directive emits a
+        # connection with no element purely to force a mesh seed point at a pad.
         keys = list(node_set)
         nodes = {key: i for i, key in enumerate(keys)}
         # This bypasses the frozen dataclass restriction

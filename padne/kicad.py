@@ -731,6 +731,41 @@ class RegulatorSpec(BaseLumpedSpec):
     lumped_type: ClassVar[type] = problem.VoltageRegulator
 
 
+@dataclass
+class ProbeSpec:
+    """
+    Specifies pads at which a mesh vertex must be forced, without adding any
+    electrical element. Each pad becomes a single-connection Network so the
+    mesher seeds a vertex exactly at the pad center.
+    """
+    endpoints: list[Endpoint] = field(default_factory=list)
+
+    @classmethod
+    def from_directive(cls, directive: Directive) -> 'ProbeSpec':
+        if "p" not in directive.params:
+            raise ValueError("PROBE directive requires a 'p' parameter")
+        return cls(endpoints=_parse_endpoints_param(directive.params["p"]))
+
+    def construct(self,
+                  pad_index: PadIndex,
+                  layer_dict: dict[str, problem.Layer]) -> list[problem.Network]:
+        networks = []
+        for ep in self.endpoints:
+            # Note: This can technically resolve into a non-SMD pad, in which
+            # case the result is not particularly useful I think.
+            layerpoints = pad_index.find_by_endpoint(ep)
+            if not layerpoints:
+                raise ValueError(
+                    f"PROBE endpoint {ep.designator}.{ep.pad} did not resolve to any pad"
+                )
+            # One single-connection network per pad so probes never wire geoms
+            # together in the connectivity graph.
+            for lp in layerpoints:
+                conn = problem.Connection(layer=layer_dict[lp.layer], point=lp.point)
+                networks.append(problem.Network(connections=[conn], elements=[]))
+        return networks
+
+
 @dataclass(frozen=True)
 class CopperSpec:
     """
@@ -963,6 +998,7 @@ class Directives:
     """
     lumped_specs: list[BaseLumpedSpec]
     copper_spec: Optional[CopperSpec] = None
+    probe_specs: list[ProbeSpec] = field(default_factory=list)
 
 
 @dataclass
@@ -996,6 +1032,7 @@ def process_directives(directives: list[Directive]) -> Directives:
     }
     lumped_specs = []
     copper_spec = None
+    probe_specs = []
 
     for directive in directives:
         if directive.name == "COPPER":
@@ -1003,13 +1040,16 @@ def process_directives(directives: list[Directive]) -> Directives:
                 warnings.warn("Multiple COPPER directives found, using the first one")
                 continue
             copper_spec = CopperSpec.from_directive(directive)
+        elif directive.name == "PROBE":
+            probe_specs.append(ProbeSpec.from_directive(directive))
         elif directive.name in directive_name_to_spec_type:
             lumped_spec = directive_name_to_spec_type[directive.name].from_directive(directive)
             lumped_specs.append(lumped_spec)
         else:
             warnings.warn(f"Unknown directive: {directive.name}")
 
-    return Directives(lumped_specs=lumped_specs, copper_spec=copper_spec)
+    return Directives(lumped_specs=lumped_specs, copper_spec=copper_spec,
+                      probe_specs=probe_specs)
 
 
 def build_schema_hierarchy(sch_file_path: pathlib.Path,
@@ -1716,6 +1756,9 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     for lumped_spec in directives.lumped_specs:
         network = lumped_spec.construct(pad_index, layer_dict)
         networks.append(network)
+
+    for probe_spec in directives.probe_specs:
+        networks.extend(probe_spec.construct(pad_index, layer_dict))
 
     # Get all layers as a list
     layer_names_in_order = list(layer_dict.keys())
