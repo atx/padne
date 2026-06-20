@@ -390,6 +390,72 @@ class TestSolverMeshLayer:
                 )
 
 
+class TestProbeDirective:
+    # Probe pad centers read from tests/kicad/probe_directive/probe_directive.kicad_pcb
+    # (pad "1" local offset is (0 0), so absolute coord == footprint origin, all F.Cu).
+    EXPECTED = {"TP3": (115.25, 101.5), "TP4": (127.6, 99.4), "TP5": (120.25, 99.9)}
+
+    def test_network_allows_floating_connection(self):
+        # A connection owned by no element is permitted; PROBE relies on this.
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 1, 1)]),
+            name="F.Cu",
+            conductance=1.0,
+        )
+        conn = problem.Connection(layer=layer, point=shapely.geometry.Point(0.5, 0.5))
+        network = problem.Network(connections=[conn], elements=[])
+        assert network.nodes == {}
+        assert network.has_source is False
+
+    def test_probe_spec_parse(self):
+        spec = kicad.ProbeSpec.from_directive(
+            kicad.Directive.parse("!padne PROBE p=TP3.1,TP4.1"))
+        assert spec.endpoints == [kicad.Endpoint("TP3", "1"), kicad.Endpoint("TP4", "1")]
+
+        with pytest.raises(ValueError):
+            kicad.ProbeSpec.from_directive(kicad.Directive.parse("!padne PROBE"))
+
+    def test_probe_spec_construct(self):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 10)]),
+            name="F.Cu",
+            conductance=1.0,
+        )
+        ep = kicad.Endpoint("TP9", "1")
+        pad_index = kicad.PadIndex()
+        pad_index.mapping[ep] = [kicad.LayerPoint(layer="F.Cu", point=shapely.geometry.Point(3, 4))]
+
+        networks = kicad.ProbeSpec(endpoints=[ep]).construct(pad_index, {"F.Cu": layer})
+
+        assert len(networks) == 1
+        assert networks[0].elements == []
+        assert len(networks[0].connections) == 1
+        conn = networks[0].connections[0]
+        assert conn.layer is layer
+        assert conn.point.equals(shapely.geometry.Point(3, 4))
+
+        # An endpoint that resolves to no pad is a user error and must surface.
+        with pytest.raises(ValueError):
+            kicad.ProbeSpec(endpoints=[kicad.Endpoint("NOPE", "1")]).construct(
+                kicad.PadIndex(), {})
+
+    def test_probe_directive_forces_vertices(self, kicad_test_projects):
+        # Coarse mesh (== --mesh-size 2): a vertex landing on a sub-mm pad center is
+        # impossible by chance, so this only passes if the PROBE seed is forced.
+        prob = kicad.load_kicad_project(kicad_test_projects["probe_directive"].pro_path)
+        sol = solver.solve(prob, mesh.Mesher.Config(maximum_size=2.0))
+
+        for name, (x, y) in self.EXPECTED.items():
+            target = mesh.Point(x, y)
+            nearest = min(
+                vertex.p.distance(target)
+                for ls in sol.layer_solutions
+                for m in ls.meshes
+                for vertex in m.vertices
+            )
+            assert nearest < 1e-6, f"{name}: nearest vertex is {nearest} mm away"
+
+
 class TestSyntheticProblems:
 
     def test_linear_rectangle(self):
@@ -1100,6 +1166,7 @@ class TestSolverEndToEnd:
                                      "broken_trace_geometry",
                                      "many_meshes",
                                      "many_meshes_many_vias",
+                                     "probe_directive",
                                      "test_set_1"])
     def test_voltage_sources_work(self, project):
         # Load the problem from the KiCad project

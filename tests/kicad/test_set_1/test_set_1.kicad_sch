@@ -1802,7 +1802,7 @@
 		)
 		(uuid "8304074d-dfec-4a0f-a852-d3bb5be74288")
 	)
-	(text "!padne RESISTANCE r=0.005 a=R19.1 b=R19.2\n!padne RESISTANCE r=0.005 a=R21.1 b=R21.2\n!padne RESISTANCE r=0.005 a=R23.1 b=R23.2\n!padne RESISTANCE r=0.005 a=R25.1 b=R25.2\n!padne RESISTANCE r=0.005 a=R27.1 b=R27.2\n!padne RESISTANCE r=0.005 a=R29.1 b=R29.2\n!padne RESISTANCE r=0.005 a=R31.1 b=R31.2"
+	(text "!padne RESISTANCE r=0.0025 a=R19.1 b=R19.2\n!padne RESISTANCE r=0.0025 a=R21.1 b=R21.2\n!padne RESISTANCE r=0.0025 a=R23.1 b=R23.2\n!padne RESISTANCE r=0.0025 a=R25.1 b=R25.2\n!padne RESISTANCE r=0.0025 a=R27.1 b=R27.2\n!padne RESISTANCE r=0.0025 a=R29.1 b=R29.2\n!padne RESISTANCE r=0.0025 a=R31.1 b=R31.2"
 		(exclude_from_sim no)
 		(at 231.648 114.3 0)
 		(effects
@@ -1824,7 +1824,7 @@
 		)
 		(uuid "a0185f2a-34f9-402f-bacf-ae8efc37a28f")
 	)
-	(text "!padne CURRENT i=1.0A t=J4.2 f=J1.2\n!padne CURRENT i=1.0A t=J4.3 f=J1.2 \n!padne CURRENT i=1.0A t=J4.4 f=J1.2 \n!padne CURRENT i=1.0A t=J4.5 f=J1.2 \n!padne CURRENT i=1.0A t=J4.6 f=J1.2 \n!padne CURRENT i=1.0A t=J4.7 f=J1.2 \n!padne CURRENT i=1.0A t=J4.8 f=J1.2\n!padne CURRENT i=1.0A t=J4.9 f=J1.2\n!padne CURRENT i=1.0A t=J4.10 f=J1.2  \n!padne CURRENT i=1.0A t=J4.11 f=J1.2\n!padne CURRENT i=1.0A t=J4.12 f=J1.2\n!padne CURRENT i=1.0A t=J4.13 f=J1.2\n!padne CURRENT i=1.0A t=J4.14 f=J1.2\n!padne CURRENT i=1.0A t=J4.16 f=J1.2\n!padne CURRENT i=1.0A t=J4.17 f=J1.2\n!padne CURRENT i=1.0A t=J4.18 f=J1.2\n!padne CURRENT i=1.0A t=J4.19 f=J1.2\n!padne CURRENT i=1.0A t=J4.20 f=J1.2\n\n\n\n!padne CURRENT i=1.0A t=J4.24 f=J1.2 "
+	(text "!padne CURRENT i=1.0A t=J4.2 f=J1.2\n!padne CURRENT i=1.0A t=J4.3 f=J1.2 \n!padne CURRENT i=1.0A t=J4.4 f=J1.2 \n!padne CURRENT i=1.0A t=J4.5 f=J1.2 \n!padne CURRENT i=1.0A t=J4.6 f=J1.2 \n!padne CURRENT i=1.0A t=J4.7 f=J1.2 \n!padne CURRENT i=1.0A t=J4.8 f=J1.2\n!padne CURRENT i=1.0A t=J4.9 f=J1.2\n!padne CURRENT i=1.0A t=J4.10 f=J1.2  \n!padne CURRENT i=1.0A t=J4.11 f=J1.2\n!padne CURRENT i=1.0A t=J4.12 f=J1.2\n!padne CURRENT i=1.0A t=J4.13 f=J1.2\n!padne CURRENT i=1.0A t=J4.14 f=J1.2\n!padne CURRENT i=1.0A t=J4.16 f=J1.2\n!padne CURRENT i=1.0A t=J4.17 f=J1.2\n!padne CURRENT i=1.0A t=J4.18 f=J1.2\n!padne CURRENT i=1.0A t=J4.19 f=J1.2\n!padne CURRENT i=1.0A t=J4.20 f=J1.2\n!padne CURRENT i=1.0A t=J4.21 f=J1.2\n\n\n\n!padne CURRENT i=1.0A t=J4.24 f=J1.2 "
 		(exclude_from_sim no)
 		(at 237.49 32.258 0)
 		(effects
@@ -1906,6 +1906,17 @@
 		)
 		(uuid "e830e1cf-504c-47f3-bafa-1fbf7a142f18")
 	)
+	(text "!padne RESISTANCE r=0.005 a=R35.1 b=R35.2\n!padne RESISTANCE r=0.005 a=R36.1 b=R36.2\n!padne RESISTANCE r=0.005 a=R37.1 b=R37.2\n!padne RESISTANCE r=0.005 a=R38.1 b=R38.2\n!padne RESISTANCE r=0.005 a=R39.1 b=R39.2\n!padne RESISTANCE r=0.005 a=R40.1 b=R40.2\n!padne RESISTANCE r=0.005 a=R41.1 b=R41.2\n!padne RESISTANCE r=0.005 a=R42.1 b=R42.2\n!padne RESISTANCE r=0.005 a=R43.1 b=R43.2"
+		(exclude_from_sim no)
+		(at 232.918 151.892 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "ef4861e5-ae4d-43d5-bfdd-f490df765e72")
+	)
 	(text "inline vias 0.6/1.2"
 		(exclude_from_sim no)
 		(at 110.49 50.292 0)
@@ -1915,6 +1926,16 @@
 			)
 		)
 		(uuid "f7cce636-8e6e-4071-87ef-c8ceef1a9657")
+	)
+	(text "!padne PROBE p=TP1.1,TP10.1,TP11.1,TP12.1,TP13.1,TP14.1,TP15.1,TP16.1,TP17.1,TP18.1,TP19.1,TP2.1,TP20.1,TP21.1,TP22.1,TP23.1,TP24.1,TP25.1,TP26.1,TP27.1,TP28.1,TP29.1,TP3.1,TP30.1,TP31.1,TP32.1,TP33.1,TP34.1,TP35.1,TP36.1,TP37.1,TP38.1,TP39.1,TP4.1,TP40.1,TP41.1,TP42.1,TP43.1,TP44.1,TP45.1,TP46.1,TP47.1,TP48.1,TP49.1,TP5.1,TP50.1,TP51.1,TP52.1,TP53.1,TP54.1,TP55.1,TP56.1,TP57.1,TP58.1,TP59.1,TP6.1,TP60.1,TP61.1,TP62.1,TP63.1,TP64.1,TP65.1,TP66.1,TP67.1,TP7.1,TP8.1,TP9.1"
+		(exclude_from_sim no)
+		(at 159.512 -34.29 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "f9178f45-3bf0-43b0-98df-c343451b57e9")
 	)
 	(junction
 		(at 77.47 71.12)
@@ -1945,6 +1966,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "0f8a354e-02cb-484f-8e43-d5bc96f6f8c6")
+	)
+	(junction
+		(at 109.22 35.56)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "10dd072b-da7c-4019-820f-73a31842a80b")
 	)
 	(junction
 		(at 74.93 58.42)
@@ -1983,6 +2010,12 @@
 		(uuid "1f33c794-b695-472e-bb9d-90cb0a0811ae")
 	)
 	(junction
+		(at 72.39 40.64)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "2176293d-b329-419b-aeeb-c083a8f1e015")
+	)
+	(junction
 		(at 168.91 71.12)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -2007,6 +2040,12 @@
 		(uuid "384156d7-c3bc-4eee-b705-25491b5a04d9")
 	)
 	(junction
+		(at 109.22 38.1)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "3c5c9a85-c8e2-4380-8823-039a8269d846")
+	)
+	(junction
 		(at 77.47 76.2)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -2029,6 +2068,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "4a28d296-f2a6-4ca8-84f2-d026b1eb1f58")
+	)
+	(junction
+		(at 72.39 35.56)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "52cf8a5a-f792-49cc-88ac-c516f415c264")
 	)
 	(junction
 		(at 83.82 58.42)
@@ -2133,6 +2178,12 @@
 		(uuid "834f73df-8286-4284-88cf-8026fe29fffe")
 	)
 	(junction
+		(at 72.39 33.02)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "8592887c-4ce9-4c23-9b9a-01723462ec48")
+	)
+	(junction
 		(at 83.82 48.26)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -2187,6 +2238,12 @@
 		(uuid "ab7d1896-0e82-4779-9175-69e5949b85ed")
 	)
 	(junction
+		(at 109.22 33.02)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b26600e3-766d-47c3-ab51-b8c21e0e16ae")
+	)
+	(junction
 		(at 83.82 53.34)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -2203,6 +2260,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "c1302a3b-465d-4096-bb66-4f6ab89c8671")
+	)
+	(junction
+		(at 109.22 40.64)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c2690a93-0411-4996-aa31-6688979ddef9")
 	)
 	(junction
 		(at 137.16 81.28)
@@ -2227,6 +2290,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "cfbc6346-d4c3-4df0-b1a2-56bd94c6ca56")
+	)
+	(junction
+		(at 72.39 38.1)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "d3c40310-5228-4dde-a4e6-5db55da37721")
 	)
 	(junction
 		(at 86.36 63.5)
@@ -2404,6 +2473,36 @@
 	)
 	(wire
 		(pts
+			(xy 72.39 33.02) (xy 109.22 33.02)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "143a3c4c-2348-4f7c-bca8-6681007cb7ac")
+	)
+	(wire
+		(pts
+			(xy 72.39 38.1) (xy 109.22 38.1)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "146ddacf-ac85-400d-9a75-62d838968466")
+	)
+	(wire
+		(pts
+			(xy 109.22 38.1) (xy 114.3 38.1)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "15b50a35-67cb-483e-b2f5-1aeecfda27ba")
+	)
+	(wire
+		(pts
 			(xy 168.91 81.28) (xy 167.64 81.28)
 		)
 		(stroke
@@ -2421,6 +2520,16 @@
 			(type default)
 		)
 		(uuid "1f372695-e0e3-4cdd-85b6-0c6e938e367b")
+	)
+	(wire
+		(pts
+			(xy 109.22 40.64) (xy 114.3 40.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1f5d151c-f2c8-429c-8747-976459978981")
 	)
 	(wire
 		(pts
@@ -2514,6 +2623,16 @@
 	)
 	(wire
 		(pts
+			(xy 72.39 40.64) (xy 109.22 40.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4341a7b0-be5e-421c-a9a4-200d18075d68")
+	)
+	(wire
+		(pts
 			(xy 74.93 55.88) (xy 83.82 55.88)
 		)
 		(stroke
@@ -2544,7 +2663,7 @@
 	)
 	(wire
 		(pts
-			(xy 71.12 40.64) (xy 114.3 40.64)
+			(xy 71.12 40.64) (xy 72.39 40.64)
 		)
 		(stroke
 			(width 0)
@@ -2644,7 +2763,7 @@
 	)
 	(wire
 		(pts
-			(xy 71.12 38.1) (xy 114.3 38.1)
+			(xy 71.12 38.1) (xy 72.39 38.1)
 		)
 		(stroke
 			(width 0)
@@ -2681,6 +2800,16 @@
 			(type default)
 		)
 		(uuid "76b6d34e-6a18-4e01-b414-5b93e7024140")
+	)
+	(wire
+		(pts
+			(xy 109.22 33.02) (xy 114.3 33.02)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "76c36ba2-2b49-4a98-8c3a-cbf2fe20d52a")
 	)
 	(wire
 		(pts
@@ -2834,7 +2963,7 @@
 	)
 	(wire
 		(pts
-			(xy 71.12 33.02) (xy 114.3 33.02)
+			(xy 71.12 33.02) (xy 72.39 33.02)
 		)
 		(stroke
 			(width 0)
@@ -2894,7 +3023,7 @@
 	)
 	(wire
 		(pts
-			(xy 71.12 35.56) (xy 114.3 35.56)
+			(xy 71.12 35.56) (xy 72.39 35.56)
 		)
 		(stroke
 			(width 0)
@@ -2931,6 +3060,16 @@
 			(type default)
 		)
 		(uuid "c4aaa49d-73df-4c7e-a2b5-8821986d5e55")
+	)
+	(wire
+		(pts
+			(xy 109.22 35.56) (xy 114.3 35.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c588c03c-778c-4505-b565-e7aa54d296a3")
 	)
 	(wire
 		(pts
@@ -2981,6 +3120,16 @@
 			(type default)
 		)
 		(uuid "cf3b21b6-b6d8-4dda-94c0-d43fac6a5405")
+	)
+	(wire
+		(pts
+			(xy 72.39 35.56) (xy 109.22 35.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cfc85566-a3d2-46ba-8491-9e3485962624")
 	)
 	(wire
 		(pts
@@ -3130,7 +3279,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 71.12 90)
 			(effects
 				(font
@@ -3198,7 +3347,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 139.7 76.2 90)
 			(effects
 				(font
@@ -3266,7 +3415,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 73.66 90)
 			(effects
 				(font
@@ -3334,7 +3483,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 62.2299 0)
 			(effects
 				(font
@@ -3401,7 +3550,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 74.9299 0)
 			(effects
 				(font
@@ -3535,7 +3684,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 62.2299 0)
 			(effects
 				(font
@@ -3602,7 +3751,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 73.66 90)
 			(effects
 				(font
@@ -3670,7 +3819,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 59.6899 0)
 			(effects
 				(font
@@ -3737,7 +3886,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 81.28 90)
 			(effects
 				(font
@@ -3805,7 +3954,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 81.28 90)
 			(effects
 				(font
@@ -3873,7 +4022,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 59.6899 0)
 			(effects
 				(font
@@ -3940,7 +4089,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 78.74 90)
 			(effects
 				(font
@@ -4008,7 +4157,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 72.3899 0)
 			(effects
 				(font
@@ -4075,7 +4224,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 78.74 90)
 			(effects
 				(font
@@ -4143,7 +4292,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 71.12 90)
 			(effects
 				(font
@@ -4211,7 +4360,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 62.2299 0)
 			(effects
 				(font
@@ -4278,7 +4427,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 80.0099 0)
 			(effects
 				(font
@@ -4322,6 +4471,73 @@
 			(project "test_set_1"
 				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
 					(reference "TP53")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
+		(at 72.39 33.02 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "217c6f99-3e60-49fe-bf61-2ef48ee241f9")
+		(property "Reference" "TP60"
+			(at 73.152 32.512 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 73.66 34.2899 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 77.47 33.02 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 77.47 33.02 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 72.39 33.02 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "70ae223d-55e8-4558-9e91-49398430059e")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP60")
 					(unit 1)
 				)
 			)
@@ -4412,7 +4628,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 59.6899 0)
 			(effects
 				(font
@@ -4479,7 +4695,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 54.6099 0)
 			(effects
 				(font
@@ -4546,7 +4762,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 124.46 76.2 90)
 			(effects
 				(font
@@ -4681,7 +4897,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 64.7699 0)
 			(effects
 				(font
@@ -4748,7 +4964,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 52.0699 0)
 			(effects
 				(font
@@ -4882,7 +5098,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 44.4499 0)
 			(effects
 				(font
@@ -4949,7 +5165,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 71.12 90)
 			(effects
 				(font
@@ -5083,7 +5299,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 64.7699 0)
 			(effects
 				(font
@@ -5217,7 +5433,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 54.6099 0)
 			(effects
 				(font
@@ -5284,7 +5500,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 57.1499 0)
 			(effects
 				(font
@@ -5351,7 +5567,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 78.74 90)
 			(effects
 				(font
@@ -5419,7 +5635,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 49.5299 0)
 			(effects
 				(font
@@ -5486,7 +5702,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 73.66 90)
 			(effects
 				(font
@@ -5531,6 +5747,73 @@
 			(project "test_set_1"
 				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
 					(reference "R18")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
+		(at 109.22 38.1 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "5a4dfb81-6aa2-45d2-9792-7cc9aa576a66")
+		(property "Reference" "TP65"
+			(at 109.982 37.592 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 110.49 39.3699 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 114.3 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 114.3 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 109.22 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "35cb5cdb-c556-4ee1-bcbf-0b3a21153a51")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP65")
 					(unit 1)
 				)
 			)
@@ -5621,7 +5904,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 149.86 76.2 90)
 			(effects
 				(font
@@ -5689,7 +5972,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 90.17 62.2299 0)
 			(effects
 				(font
@@ -5756,7 +6039,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 44.4499 0)
 			(effects
 				(font
@@ -6091,7 +6374,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 81.28 90)
 			(effects
 				(font
@@ -6159,7 +6442,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 64.7699 0)
 			(effects
 				(font
@@ -6226,7 +6509,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 73.66 90)
 			(effects
 				(font
@@ -6294,7 +6577,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 71.12 90)
 			(effects
 				(font
@@ -6429,7 +6712,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 52.0699 0)
 			(effects
 				(font
@@ -6480,6 +6763,73 @@
 	)
 	(symbol
 		(lib_id "Connector:TestPoint_Small")
+		(at 109.22 35.56 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "7de9aa36-3ea1-46e1-8d3b-dcbb6c3a6de9")
+		(property "Reference" "TP63"
+			(at 109.982 35.052 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 110.49 36.8299 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 114.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 114.3 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 109.22 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "b5983a78-c512-435f-8618-7762c7865401")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP63")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
 		(at 86.36 55.88 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -6496,7 +6846,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 57.1499 0)
 			(effects
 				(font
@@ -6563,7 +6913,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 71.12 90)
 			(effects
 				(font
@@ -6631,7 +6981,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 64.7699 0)
 			(effects
 				(font
@@ -6765,7 +7115,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 82.5499 0)
 			(effects
 				(font
@@ -6832,7 +7182,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 62.2299 0)
 			(effects
 				(font
@@ -6899,7 +7249,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 69.8499 0)
 			(effects
 				(font
@@ -6950,6 +7300,73 @@
 	)
 	(symbol
 		(lib_id "Connector:TestPoint_Small")
+		(at 109.22 33.02 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "8f20301b-113f-44dc-b3fa-4603d4fecc5a")
+		(property "Reference" "TP61"
+			(at 109.982 32.512 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 110.49 34.2899 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 114.3 33.02 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 114.3 33.02 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 109.22 33.02 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "70b43617-b334-4910-9e97-4186e278eaf2")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP61")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
 		(at 86.36 45.72 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -6966,7 +7383,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 46.9899 0)
 			(effects
 				(font
@@ -7033,7 +7450,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 78.74 90)
 			(effects
 				(font
@@ -7101,7 +7518,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 77.4699 0)
 			(effects
 				(font
@@ -7168,7 +7585,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 73.66 90)
 			(effects
 				(font
@@ -7236,7 +7653,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 138.43 82.5499 0)
 			(effects
 				(font
@@ -7303,7 +7720,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 71.12 90)
 			(effects
 				(font
@@ -7371,7 +7788,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 81.28 90)
 			(effects
 				(font
@@ -7439,7 +7856,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 73.66 90)
 			(effects
 				(font
@@ -7507,7 +7924,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 49.5299 0)
 			(effects
 				(font
@@ -7574,7 +7991,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 78.74 90)
 			(effects
 				(font
@@ -7642,7 +8059,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 82.5499 0)
 			(effects
 				(font
@@ -7709,7 +8126,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 44.4499 0)
 			(effects
 				(font
@@ -7843,7 +8260,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 148.59 80.0099 0)
 			(effects
 				(font
@@ -7910,7 +8327,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 77.4699 0)
 			(effects
 				(font
@@ -7977,7 +8394,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 57.1499 0)
 			(effects
 				(font
@@ -8044,7 +8461,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 69.8499 0)
 			(effects
 				(font
@@ -8247,7 +8664,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 54.6099 0)
 			(effects
 				(font
@@ -8381,7 +8798,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 73.66 90)
 			(effects
 				(font
@@ -8449,7 +8866,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 52.0699 0)
 			(effects
 				(font
@@ -8516,7 +8933,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 134.62 76.2 90)
 			(effects
 				(font
@@ -8584,7 +9001,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 49.5299 0)
 			(effects
 				(font
@@ -8651,7 +9068,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 81.28 90)
 			(effects
 				(font
@@ -8719,7 +9136,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 81.28 90)
 			(effects
 				(font
@@ -8787,7 +9204,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 54.6099 0)
 			(effects
 				(font
@@ -8854,7 +9271,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 46.9899 0)
 			(effects
 				(font
@@ -8921,7 +9338,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 71.12 90)
 			(effects
 				(font
@@ -8989,7 +9406,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 73.66 90)
 			(effects
 				(font
@@ -9124,7 +9541,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 59.6899 0)
 			(effects
 				(font
@@ -9191,7 +9608,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 81.28 62.2299 0)
 			(effects
 				(font
@@ -9258,7 +9675,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 81.28 90)
 			(effects
 				(font
@@ -9393,7 +9810,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 154.94 76.2 90)
 			(effects
 				(font
@@ -9461,7 +9878,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 81.28 90)
 			(effects
 				(font
@@ -9529,7 +9946,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 71.12 90)
 			(effects
 				(font
@@ -9597,7 +10014,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 78.74 90)
 			(effects
 				(font
@@ -9665,7 +10082,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 78.74 90)
 			(effects
 				(font
@@ -9733,7 +10150,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 74.9299 0)
 			(effects
 				(font
@@ -9800,7 +10217,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 129.54 76.2 90)
 			(effects
 				(font
@@ -9935,7 +10352,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 73.66 90)
 			(effects
 				(font
@@ -10003,7 +10420,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 78.74 90)
 			(effects
 				(font
@@ -10071,7 +10488,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 69.8499 0)
 			(effects
 				(font
@@ -10122,6 +10539,73 @@
 	)
 	(symbol
 		(lib_id "Connector:TestPoint_Small")
+		(at 72.39 35.56 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "e3cffe75-d3eb-40f9-abe2-58614471034e")
+		(property "Reference" "TP62"
+			(at 73.152 35.052 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 73.66 36.8299 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 77.47 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 77.47 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 72.39 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "5a53841a-d20a-44b6-babd-7af5fd681d63")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP62")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
 		(at 72.39 48.26 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -10138,7 +10622,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 49.5299 0)
 			(effects
 				(font
@@ -10205,7 +10689,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 57.1499 0)
 			(effects
 				(font
@@ -10272,7 +10756,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 81.28 90)
 			(effects
 				(font
@@ -10407,7 +10891,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 92.71 62.2299 0)
 			(effects
 				(font
@@ -10605,7 +11089,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 144.78 76.2 90)
 			(effects
 				(font
@@ -10673,7 +11157,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 72.3899 0)
 			(effects
 				(font
@@ -10740,7 +11224,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 46.9899 0)
 			(effects
 				(font
@@ -10807,7 +11291,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 143.51 72.3899 0)
 			(effects
 				(font
@@ -10874,7 +11358,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 44.4499 0)
 			(effects
 				(font
@@ -11008,7 +11492,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 64.7699 0)
 			(effects
 				(font
@@ -11075,7 +11559,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 143.51 74.9299 0)
 			(effects
 				(font
@@ -11125,6 +11609,73 @@
 		)
 	)
 	(symbol
+		(lib_id "Connector:TestPoint_Small")
+		(at 109.22 40.64 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f1c1ce41-882a-4721-85b5-16d3e688acee")
+		(property "Reference" "TP67"
+			(at 109.982 40.132 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 110.49 41.9099 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 114.3 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 114.3 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 109.22 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "4a3a8367-5ec2-4a8e-b896-316f08df1ae2")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP67")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:R_Small")
 		(at 160.02 71.12 270)
 		(unit 1)
@@ -11142,7 +11693,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 71.12 90)
 			(effects
 				(font
@@ -11277,7 +11828,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 78.74 90)
 			(effects
 				(font
@@ -11345,7 +11896,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 62.2299 0)
 			(effects
 				(font
@@ -11396,6 +11947,73 @@
 	)
 	(symbol
 		(lib_id "Connector:TestPoint_Small")
+		(at 72.39 40.64 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "f94a389d-17dd-43da-8521-6af00372d670")
+		(property "Reference" "TP66"
+			(at 73.152 40.132 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 73.66 41.9099 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 77.47 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 77.47 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 72.39 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "9246da8f-500d-4772-9c81-62f9d821c7f6")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP66")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
 		(at 72.39 45.72 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -11412,7 +12030,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 46.9899 0)
 			(effects
 				(font
@@ -11463,6 +12081,73 @@
 	)
 	(symbol
 		(lib_id "Connector:TestPoint_Small")
+		(at 72.39 38.1 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "fa0bcce3-9c75-474c-9d7b-cd2256b5e0b6")
+		(property "Reference" "TP64"
+			(at 73.152 37.592 0)
+			(effects
+				(font
+					(size 0.381 0.381)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "~"
+			(at 73.66 39.3699 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "padne_footprints:ProbePoint"
+			(at 77.47 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 77.47 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 72.39 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "2d1ec6b7-ee0e-470f-ad79-91fcfe436bbe")
+		)
+		(instances
+			(project "test_set_1"
+				(path "/1de6d912-4613-4162-994c-48d82d6366f0"
+					(reference "TP64")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
 		(at 88.9 63.5 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -11479,7 +12164,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 90.17 64.7699 0)
 			(effects
 				(font
@@ -11546,7 +12231,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 52.0699 0)
 			(effects
 				(font
@@ -11613,7 +12298,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 80.0099 0)
 			(effects
 				(font
