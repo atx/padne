@@ -1802,7 +1802,7 @@
 		)
 		(uuid "8304074d-dfec-4a0f-a852-d3bb5be74288")
 	)
-	(text "!padne RESISTANCE r=0.005 a=R19.1 b=R19.2\n!padne RESISTANCE r=0.005 a=R21.1 b=R21.2\n!padne RESISTANCE r=0.005 a=R23.1 b=R23.2\n!padne RESISTANCE r=0.005 a=R25.1 b=R25.2\n!padne RESISTANCE r=0.005 a=R27.1 b=R27.2\n!padne RESISTANCE r=0.005 a=R29.1 b=R29.2\n!padne RESISTANCE r=0.005 a=R31.1 b=R31.2"
+	(text "!padne RESISTANCE r=0.0025 a=R19.1 b=R19.2\n!padne RESISTANCE r=0.0025 a=R21.1 b=R21.2\n!padne RESISTANCE r=0.0025 a=R23.1 b=R23.2\n!padne RESISTANCE r=0.0025 a=R25.1 b=R25.2\n!padne RESISTANCE r=0.0025 a=R27.1 b=R27.2\n!padne RESISTANCE r=0.0025 a=R29.1 b=R29.2\n!padne RESISTANCE r=0.0025 a=R31.1 b=R31.2"
 		(exclude_from_sim no)
 		(at 231.648 114.3 0)
 		(effects
@@ -1824,7 +1824,7 @@
 		)
 		(uuid "a0185f2a-34f9-402f-bacf-ae8efc37a28f")
 	)
-	(text "!padne CURRENT i=1.0A t=J4.2 f=J1.2\n!padne CURRENT i=1.0A t=J4.3 f=J1.2 \n!padne CURRENT i=1.0A t=J4.4 f=J1.2 \n!padne CURRENT i=1.0A t=J4.5 f=J1.2 \n!padne CURRENT i=1.0A t=J4.6 f=J1.2 \n!padne CURRENT i=1.0A t=J4.7 f=J1.2 \n!padne CURRENT i=1.0A t=J4.8 f=J1.2\n!padne CURRENT i=1.0A t=J4.9 f=J1.2\n!padne CURRENT i=1.0A t=J4.10 f=J1.2  \n!padne CURRENT i=1.0A t=J4.11 f=J1.2\n!padne CURRENT i=1.0A t=J4.12 f=J1.2\n!padne CURRENT i=1.0A t=J4.13 f=J1.2\n!padne CURRENT i=1.0A t=J4.14 f=J1.2\n!padne CURRENT i=1.0A t=J4.16 f=J1.2\n!padne CURRENT i=1.0A t=J4.17 f=J1.2\n!padne CURRENT i=1.0A t=J4.18 f=J1.2\n!padne CURRENT i=1.0A t=J4.19 f=J1.2\n!padne CURRENT i=1.0A t=J4.20 f=J1.2\n\n\n\n!padne CURRENT i=1.0A t=J4.24 f=J1.2 "
+	(text "!padne CURRENT i=1.0A t=J4.2 f=J1.2\n!padne CURRENT i=1.0A t=J4.3 f=J1.2 \n!padne CURRENT i=1.0A t=J4.4 f=J1.2 \n!padne CURRENT i=1.0A t=J4.5 f=J1.2 \n!padne CURRENT i=1.0A t=J4.6 f=J1.2 \n!padne CURRENT i=1.0A t=J4.7 f=J1.2 \n!padne CURRENT i=1.0A t=J4.8 f=J1.2\n!padne CURRENT i=1.0A t=J4.9 f=J1.2\n!padne CURRENT i=1.0A t=J4.10 f=J1.2  \n!padne CURRENT i=1.0A t=J4.11 f=J1.2\n!padne CURRENT i=1.0A t=J4.12 f=J1.2\n!padne CURRENT i=1.0A t=J4.13 f=J1.2\n!padne CURRENT i=1.0A t=J4.14 f=J1.2\n!padne CURRENT i=1.0A t=J4.16 f=J1.2\n!padne CURRENT i=1.0A t=J4.17 f=J1.2\n!padne CURRENT i=1.0A t=J4.18 f=J1.2\n!padne CURRENT i=1.0A t=J4.19 f=J1.2\n!padne CURRENT i=1.0A t=J4.20 f=J1.2\n!padne CURRENT i=1.0A t=J4.21 f=J1.2\n\n\n\n!padne CURRENT i=1.0A t=J4.24 f=J1.2 "
 		(exclude_from_sim no)
 		(at 237.49 32.258 0)
 		(effects
@@ -1905,6 +1905,17 @@
 			)
 		)
 		(uuid "e830e1cf-504c-47f3-bafa-1fbf7a142f18")
+	)
+	(text "!padne RESISTANCE r=0.005 a=R35.1 b=R35.2\n!padne RESISTANCE r=0.005 a=R36.1 b=R36.2\n!padne RESISTANCE r=0.005 a=R37.1 b=R37.2\n!padne RESISTANCE r=0.005 a=R38.1 b=R38.2\n!padne RESISTANCE r=0.005 a=R39.1 b=R39.2\n!padne RESISTANCE r=0.005 a=R40.1 b=R40.2\n!padne RESISTANCE r=0.005 a=R41.1 b=R41.2\n!padne RESISTANCE r=0.005 a=R42.1 b=R42.2\n!padne RESISTANCE r=0.005 a=R43.1 b=R43.2"
+		(exclude_from_sim no)
+		(at 232.918 151.892 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "ef4861e5-ae4d-43d5-bfdd-f490df765e72")
 	)
 	(text "inline vias 0.6/1.2"
 		(exclude_from_sim no)
@@ -3268,7 +3279,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 71.12 90)
 			(effects
 				(font
@@ -3336,7 +3347,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 139.7 76.2 90)
 			(effects
 				(font
@@ -3404,7 +3415,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 73.66 90)
 			(effects
 				(font
@@ -3472,7 +3483,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 62.2299 0)
 			(effects
 				(font
@@ -3539,7 +3550,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 74.9299 0)
 			(effects
 				(font
@@ -3673,7 +3684,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 62.2299 0)
 			(effects
 				(font
@@ -3740,7 +3751,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 73.66 90)
 			(effects
 				(font
@@ -3808,7 +3819,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 59.6899 0)
 			(effects
 				(font
@@ -3875,7 +3886,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 81.28 90)
 			(effects
 				(font
@@ -3943,7 +3954,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 81.28 90)
 			(effects
 				(font
@@ -4011,7 +4022,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 59.6899 0)
 			(effects
 				(font
@@ -4078,7 +4089,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 78.74 90)
 			(effects
 				(font
@@ -4146,7 +4157,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 72.3899 0)
 			(effects
 				(font
@@ -4213,7 +4224,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 78.74 90)
 			(effects
 				(font
@@ -4281,7 +4292,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 71.12 90)
 			(effects
 				(font
@@ -4349,7 +4360,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 62.2299 0)
 			(effects
 				(font
@@ -4416,7 +4427,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 80.0099 0)
 			(effects
 				(font
@@ -4483,7 +4494,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 34.2899 0)
 			(effects
 				(font
@@ -4617,7 +4628,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 59.6899 0)
 			(effects
 				(font
@@ -4684,7 +4695,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 54.6099 0)
 			(effects
 				(font
@@ -4751,7 +4762,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 124.46 76.2 90)
 			(effects
 				(font
@@ -4886,7 +4897,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 64.7699 0)
 			(effects
 				(font
@@ -4953,7 +4964,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 52.0699 0)
 			(effects
 				(font
@@ -5087,7 +5098,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 44.4499 0)
 			(effects
 				(font
@@ -5154,7 +5165,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 71.12 90)
 			(effects
 				(font
@@ -5288,7 +5299,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 64.7699 0)
 			(effects
 				(font
@@ -5422,7 +5433,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 54.6099 0)
 			(effects
 				(font
@@ -5489,7 +5500,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 57.1499 0)
 			(effects
 				(font
@@ -5556,7 +5567,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 78.74 90)
 			(effects
 				(font
@@ -5624,7 +5635,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 49.5299 0)
 			(effects
 				(font
@@ -5691,7 +5702,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 73.66 90)
 			(effects
 				(font
@@ -5759,7 +5770,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 110.49 39.3699 0)
 			(effects
 				(font
@@ -5893,7 +5904,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 149.86 76.2 90)
 			(effects
 				(font
@@ -5961,7 +5972,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 90.17 62.2299 0)
 			(effects
 				(font
@@ -6028,7 +6039,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 44.4499 0)
 			(effects
 				(font
@@ -6363,7 +6374,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 81.28 90)
 			(effects
 				(font
@@ -6431,7 +6442,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 64.7699 0)
 			(effects
 				(font
@@ -6498,7 +6509,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 73.66 90)
 			(effects
 				(font
@@ -6566,7 +6577,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 71.12 90)
 			(effects
 				(font
@@ -6701,7 +6712,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 52.0699 0)
 			(effects
 				(font
@@ -6768,7 +6779,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 110.49 36.8299 0)
 			(effects
 				(font
@@ -6835,7 +6846,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 57.1499 0)
 			(effects
 				(font
@@ -6902,7 +6913,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 124.46 71.12 90)
 			(effects
 				(font
@@ -6970,7 +6981,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 64.7699 0)
 			(effects
 				(font
@@ -7104,7 +7115,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 82.5499 0)
 			(effects
 				(font
@@ -7171,7 +7182,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 62.2299 0)
 			(effects
 				(font
@@ -7238,7 +7249,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 69.8499 0)
 			(effects
 				(font
@@ -7305,7 +7316,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 110.49 34.2899 0)
 			(effects
 				(font
@@ -7372,7 +7383,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 46.9899 0)
 			(effects
 				(font
@@ -7439,7 +7450,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 78.74 90)
 			(effects
 				(font
@@ -7507,7 +7518,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 77.4699 0)
 			(effects
 				(font
@@ -7574,7 +7585,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 73.66 90)
 			(effects
 				(font
@@ -7642,7 +7653,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 138.43 82.5499 0)
 			(effects
 				(font
@@ -7709,7 +7720,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 71.12 90)
 			(effects
 				(font
@@ -7777,7 +7788,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 81.28 90)
 			(effects
 				(font
@@ -7845,7 +7856,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 73.66 90)
 			(effects
 				(font
@@ -7913,7 +7924,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 49.5299 0)
 			(effects
 				(font
@@ -7980,7 +7991,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 78.74 90)
 			(effects
 				(font
@@ -8048,7 +8059,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 82.5499 0)
 			(effects
 				(font
@@ -8115,7 +8126,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 44.4499 0)
 			(effects
 				(font
@@ -8249,7 +8260,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 148.59 80.0099 0)
 			(effects
 				(font
@@ -8316,7 +8327,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 77.4699 0)
 			(effects
 				(font
@@ -8383,7 +8394,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 57.1499 0)
 			(effects
 				(font
@@ -8450,7 +8461,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 69.8499 0)
 			(effects
 				(font
@@ -8653,7 +8664,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 54.6099 0)
 			(effects
 				(font
@@ -8787,7 +8798,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 154.94 73.66 90)
 			(effects
 				(font
@@ -8855,7 +8866,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 52.0699 0)
 			(effects
 				(font
@@ -8922,7 +8933,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 134.62 76.2 90)
 			(effects
 				(font
@@ -8990,7 +9001,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 87.63 49.5299 0)
 			(effects
 				(font
@@ -9057,7 +9068,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 81.28 90)
 			(effects
 				(font
@@ -9125,7 +9136,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 81.28 90)
 			(effects
 				(font
@@ -9193,7 +9204,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 54.6099 0)
 			(effects
 				(font
@@ -9260,7 +9271,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 46.9899 0)
 			(effects
 				(font
@@ -9327,7 +9338,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 129.54 71.12 90)
 			(effects
 				(font
@@ -9395,7 +9406,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 149.86 73.66 90)
 			(effects
 				(font
@@ -9530,7 +9541,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 59.6899 0)
 			(effects
 				(font
@@ -9597,7 +9608,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 81.28 62.2299 0)
 			(effects
 				(font
@@ -9664,7 +9675,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 165.1 81.28 90)
 			(effects
 				(font
@@ -9799,7 +9810,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 154.94 76.2 90)
 			(effects
 				(font
@@ -9867,7 +9878,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 81.28 90)
 			(effects
 				(font
@@ -9935,7 +9946,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 71.12 90)
 			(effects
 				(font
@@ -10003,7 +10014,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 78.74 90)
 			(effects
 				(font
@@ -10071,7 +10082,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 78.74 90)
 			(effects
 				(font
@@ -10139,7 +10150,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 170.18 74.9299 0)
 			(effects
 				(font
@@ -10206,7 +10217,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 129.54 76.2 90)
 			(effects
 				(font
@@ -10341,7 +10352,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 144.78 73.66 90)
 			(effects
 				(font
@@ -10409,7 +10420,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 139.7 78.74 90)
 			(effects
 				(font
@@ -10477,7 +10488,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 69.8499 0)
 			(effects
 				(font
@@ -10544,7 +10555,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 36.8299 0)
 			(effects
 				(font
@@ -10611,7 +10622,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 49.5299 0)
 			(effects
 				(font
@@ -10678,7 +10689,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 57.1499 0)
 			(effects
 				(font
@@ -10745,7 +10756,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 134.62 81.28 90)
 			(effects
 				(font
@@ -10880,7 +10891,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 92.71 62.2299 0)
 			(effects
 				(font
@@ -11078,7 +11089,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "2.5m"
 			(at 144.78 76.2 90)
 			(effects
 				(font
@@ -11146,7 +11157,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 72.3899 0)
 			(effects
 				(font
@@ -11213,7 +11224,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 46.9899 0)
 			(effects
 				(font
@@ -11280,7 +11291,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 143.51 72.3899 0)
 			(effects
 				(font
@@ -11347,7 +11358,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 76.2 44.4499 0)
 			(effects
 				(font
@@ -11481,7 +11492,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 64.7699 0)
 			(effects
 				(font
@@ -11548,7 +11559,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 143.51 74.9299 0)
 			(effects
 				(font
@@ -11615,7 +11626,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 110.49 41.9099 0)
 			(effects
 				(font
@@ -11682,7 +11693,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 71.12 90)
 			(effects
 				(font
@@ -11817,7 +11828,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "5u"
+		(property "Value" "5m"
 			(at 160.02 78.74 90)
 			(effects
 				(font
@@ -11885,7 +11896,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 62.2299 0)
 			(effects
 				(font
@@ -11952,7 +11963,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 41.9099 0)
 			(effects
 				(font
@@ -12019,7 +12030,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 46.9899 0)
 			(effects
 				(font
@@ -12086,7 +12097,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 73.66 39.3699 0)
 			(effects
 				(font
@@ -12153,7 +12164,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 90.17 64.7699 0)
 			(effects
 				(font
@@ -12220,7 +12231,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 85.09 52.0699 0)
 			(effects
 				(font
@@ -12287,7 +12298,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "TestPoint_Small"
+		(property "Value" "~"
 			(at 78.74 80.0099 0)
 			(effects
 				(font
