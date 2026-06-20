@@ -775,6 +775,88 @@
 	)
 	(footprint "padne_footprints:ProbePoint"
 		(layer "F.Cu")
+		(uuid "1294fef8-26cd-445d-8298-e4368b2c41e4")
+		(at 107.95 60.65)
+		(property "Reference" "TP60"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "83642097-c097-401d-ad7e-942d609447d3")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "440825d2-3c62-4d1c-9d4a-cc54f236febc")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "6ea7ffe0-19c2-49b3-935e-b78a9f29560b")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "c49fa5b8-8a7c-4de0-95d8-2fa3739a8119")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/217c6f99-3e60-49fe-bf61-2ef48ee241f9")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "cbb5a5d8-7574-423a-bce7-c36e5c82c155")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "e39353fa-233d-4e54-81e2-b4a438a4aa8f")
+		)
+		(embedded_fonts no)
+	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
 		(uuid "131b3f28-30ae-42fa-8314-5c0211aeb6ba")
 		(at 148.05 111.3)
 		(property "Reference" "TP44"
@@ -1487,6 +1569,88 @@
 	)
 	(footprint "padne_footprints:ProbePoint"
 		(layer "F.Cu")
+		(uuid "1b13f35d-b8fa-45b7-b03c-930e0565af49")
+		(at 177.95 71.15)
+		(property "Reference" "TP67"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "266dfc95-a374-4d59-9d56-52bc5393ddcf")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "ec235ac4-7132-414d-94d2-d9acd1c2f027")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "65f66f51-87e2-4bd1-867f-369ab7642085")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "80483bb7-843f-4473-924a-f8c24ca25e86")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/f1c1ce41-882a-4721-85b5-16d3e688acee")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "2388b60e-4c59-4f43-a746-36683cf2fb69")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "22ffb236-1f9f-4092-b844-694510565826")
+		)
+		(embedded_fonts no)
+	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
 		(uuid "1b9362fc-530b-4802-937d-0a7b34a06d96")
 		(at 107.35 124.6)
 		(property "Reference" "TP53"
@@ -1565,6 +1729,88 @@
 			(pinfunction "1")
 			(pintype "passive")
 			(uuid "1932d66c-7807-4e81-a142-0239499a6302")
+		)
+		(embedded_fonts no)
+	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
+		(uuid "1d35ead3-9946-455e-9a84-008c8c7f1075")
+		(at 177.95 67.65)
+		(property "Reference" "TP65"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "bdb0fcc6-34f1-4508-9d5e-8df9dd44005f")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "490a17ae-dba4-4bf4-a4ce-09dd3f808e95")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "c611a951-41a6-4c37-81ce-2703fc008e5d")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "87dee7e9-841a-4c27-8eb1-9ffc9022ba61")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/5a4dfb81-6aa2-45d2-9792-7cc9aa576a66")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "a2162daf-b606-40cf-b198-5878afa0c789")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "4b5549a3-29dc-4710-9e57-1f4f98093b97")
 		)
 		(embedded_fonts no)
 	)
@@ -5850,6 +6096,88 @@
 	)
 	(footprint "padne_footprints:ProbePoint"
 		(layer "F.Cu")
+		(uuid "7ba3074c-a311-4ae2-907c-bd7a17539dad")
+		(at 177.95 60.65)
+		(property "Reference" "TP61"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "4bdf8be0-bfb5-4d8b-9a09-1bf7c44b7809")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "d050f497-84c0-4b71-b409-e6aa987d7f9e")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "014861db-6be9-4d06-aabf-01d4ae570288")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "cea380df-4975-4710-b6cb-090d80d0c419")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/8f20301b-113f-44dc-b3fa-4603d4fecc5a")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "19877370-181f-4638-904e-4b3906fd65e5")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "628f6e00-9369-4378-a77e-8058caf4b5dc")
+		)
+		(embedded_fonts no)
+	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
 		(uuid "7f638748-0d14-47e5-b8a9-566662084eed")
 		(at 144.15 95.2)
 		(property "Reference" "TP10"
@@ -7951,6 +8279,88 @@
 			)
 		)
 	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
+		(uuid "a3816bae-0405-4d9e-b771-4b7f44364223")
+		(at 107.95 71.15)
+		(property "Reference" "TP66"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "5bd34909-59fd-456f-87b7-88dce053bda8")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "cf92079c-630f-41ba-9e9b-a8c3c52870d6")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "d1c913de-da55-4129-8089-6c74bc3fd6b4")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "8a92437a-1693-4483-8a98-36d51d69740c")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/f94a389d-17dd-43da-8521-6af00372d670")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "1759b74c-3349-48df-8c19-1eafae461caf")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "c54df99b-a9a1-4a90-a3b1-d6fa86e5430c")
+		)
+		(embedded_fonts no)
+	)
 	(footprint "Resistor_SMD:R_0805_2012Metric"
 		(layer "F.Cu")
 		(uuid "a48a257f-68a2-4c44-b631-17c1bf979090")
@@ -8231,6 +8641,88 @@
 			(pinfunction "1")
 			(pintype "passive")
 			(uuid "035ed740-fc21-4683-9a47-57a3a427059e")
+		)
+		(embedded_fonts no)
+	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
+		(uuid "a7d7558a-1ae9-4f18-9daf-0a17b84f067f")
+		(at 107.95 64.15)
+		(property "Reference" "TP62"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "e1e3dbec-7ab9-4713-9afe-1b307eae21fa")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "e159c8d5-6bc8-413c-8bc8-a4d9244c3a4e")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "0765316b-5c9c-403d-8fc1-782a5230ba41")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "56813a22-2bbc-43a4-b1a9-b8ac299cce71")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/e3cffe75-d3eb-40f9-abe2-58614471034e")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "64c3f178-7d4b-40de-b309-f95a518143ac")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "8d3a8a99-f47c-4980-9458-dd3203007709")
 		)
 		(embedded_fonts no)
 	)
@@ -8799,6 +9291,88 @@
 			)
 		)
 	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
+		(uuid "ac3c7fe9-c356-4530-bd3e-8e547cf8444c")
+		(at 107.95 67.65)
+		(property "Reference" "TP64"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "3a5b72df-e35c-421f-82bb-853f9a706cd6")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "6324e464-f579-4e9b-a909-872d6b705886")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "06bd04ff-e887-44a0-902f-9a659b8614e6")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "d6228e77-dc4d-46b1-8856-bbcb4ec0a502")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/fa0bcce3-9c75-474c-9d7b-cd2256b5e0b6")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "dab9f2ff-259f-4ca7-a979-827b1cd0c8ea")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "fef6fb7d-9293-4e91-ab4c-7c9ebd3d9600")
+		)
+		(embedded_fonts no)
+	)
 	(footprint "Resistor_SMD:R_1206_3216Metric"
 		(layer "F.Cu")
 		(uuid "ad8728ae-3211-4c00-b1ea-a9e994bacea8")
@@ -9198,6 +9772,88 @@
 				(xyz 0 0 0)
 			)
 		)
+	)
+	(footprint "padne_footprints:ProbePoint"
+		(layer "F.Cu")
+		(uuid "ae81830a-1044-4cf4-80b9-1dfa0e5cf6a0")
+		(at 177.95 64.15)
+		(property "Reference" "TP63"
+			(at 0 -0.9 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "715e3c4b-2017-4f7e-9ef0-3b619dd153e5")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.1)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 0 1 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "90cc51eb-3de2-4856-82d2-9dd4adafc1b5")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "47aafd70-171e-441c-9e79-b997a78d9a9a")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "d1e1aee5-dd55-448f-8b78-63e8d459037f")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property ki_fp_filters "Pin* Test*")
+		(path "/7de9aa36-3ea1-46e1-8d3b-dcbb6c3a6de9")
+		(sheetname "/")
+		(sheetfile "test_set_1.kicad_sch")
+		(attr through_hole)
+		(fp_text user "${REFERENCE}"
+			(at 0 2.5 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(uuid "70a96fb0-42ee-47db-bace-959a4475b5b8")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd circle
+			(at 0 0)
+			(size 0.1 0.1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net 1 "GND")
+			(pinfunction "1")
+			(pintype "passive")
+			(uuid "e2a45f68-c8cb-421d-aef7-94187e780cdb")
+		)
+		(embedded_fonts no)
 	)
 	(footprint "Resistor_SMD:R_1206_3216Metric"
 		(layer "F.Cu")
