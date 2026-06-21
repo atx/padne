@@ -42,6 +42,7 @@ _GIT_REF = release
 
 extensions = [
     "autoapi.extension",
+    "sphinx.ext.extlinks",
     "sphinx.ext.intersphinx",
     "sphinx.ext.linkcode",
     "sphinx_design",
@@ -98,6 +99,14 @@ autoapi_options = [
 ]
 
 _REPO_URL = "https://github.com/atx/padne"
+
+# Link to a repo file (optionally with #L.. anchor) pinned to the built ref:
+#   :ghblob:`tests/test_solver.py`
+#   :ghblob:`the divider test <tests/test_solver.py#L120-L140>`
+extlinks = {
+    "ghblob": (f"{_REPO_URL}/blob/{_GIT_REF}/%s", "%s"),
+}
+
 _AUTOAPI_DIR = (Path(__file__).resolve().parent / ".." / "padne").resolve()
 _AUTOAPI_OBJECTS: dict = {}
 
