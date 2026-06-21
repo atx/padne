@@ -14,7 +14,7 @@ help:
 devserver:
 	@$(SPHINXAUTOBUILD) "$(SOURCEDIR)" "$(BUILDDIR)/html" \
 		--watch ../padne \
-		--ignore "*/api/autoapi/*" \
+		--ignore "api/autoapi" \
 		$(SPHINXOPTS) $(O)
 
 polyversion:
