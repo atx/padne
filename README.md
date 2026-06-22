@@ -214,3 +214,10 @@ For example:
 
 > [!NOTE]
 > The surface conductivity is computed inside padne by extracting the stackup (copper layer thickness in particular) info from your PCB file. See `File -> Board Setup -> Physical Stackup` inside pcbnew.
+
+## Acknowledgements
+
+This project is supported by the [nlnet foundation](https://nlnet.nl/project/Padne/)
+<p align="center">
+<img src="https://nlnet.nl/logo/banner.svg" width="200" align="center"/>
+</p>
