@@ -58,6 +58,7 @@ public:
     CGALPolygon(nb::object shapely_polygon);
     bool contains(double x, double y) const;
     double distance_to_boundary(double x, double y) const;
+    const std::vector<Segment_2>& edges() const { return all_edges; }
 };
 
 // PolyBoundaryDistanceMap class for computing distance-based variable density
@@ -452,24 +453,101 @@ PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(nb::object polygon, double quan
 }
 
 
-void PolyBoundaryDistanceMap::compute_distances() {
-
-    for (int j = 0; j < height; ++j) {
-        for (int i = 0; i < width; ++i) {
-            // Compute world coordinates of pixel center (i+0.5, j+0.5)
-            auto [world_x, world_y] = grid_to_world(i + 0.5, j + 0.5);
-
-            double distance;
-            if (cgal_polygon.contains(world_x, world_y)) {
-                // Point is inside polygon - compute distance to boundary
-                distance = cgal_polygon.distance_to_boundary(world_x, world_y);
+// One-dimensional squared euclidean distance transform (Felzenszwalb &
+// Huttenlocher): d[q] = min_p ((q - p)^2 + f[p]) for finite f. v and z are
+// scratch of size n and n + 1.
+static void edt_1d(const double *f, double *d, int n, int *v, double *z) {
+    constexpr double INF = std::numeric_limits<double>::infinity();
+    int k = 0;
+    v[0] = 0;
+    z[0] = -INF;
+    z[1] = INF;
+    for (int q = 1; q < n; q++) {
+        double s;
+        while (true) {
+            s = ((f[q] + double(q) * q) - (f[v[k]] + double(v[k]) * v[k]))
+                / (2.0 * q - 2.0 * v[k]);
+            if (s <= z[k]) {
+                k--;
             } else {
-                // Outside polygon, distance = 0
-                distance = 0.0;
+                break;
             }
+        }
+        k++;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = INF;
+    }
+    for (int q = 0, j = 0; q < n; q++) {
+        while (z[j + 1] < q)
+            j++;
+        double dq = double(q) - v[j];
+        d[q] = dq * dq + f[v[j]];
+    }
+}
 
-            // Store distance in flat array
-            distances[grid_to_index(i, j)] = distance;
+void PolyBoundaryDistanceMap::compute_distances() {
+    // The distance map only feeds the mesh sizing field, so it works on the
+    // rasterized grid: scanline-rasterize the polygon interior at the cell
+    // centers, then run an exact euclidean distance transform towards the
+    // outside cells. This is O(rows * edges + cells) instead of the
+    // O(cells * edges) per-cell exact distance computation it replaces, at
+    // the cost of a quantization-sized error in the sizing field.
+
+    // 1) Rasterize the interior at cell centers (even-odd rule; hole edges
+    // are part of cgal_polygon.edges() so holes fall out automatically).
+    std::vector<uint8_t> inside(size_t(width) * height, 0);
+    std::vector<double> crossings;
+    for (int j = 0; j < height; ++j) {
+        double y = min_y + (j + 0.5) * quantization;
+        crossings.clear();
+        for (const auto &edge : cgal_polygon.edges()) {
+            double y1 = edge.source().y(), y2 = edge.target().y();
+            if ((y1 <= y) == (y2 <= y))
+                continue;
+            double x1 = edge.source().x(), x2 = edge.target().x();
+            crossings.push_back(x1 + (y - y1) * (x2 - x1) / (y2 - y1));
+        }
+        std::sort(crossings.begin(), crossings.end());
+        for (size_t k = 0; k + 1 < crossings.size(); k += 2) {
+            int i0 = std::max(0, int(std::ceil((crossings[k] - min_x) / quantization - 0.5)));
+            int i1 = std::min(width - 1, int(std::floor((crossings[k + 1] - min_x) / quantization - 0.5)));
+            for (int i = i0; i <= i1; ++i)
+                inside[grid_to_index(i, j)] = 1;
+        }
+    }
+
+    // 2) Per-column integer distance to the nearest outside cell in the same
+    // column. The constructor pads the bounding box by two cells of margin,
+    // so the border rows are always outside and every value ends up finite.
+    std::vector<double> colsq(size_t(width) * height);
+    for (int i = 0; i < width; ++i) {
+        int run = height;  // "outside cell is far above" sentinel
+        for (int j = 0; j < height; ++j) {
+            run = inside[grid_to_index(i, j)] ? run + 1 : 0;
+            colsq[grid_to_index(i, j)] = run;
+        }
+        run = height;
+        for (int j = height - 1; j >= 0; --j) {
+            run = inside[grid_to_index(i, j)] ? run + 1 : 0;
+            double &g = colsq[grid_to_index(i, j)];
+            g = std::min(g, double(run));
+            g = g * g;
+        }
+    }
+
+    // 3) Per-row lower-envelope pass completes the exact 2D EDT.
+    std::vector<double> f(width), d(width), z(width + 1);
+    std::vector<int> v(width);
+    for (int j = 0; j < height; ++j) {
+        for (int i = 0; i < width; ++i)
+            f[i] = colsq[grid_to_index(i, j)];
+        edt_1d(f.data(), d.data(), width, v.data(), z.data());
+        for (int i = 0; i < width; ++i) {
+            // The -q/2 correction here attempts to correct for the fact that
+            // we are computing distance from cell center outside of the polygon.
+            // It is only an approximation but makes the number a bit more accurate.
+            distances[grid_to_index(i, j)] = std::max(std::sqrt(d[i]) * quantization - quantization * 0.5, 0.0);
         }
     }
 }
