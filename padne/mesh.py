@@ -178,78 +178,20 @@ def _(self) -> float:
 @_extend(Mesh, "from_triangle_soup")
 @classmethod
 def _(cls,
-      points: list[Point],
-      triangles: list[tuple[int, int, int]]) -> "Mesh":
+      points: list[Point] | np.ndarray,
+      triangles: list[tuple[int, int, int]] | np.ndarray) -> "Mesh":
+    """
+    Build a half-edge mesh from a triangle soup. The topology construction
+    itself happens in C++ with the GIL released (see build_from_triangle_soup
+    in _mesh.cpp); this wrapper only normalizes the inputs into arrays.
+    """
+    if not isinstance(points, np.ndarray):
+        points = np.array([(p.x, p.y) for p in points], dtype=np.float64)
+    points = points.reshape(-1, 2)
+    triangles = np.asarray(triangles, dtype=np.uint32).reshape(-1, 3)
+
     mesh = cls()
-
-    # First we create the vertices
-    vertices = [mesh.make_vertex(p) for p in points]
-
-    for tri in triangles:
-        assert len(tri) == 3
-        v1, v2, v3 = [vertices[i] for i in tri]
-
-        vertex_edge_pairs = [(v1, v2), (v2, v3), (v3, v1)]
-        # Create the _interior_ half-edges
-        face = mesh.make_face()
-        current_hedges = []
-        for u, v in vertex_edge_pairs:
-            hedge = mesh.connect_vertices(u, v)
-            u.out = hedge
-            face.edge = hedge  # We just get the last one
-            hedge.face = face
-            current_hedges.append(hedge)
-
-        # Next, connect the interior hedges in a loop
-        for h1, h2 in zip(current_hedges, current_hedges[1:] + [current_hedges[0]]):
-            HalfEdge.connect(h1, h2)
-
-    # Now, comes the final stage, where we need to produce the boundary
-    # edges. We do this by iterating over all half-edges and checking if
-    # they have a twin. Then we handle the boundary connectivity update
-
-    boundary_hedges = set()
-    vertex_to_boundary_hedge = {}
-    for hedge in mesh.halfedges:
-        if hedge.face is not None:
-            continue
-        boundary_hedges.add(hedge)
-
-        if hedge.origin in vertex_to_boundary_hedge:
-            raise ValueError("Non-manifold mesh")
-
-        vertex_to_boundary_hedge[hedge.origin] = hedge
-
-    boundary_hedges = set(hedge for hedge in mesh.halfedges if hedge.face is None)
-    while boundary_hedges:
-        hedge = boundary_hedges.pop()
-
-        # Okay, we have an as of yet unprocessed boundary hedge. Now we
-        # need to effectively "walk aournd" the boundary. We assume that
-        # there is always at most one "outgoing" boundary edge per vertex
-
-        face = mesh.make_face(is_boundary=True)
-        face.edge = hedge
-        hedge.face = face
-
-        hedge_prev = hedge
-        while True:
-            vertex_next = hedge_prev.twin.origin
-            hedge_next = vertex_to_boundary_hedge.get(vertex_next)
-            if hedge_next not in boundary_hedges:
-                # We have reached the end of the boundary
-                break
-
-            boundary_hedges.remove(hedge_next)
-
-            assert hedge_next.next is None  # Sanity check, should not happen since we checked earlier
-            HalfEdge.connect(hedge_prev, hedge_next)
-            hedge_next.face = face
-            hedge_prev = hedge_next
-
-        # And finally, connect the last edge to the first
-        HalfEdge.connect(hedge_prev, hedge)
-
+    _mesh.build_from_triangle_soup(mesh, points, triangles)
     return mesh
 
 
@@ -656,7 +598,7 @@ class Mesher:
             raise MeshingException(str(e)) from e
 
         mesh = Mesh.from_triangle_soup(
-            [Point(*p) for p in cgal_output['vertices']],
+            np.asarray(cgal_output['vertices'], dtype=np.float64),
             cgal_output['triangles']
         )
 

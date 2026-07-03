@@ -25,6 +25,7 @@
 #include <vector>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 
 namespace nb = nanobind;
@@ -416,6 +417,124 @@ NB_MODULE(_mesh, m) {
             return items;
         })
         .def_prop_ro("next_index", [](const FaceStore &s) { return s.m->n_faces(s.boundary); });
+
+    // Build a half-edge mesh from a triangle soup, entirely in C++. Same
+    // semantics as the former pure-Python Mesh.from_triangle_soup, but the
+    // topology construction runs with the GIL released so sibling meshing
+    // threads can proceed concurrently.
+    m.def("build_from_triangle_soup", [](
+              nb::object mesh_obj,
+              nb::ndarray<const double, nb::shape<-1, 2>, nb::c_contig> points,
+              nb::ndarray<const uint32_t, nb::shape<-1, 3>, nb::c_contig> triangles) {
+        Mesh &m_ = nb::cast<Mesh &>(mesh_obj);
+        if (m_.n_vertices() != 0 || m_.n_halfedges() != 0)
+            throw std::invalid_argument("Mesh must be empty");
+
+        size_t np_ = points.shape(0);
+        size_t nt = triangles.shape(0);
+        const double *pdata = points.data();
+        const uint32_t *tdata = triangles.data();
+
+        nb::gil_scoped_release nogil;
+
+        m_.vertex_x.resize(np_);
+        m_.vertex_y.resize(np_);
+        m_.vertex_out.assign(np_, INVALID);
+        for (size_t i = 0; i < np_; i++) {
+            m_.vertex_x[i] = pdata[2 * i];
+            m_.vertex_y[i] = pdata[2 * i + 1];
+        }
+
+        m_.edge_map.reserve(nt * 6);
+
+        // Index-based equivalent of connect_vertices
+        auto connect = [&m_](uint32_t v1, uint32_t v2) {
+            uint64_t key12 = edge_key(v1, v2);
+            auto found = m_.edge_map.find(key12);
+            if (found != m_.edge_map.end())
+                return found->second;
+            uint32_t e12 = m_.n_halfedges();
+            uint32_t e21 = e12 + 1;
+            for (uint32_t origin : {v1, v2}) {
+                m_.he_origin.push_back(origin);
+                m_.he_next.push_back(INVALID);
+                m_.he_prev.push_back(INVALID);
+                m_.he_face.push_back(INVALID);
+            }
+            m_.edge_map[key12] = e12;
+            m_.edge_map[edge_key(v2, v1)] = e21;
+            if (m_.vertex_out[v1] == INVALID)
+                m_.vertex_out[v1] = e12;
+            if (m_.vertex_out[v2] == INVALID)
+                m_.vertex_out[v2] = e21;
+            return e12;
+        };
+
+        for (size_t t = 0; t < nt; t++) {
+            uint32_t tri[3] = {tdata[3 * t], tdata[3 * t + 1], tdata[3 * t + 2]};
+            for (uint32_t v : tri)
+                if (v >= np_)
+                    throw std::invalid_argument("Triangle vertex index out of range");
+
+            uint32_t face_i = uint32_t(m_.face_edge.size());
+            m_.face_edge.push_back(INVALID);
+
+            uint32_t hedges[3];
+            for (int k = 0; k < 3; k++) {
+                uint32_t u = tri[k], v = tri[(k + 1) % 3];
+                uint32_t h = connect(u, v);
+                m_.vertex_out[u] = h;
+                m_.face_edge[face_i] = h;
+                m_.he_face[h] = face_i;
+                hedges[k] = h;
+            }
+            for (int k = 0; k < 3; k++) {
+                uint32_t h1 = hedges[k], h2 = hedges[(k + 1) % 3];
+                m_.he_next[h1] = h2;
+                m_.he_prev[h2] = h1;
+            }
+        }
+
+        // Boundary construction: every faceless half-edge lies on a boundary
+        // loop; each vertex may have at most one outgoing boundary half-edge.
+        std::unordered_map<uint32_t, uint32_t> vertex_to_boundary_hedge;
+        for (uint32_t h = 0; h < m_.n_halfedges(); h++) {
+            if (m_.he_face[h] != INVALID)
+                continue;
+            auto [it, inserted] = vertex_to_boundary_hedge.emplace(m_.he_origin[h], h);
+            if (!inserted)
+                throw std::invalid_argument("Non-manifold mesh");
+        }
+
+        std::vector<bool> visited(m_.n_halfedges(), false);
+        for (uint32_t start = 0; start < m_.n_halfedges(); start++) {
+            if (m_.he_face[start] != INVALID || visited[start])
+                continue;
+            visited[start] = true;
+
+            uint32_t face_i = uint32_t(m_.boundary_edge.size());
+            m_.boundary_edge.push_back(start);
+            m_.he_face[start] = face_i | BOUNDARY_BIT;
+
+            uint32_t hedge_prev = start;
+            while (true) {
+                uint32_t vertex_next = m_.he_origin[hedge_prev ^ 1];
+                auto found = vertex_to_boundary_hedge.find(vertex_next);
+                if (found == vertex_to_boundary_hedge.end())
+                    break;
+                uint32_t hedge_next = found->second;
+                if (visited[hedge_next])
+                    break;
+                visited[hedge_next] = true;
+                m_.he_next[hedge_prev] = hedge_next;
+                m_.he_prev[hedge_next] = hedge_prev;
+                m_.he_face[hedge_next] = face_i | BOUNDARY_BIT;
+                hedge_prev = hedge_next;
+            }
+            m_.he_next[hedge_prev] = start;
+            m_.he_prev[start] = hedge_prev;
+        }
+    }, "mesh"_a, "points"_a, "triangles"_a);
 
     nb::class_<Mesh>(m, "Mesh")
         .def(nb::init<>())
