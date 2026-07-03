@@ -353,35 +353,39 @@ class NodeIndexer:
         """
         # Maps a layer to a kdtree of _all_ vertices in _all_ meshes in that layer
         layer_to_kdtree = {}
-        # Maps a layer to a list of (global_index, vertex) tuples
-        # This can be used to retrieve the original vertex from the index that
-        # gets returned by the kdtree query
-        layer_global_index_and_vertex = {}
+        # Maps a layer to an array of global indices, positionally matching
+        # the kdtree points; used to translate kdtree query results back to
+        # global vertex indices
+        layer_global_indices = {}
 
         for layer_i in range(len(prob.layers)):
-            layer_vertices = []
+            coords_list = []
+            gidx_list = []
 
             for mesh_i, msh in enumerate(meshes):
                 if mesh_index_to_layer_index[mesh_i] != layer_i:
                     continue
-
-                for vertex_i, vertex in enumerate(msh.vertices):
-                    global_index = vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
-                    layer_vertices.append((global_index, vertex.p))
-            if not layer_vertices:
+                n = len(msh.vertices)
+                if n == 0:
+                    continue
+                # VertexIndexer assigns global indices contiguously per mesh
+                start = vindex.mesh_vertex_index_to_global_index[(mesh_i, 0)]
+                coords_list.append(msh.positions())
+                gidx_list.append(np.arange(start, start + n))
+            if not coords_list:
                 # No vertices in this layer, skip it
                 # In theory, there _could_ be a terminal that attempts to bind to
                 # an empty layer. This is going to crash weirdly after, but
                 # we are not going to handle it for now.
                 continue
 
-            layer_global_index_and_vertex[layer_i] = layer_vertices
+            layer_global_indices[layer_i] = np.concatenate(gidx_list)
             layer_to_kdtree[layer_i] = scipy.spatial.KDTree(
-                [(p.x, p.y) for _, p in layer_vertices],
+                np.vstack(coords_list),
                 leafsize=32,
             )
 
-        return layer_to_kdtree, layer_global_index_and_vertex
+        return layer_to_kdtree, layer_global_indices
 
     @classmethod
     def create(cls,
@@ -391,7 +395,7 @@ class NodeIndexer:
                vindex: VertexIndexer,
                filtered_networks: list[problem.Network]) -> "NodeIndexer":
 
-        layer_to_kdtree, layer_global_index_and_vertex = cls._construct_kdtrees(
+        layer_to_kdtree, layer_global_indices = cls._construct_kdtrees(
             prob,
             meshes,
             mesh_index_to_layer_index,
@@ -402,23 +406,30 @@ class NodeIndexer:
         # "virtual" nodes that only live inside a Network
         node_to_global_index = {}
 
-        # First, we index the NodeIDs that are used in a Connection
+        # First, we index the NodeIDs that are used in a Connection.
+        # The nearest-vertex lookups are batched per layer: one vectorized
+        # KDTree query per layer is much faster than one query per connection.
         connections = [
             conn for network in filtered_networks for conn in network.connections
         ]
+        layer_to_connections = collections.defaultdict(list)
         for conn in connections:
-            layer_i = prob.layers.index(conn.layer)
+            layer_to_connections[prob.layers.index(conn.layer)].append(conn)
+
+        for layer_i, layer_conns in layer_to_connections.items():
             kdtree = layer_to_kdtree[layer_i]
+            points = [(conn.point.x, conn.point.y) for conn in layer_conns]
+            _, vertex_idxs_in_kdtree = kdtree.query(points, k=1)
 
-            _, vertex_idx_in_kdtree = kdtree.query((conn.point.x, conn.point.y), k=1)
-            vertex_global_idx = layer_global_index_and_vertex[layer_i][vertex_idx_in_kdtree][0]
-            node = conn.node_id
+            for conn, vertex_idx_in_kdtree in zip(layer_conns, vertex_idxs_in_kdtree):
+                vertex_global_idx = int(layer_global_indices[layer_i][vertex_idx_in_kdtree])
+                node = conn.node_id
 
-            # Check that we are not overwriting an existing node with different
-            # vertex index. This should never happen in practice
-            if node in node_to_global_index and node_to_global_index[node] != vertex_global_idx:
-                raise ValueError("Duplicate connection vertices found, this should not happen.")
-            node_to_global_index[node] = vertex_global_idx
+                # Check that we are not overwriting an existing node with different
+                # vertex index. This should never happen in practice
+                if node in node_to_global_index and node_to_global_index[node] != vertex_global_idx:
+                    raise ValueError("Duplicate connection vertices found, this should not happen.")
+                node_to_global_index[node] = vertex_global_idx
 
         # Next, we allocate new indices for all the yet to be allocated nodes
         nodes = [
