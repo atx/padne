@@ -177,43 +177,8 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
     indices, so the variable indices are given by the mesh.vertices indices.
     """
     N = len(mesh.vertices)
-
-    row_is = []
-    col_is = []
-    values = []
-    diagonal_entries = np.zeros(N, dtype=DTYPE)
-
-    for i, vertex_i in enumerate(mesh.vertices):
-        for edge in vertex_i.orbit():
-            ratio = edge.cotan()
-
-            if ratio == 0:
-                # I do not think this happens all that often, except for maybe
-                # some degenerate cases
-                continue
-
-            vertex_k = edge.twin.origin
-            k = mesh.vertices.to_index(vertex_k)
-
-            # Note that we are iterating over everything, so the (k, i) pair gets
-            # set in a different iteration
-            # The below is equivalent to:
-            # L[i, i] -= ratio
-            # L[i, k] += ratio
-            row_is.append(i)
-            col_is.append(k)
-            values.append(ratio)
-            diagonal_entries[i] -= ratio
-
-    # Insert the diagonal entries
-    for i, val in enumerate(diagonal_entries):
-        row_is.append(i)
-        col_is.append(i)
-        values.append(val)
-
-    L = scipy.sparse.coo_matrix((values, (row_is, col_is)), shape=(N, N), dtype=DTYPE)
-
-    return L
+    rows, cols, values = mesh.laplacian()
+    return scipy.sparse.coo_matrix((values, (rows, cols)), shape=(N, N), dtype=DTYPE)
 
 
 @dataclass
@@ -482,7 +447,7 @@ class NodeIndexer:
 
 def stamp_network_into_system(network: problem.Network,
                               node_indexer: NodeIndexer,
-                              L: scipy.sparse.lil_matrix,
+                              L: scipy.sparse.spmatrix,
                               r: np.ndarray) -> None:
     for element in network.elements:
         match element:
@@ -556,7 +521,7 @@ def stamp_network_into_system(network: problem.Network,
 
 
 def setup_ground_node(i_gnd: int,
-                      L: scipy.sparse.lil_matrix,
+                      L: scipy.sparse.spmatrix,
                       r: np.ndarray) -> None:
     # This effectively wires a voltage source of 0V from i_gnd to a
     # virtual (not in the matrix) "ground" node.
@@ -577,16 +542,28 @@ def setup_ground_node(i_gnd: int,
 def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
                                    conductances: list[float],
                                    vindex: VertexIndexer,
-                                   L: scipy.sparse.lil_matrix) -> None:
-    for mesh_i, (msh, conductance) in enumerate(zip(meshes, conductances)):
-        L_msh = conductance * laplace_operator(msh)
+                                   N: int) -> scipy.sparse.coo_matrix:
+    """
+    Assemble the mesh Laplacians into one global NxN COO matrix.
 
-        # Glue them together into the global matrix
-        for i, j, v in zip(L_msh.row, L_msh.col, L_msh.data):
-            global_i = vindex.mesh_vertex_index_to_global_index[(mesh_i, i)]
-            global_j = vindex.mesh_vertex_index_to_global_index[(mesh_i, j)]
-            # TODO: Is there any possibility that the COO matrix contains duplicates?
-            L[global_i, global_j] += v
+    VertexIndexer assigns global indices contiguously in mesh order, so the
+    local COO indices of each mesh translate to global ones by adding the
+    mesh's offset. Everything stays in numpy; no per-entry Python work.
+    """
+    if not meshes:
+        return scipy.sparse.coo_matrix((N, N), dtype=DTYPE)
+
+    rows, cols, values = [], [], []
+    for mesh_i, (msh, conductance) in enumerate(zip(meshes, conductances)):
+        L_msh = laplace_operator(msh)
+        offset = vindex.mesh_vertex_index_to_global_index[(mesh_i, 0)]
+        rows.append(L_msh.row.astype(np.int64) + offset)
+        cols.append(L_msh.col.astype(np.int64) + offset)
+        values.append(L_msh.data * conductance)
+
+    return scipy.sparse.coo_matrix(
+        (np.concatenate(values), (np.concatenate(rows), np.concatenate(cols))),
+        shape=(N, N), dtype=DTYPE)
 
 
 @stage_timer
@@ -764,7 +741,7 @@ def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.T
 
 def allocate_system(vindex: VertexIndexer,
                     node_indexer: NodeIndexer
-                    ) -> tuple[scipy.sparse.lil_matrix, np.ndarray]:
+                    ) -> tuple[scipy.sparse.dok_matrix, np.ndarray]:
     """
     Allocate the global system matrix L and right-hand side vector r.
 
@@ -776,13 +753,15 @@ def allocate_system(vindex: VertexIndexer,
         len(node_indexer.extra_source_to_global_index) + \
         1  # +1 for the ground node
     log.info(f"System matrix size: {N}x{N} variables")
-    L = scipy.sparse.lil_matrix((N, N), dtype=DTYPE)
+    # dok_matrix supports the same element-wise stamping as lil_matrix but
+    # is cheaper to convert and add to the COO-assembled Laplacian part.
+    L = scipy.sparse.dok_matrix((N, N), dtype=DTYPE)
     r = np.zeros(N, dtype=DTYPE)
     return L, r
 
 
 @stage_timer
-def solve_system(L: scipy.sparse.lil_matrix,
+def solve_system(L: scipy.sparse.spmatrix,
                  r: np.ndarray) -> tuple[np.ndarray, SolverInfo]:
     """
     Solve L * v = r and return the solution vector together with diagnostics.
@@ -805,7 +784,7 @@ def assemble_system(prob: problem.Problem,
                     vindex: VertexIndexer,
                     filtered_networks: list[problem.Network],
                     node_indexer: NodeIndexer
-                    ) -> tuple[scipy.sparse.lil_matrix, np.ndarray]:
+                    ) -> tuple[scipy.sparse.csc_matrix, np.ndarray]:
     """
     Allocate (L, r) and stamp the mesh Laplacians, all networks, and the
     ground node. Returns the system ready to be passed to `solve_system`.
@@ -816,18 +795,27 @@ def assemble_system(prob: problem.Problem,
         prob.layers[mesh_index_to_layer_index[i]].conductance
         for i in range(len(meshes))
     ]
-    L, r = allocate_system(vindex, node_indexer)
-    # Compute the Laplace operator for each mesh and insert it into the
-    # global L matrix.
-    process_mesh_laplace_operators(meshes, mesh_conductances, vindex, L)
+    L_net, r = allocate_system(vindex, node_indexer)
+    # The mesh Laplacians are assembled separately in COO form; the sparse
+    # stamping structure only receives the (comparatively few) network and
+    # ground-node entries.
+    L_lap = process_mesh_laplace_operators(
+        meshes, mesh_conductances, vindex, L_net.shape[0])
     # Now, we process the Networks, directly inserting them in-place into the
     # system matrix. Esthetically, it would be nicer to construct them first
     # and then insert them, but this requires a bit of extra work with regards
     # to handling nodes that have Connections and nodes that do not.
     for network in filtered_networks:
-        stamp_network_into_system(network, node_indexer, L, r)
+        stamp_network_into_system(network, node_indexer, L_net, r)
     # TODO: Implement a better way to pick the ground node.
-    setup_ground_node(find_best_ground_node_index(prob, node_indexer), L, r)
+    setup_ground_node(find_best_ground_node_index(prob, node_indexer), L_net, r)
+    # Summing the two parts is safe even though the network stamping uses
+    # plain assignment in places: those assignments only touch extra-variable
+    # and ground rows/columns, which never carry Laplacian entries. Network
+    # entries that can land inside the Laplacian block (Resistors at
+    # Connection nodes) are stamped with +=, and addition commutes with the
+    # final sum.
+    L = L_lap.tocsc() + L_net.tocsc()
     return L, r
 
 
