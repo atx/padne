@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 import pickle
 import random
+import scipy.sparse
 import shapely.geometry
 
 from padne import kicad
@@ -917,6 +918,102 @@ class TestMesh:
 
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
+
+
+class TestMeshBulkAccessors:
+    """Tests for the vectorized positions()/triangles()/laplacian() accessors."""
+
+    @staticmethod
+    def make_mesh_with_hole() -> Mesh:
+        # Square ring: outer 4x4 square with a 2x2 hole, 8 triangles
+        points = [
+            Point(0.0, 0.0), Point(4.0, 0.0), Point(4.0, 4.0), Point(0.0, 4.0),
+            Point(1.0, 1.0), Point(3.0, 1.0), Point(3.0, 3.0), Point(1.0, 3.0),
+        ]
+        triangles = [
+            (0, 1, 4), (1, 5, 4),
+            (1, 2, 5), (2, 6, 5),
+            (2, 3, 6), (3, 7, 6),
+            (3, 0, 7), (0, 4, 7),
+        ]
+        return Mesh.from_triangle_soup(points, triangles)
+
+    def test_positions_matches_vertex_handles(self):
+        mesh = self.make_mesh_with_hole()
+        pos = mesh.positions()
+
+        assert pos.dtype == np.float64
+        assert pos.shape == (len(mesh.vertices), 2)
+        for i in range(len(mesh.vertices)):
+            p = mesh.vertices.to_object(i).p
+            assert pos[i, 0] == p.x
+            assert pos[i, 1] == p.y
+
+    def test_positions_empty_mesh(self):
+        assert Mesh().positions().shape == (0, 2)
+
+    def test_positions_returns_a_copy(self):
+        mesh = make_square_with_center_mesh()
+        pos = mesh.positions()
+        pos[0, 0] = 123.0
+        assert mesh.vertices.to_object(0).p.x != 123.0
+
+    def test_triangles_matches_face_handles(self):
+        mesh = self.make_mesh_with_hole()
+        tris = mesh.triangles()
+
+        assert tris.dtype == np.uint32
+        # mesh.faces holds interior faces only, so the boundary loops
+        # (outer square + hole) must not contribute rows
+        assert len(mesh.boundaries) == 2
+        assert tris.shape == (len(mesh.faces), 3)
+        for f in range(len(mesh.faces)):
+            face = mesh.faces.to_object(f)
+            expected = [v.i for v in face.vertices]
+            assert list(tris[f]) == expected
+
+    def test_triangles_preserves_soup_winding(self):
+        points = [Point(0.0, 0.0), Point(4.0, 0.0), Point(0.0, 3.0)]
+        mesh = Mesh.from_triangle_soup(points, [(0, 1, 2)])
+        tris = mesh.triangles()
+
+        # Rows follow the face edge loop, so the CCW cycle must be preserved
+        assert tris.shape == (1, 3)
+        cycles = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
+        assert list(tris[0]) in cycles
+
+    def test_laplacian_matches_python_implementation(self):
+        from padne import solver
+
+        mesh = self.make_mesh_with_hole()
+        n = len(mesh.vertices)
+        rows, cols, vals = mesh.laplacian()
+        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n, n))
+        L_ref = solver.laplace_operator(mesh)
+
+        np.testing.assert_allclose(L.toarray(), L_ref.toarray(), atol=1e-12)
+
+    def test_laplacian_square_with_center(self):
+        mesh = make_square_with_center_mesh()
+        rows, cols, vals = mesh.laplacian()
+        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(5, 5)).toarray()
+
+        # Each center-to-corner edge has cotan 1 (two right-isosceles
+        # triangles), each boundary edge has cotan 0.
+        expected = -np.eye(5)
+        expected[4, :] = 1.0
+        expected[:, 4] = 1.0
+        expected[4, 4] = -4.0
+        np.testing.assert_allclose(L, expected, atol=1e-12)
+
+    def test_laplacian_rows_sum_to_zero(self):
+        mesh = self.make_mesh_with_hole()
+        n = len(mesh.vertices)
+        rows, cols, vals = mesh.laplacian()
+        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n, n)).toarray()
+
+        np.testing.assert_allclose(L, L.T, atol=1e-12)
+        np.testing.assert_allclose(L.sum(axis=1), np.zeros(n), atol=1e-12)
 
 
 class TestMeshStores:

@@ -585,6 +585,103 @@ NB_MODULE(_mesh, m) {
             return int64_t(m_.n_vertices()) - int64_t(m_.n_halfedges()) / 2
                 + int64_t(m_.n_faces(false));
         })
+        // Vertex positions as an (N, 2) array. Bulk accessor for numpy-side
+        // vectorization (KDTree construction, solution transfer, ...).
+        .def("positions", [](const Mesh &m_) {
+            size_t n = m_.n_vertices();
+            auto *buf = new std::vector<double>(2 * n);
+            for (size_t i = 0; i < n; i++) {
+                (*buf)[2 * i] = m_.vertex_x[i];
+                (*buf)[2 * i + 1] = m_.vertex_y[i];
+            }
+            nb::capsule owner(buf, [](void *p) noexcept {
+                delete static_cast<std::vector<double> *>(p);
+            });
+            return nb::ndarray<nb::numpy, double>(buf->data(), {n, 2}, owner);
+        })
+        // Interior-face vertex indices as an (F, 3) array, in face index
+        // order. Requires all interior faces to be triangles.
+        .def("triangles", [](const Mesh &m_) {
+            size_t nf = m_.n_faces(false);
+            auto *buf = new std::vector<uint32_t>(3 * nf);
+            for (size_t f = 0; f < nf; f++) {
+                uint32_t e0 = m_.face_edge[f];
+                uint32_t e1 = m_.he_next[e0];
+                uint32_t e2 = m_.he_next[e1];
+                if (m_.he_next[e2] != e0)
+                    throw std::runtime_error("Non-triangular interior face");
+                (*buf)[3 * f] = m_.he_origin[e0];
+                (*buf)[3 * f + 1] = m_.he_origin[e1];
+                (*buf)[3 * f + 2] = m_.he_origin[e2];
+            }
+            nb::capsule owner(buf, [](void *p) noexcept {
+                delete static_cast<std::vector<uint32_t> *>(p);
+            });
+            return nb::ndarray<nb::numpy, uint32_t>(buf->data(), {nf, 3}, owner);
+        })
+        // Cotan-weighted Laplace operator in COO form: a (rows, cols, values)
+        // tuple over mesh-local vertex indices, including the diagonal.
+        // Semantics match building the operator edge-by-edge with
+        // HalfEdge.cotan, but the whole loop runs in C++ with the GIL
+        // released.
+        .def("laplacian", [](const Mesh &m_) {
+            uint32_t nh = m_.n_halfedges();
+            uint32_t nv = m_.n_vertices();
+            auto *rows = new std::vector<uint32_t>();
+            auto *cols = new std::vector<uint32_t>();
+            auto *vals = new std::vector<double>();
+            {
+                nb::gil_scoped_release nogil;
+                rows->reserve(nh + nv);
+                cols->reserve(nh + nv);
+                vals->reserve(nh + nv);
+                std::vector<double> diag(nv, 0.0);
+                for (uint32_t h = 0; h < nh; h++) {
+                    uint32_t vi = m_.he_origin[h];
+                    uint32_t vk = m_.he_origin[h ^ 1];
+                    double xi = m_.vertex_x[vi], yi = m_.vertex_y[vi];
+                    double xk = m_.vertex_x[vk], yk = m_.vertex_y[vk];
+                    double ratio = 0.0;
+                    for (uint32_t start : {h, h ^ 1}) {
+                        uint32_t other = m_.he_next[m_.he_next[start]];
+                        // other.next is `start`'s own face; skip if boundary
+                        if (m_.he_face[m_.he_next[other]] & BOUNDARY_BIT)
+                            continue;
+                        uint32_t vo = m_.he_origin[other];
+                        double xo = m_.vertex_x[vo], yo = m_.vertex_y[vo];
+                        double dix = xi - xo, diy = yi - yo;
+                        double dkx = xk - xo, dky = yk - yo;
+                        double dot = dix * dkx + diy * dky;
+                        double cross = dix * dky - diy * dkx;
+                        ratio += std::fabs(dot / cross) / 2.0;
+                    }
+                    if (ratio == 0.0)
+                        continue;
+                    rows->push_back(vi);
+                    cols->push_back(vk);
+                    vals->push_back(ratio);
+                    diag[vi] -= ratio;
+                }
+                for (uint32_t v = 0; v < nv; v++) {
+                    rows->push_back(v);
+                    cols->push_back(v);
+                    vals->push_back(diag[v]);
+                }
+            }
+            auto make_u32 = [](std::vector<uint32_t> *buf) {
+                nb::capsule owner(buf, [](void *p) noexcept {
+                    delete static_cast<std::vector<uint32_t> *>(p);
+                });
+                return nb::ndarray<nb::numpy, uint32_t>(buf->data(), {buf->size()}, owner);
+            };
+            nb::capsule vowner(vals, [](void *p) noexcept {
+                delete static_cast<std::vector<double> *>(p);
+            });
+            return nb::make_tuple(
+                make_u32(rows),
+                make_u32(cols),
+                nb::ndarray<nb::numpy, double>(vals->data(), {vals->size()}, vowner));
+        })
         .def("__getstate__", [](const Mesh &m_) {
             return nb::make_tuple(
                 vector_to_bytes(m_.vertex_x),
