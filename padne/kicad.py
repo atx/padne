@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Iterator, ClassVar, Iterable
 
-from . import problem, units
+from . import parallel, problem, units
 from .context import stage_timer
 from .gerber import ensure_geometry_is_multipolygon, gerber_file_to_shapely
 
@@ -1342,24 +1342,24 @@ def extract_layers_from_gerbers(board,
     Returns:
         List of PlottedGerberLayer objects
     """
+    # The pygerber rendering is pure-Python and GIL-bound, so fan the layers
+    # out to worker processes. gerber_file_to_shapely lives in padne.gerber,
+    # which workers can import without paying for the pcbnew import.
+    geometries = parallel.process_map(
+        gerber_file_to_shapely,
+        list(gerber_layers.values()),
+    )
+
     plotted_layers = []
-
-    for layer_id, gerber_path in gerber_layers.items():
-        # Get layer name from the board
-        layer_name = board.GetLayerName(layer_id)
-
-        geometry = gerber_file_to_shapely(gerber_path)
+    for (layer_id, gerber_path), geometry in zip(gerber_layers.items(), geometries):
         if geometry is None:
             continue
 
-        # Create a PlottedGerberLayer object
-        plotted_layer = PlottedGerberLayer(
-            name=layer_name,
+        plotted_layers.append(PlottedGerberLayer(
+            name=board.GetLayerName(layer_id),
             layer_id=layer_id,
             geometry=geometry
-        )
-
-        plotted_layers.append(plotted_layer)
+        ))
 
     return plotted_layers
 
