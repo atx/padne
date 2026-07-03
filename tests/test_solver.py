@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Optional, Any
 
 from padne import solver, problem, mesh, kicad, parallel
-from padne.kicad import ensure_geometry_is_multipolygon
+from padne.gerber import ensure_geometry_is_multipolygon
 
 from conftest import for_all_kicad_projects
 from test_mesh import assert_meshes_equivalent
