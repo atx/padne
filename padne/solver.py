@@ -323,14 +323,21 @@ def generate_disconnected_meshes(prob: problem.Problem,
     relaxed_mesher = mesh.Mesher(mesh.Mesher.Config.RELAXED)
     disconnected_meshes_by_layer: list[list[mesh.Mesh]] = [[] for _ in prob.layers]
 
-    for layer_i, layer in enumerate(prob.layers):
-        for geom_i, geom in enumerate(layer.geoms):
-            if (layer_i, geom_i) in connected_layer_mesh_pairs:
-                continue
-            # This layer is not connected to any lumped elements
-            # Triangulate it for display as disconnected copper
-            m = relaxed_mesher.poly_to_mesh(layer.geoms[geom_i])
-            disconnected_meshes_by_layer[layer_i].append(m)
+    # Collect the disconnected regions first, then triangulate them
+    # concurrently; poly_to_mesh releases the GIL for the CGAL and
+    # topology-building work.
+    jobs = [
+        (layer_i, layer.geoms[geom_i])
+        for layer_i, layer in enumerate(prob.layers)
+        for geom_i in range(len(layer.geoms))
+        if (layer_i, geom_i) not in connected_layer_mesh_pairs
+    ]
+    meshes = parallel.thread_map(
+        lambda job: relaxed_mesher.poly_to_mesh(job[1]),
+        jobs,
+    )
+    for (layer_i, _), m in zip(jobs, meshes):
+        disconnected_meshes_by_layer[layer_i].append(m)
 
     return disconnected_meshes_by_layer
 
