@@ -480,8 +480,12 @@ double PolyBoundaryDistanceMap::query(double x, double y) const {
         return 0.0;
     }
 
-    // Convert world coordinates to grid coordinates using transformation method
-    auto [gx, gy] = world_to_grid(x, y);
+    // Convert world coordinates to grid coordinates using transformation method.
+    // Samples are taken at pixel centers (i+0.5, j+0.5), so shift by half a
+    // cell to align the interpolation grid with the sample locations.
+    auto [gx_raw, gy_raw] = world_to_grid(x, y);
+    double gx = gx_raw - 0.5;
+    double gy = gy_raw - 0.5;
 
     // Find integer grid coordinates
     int i0 = static_cast<int>(std::floor(gx));

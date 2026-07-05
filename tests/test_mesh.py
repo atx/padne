@@ -2521,6 +2521,20 @@ class TestTwoForm:
 class TestPolyBoundaryDistanceMap:
     """Test suite for PolyBoundaryDistanceMap functionality."""
 
+    # Geometries for the ground-truth distance map tests. Deliberately varied:
+    # convex, with holes, curved, non-convex and not anchored at the origin.
+    TEST_GEOMETRIES = {
+        "rectangle": shapely.geometry.box(0, 0, 10, 10),
+        "rectangle_with_hole": shapely.geometry.box(0, 0, 10, 10).difference(
+            shapely.geometry.box(3, 3, 7, 7)),
+        "circle": shapely.geometry.Point(5, 5).buffer(3),
+        "annulus": shapely.geometry.Point(5, 5).buffer(4).difference(
+            shapely.geometry.Point(5, 5).buffer(2)),
+        "l_shape": shapely.geometry.box(0, 0, 10, 10).difference(
+            shapely.geometry.box(5, 5, 11, 11)),
+        "off_origin": shapely.geometry.box(-12, -7, -2, 3),
+    }
+
     def test_basic_rectangle_distance_map(self):
         """Test distance map for simple rectangle."""
         poly = shapely.geometry.box(0, 0, 10, 10)
@@ -2657,17 +2671,127 @@ class TestPolyBoundaryDistanceMap:
         coarse_map = PolyBoundaryDistanceMap(poly, 1.0)
         fine_map = PolyBoundaryDistanceMap(poly, 0.1)
 
-        # Test center point - fine should be closer to expected 5.0
-        coarse_center = coarse_map.query(5.0, 5.0)
-        fine_center = fine_map.query(5.0, 5.0)
+        # Query an off-grid, off-center point so neither map is trivially exact
+        x, y = 5.3, 6.2
+        expected = shapely.geometry.Point(x, y).distance(poly.boundary)
 
-        expected = 5.0
-        coarse_error = abs(coarse_center - expected)
-        fine_error = abs(fine_center - expected)
+        coarse_error = abs(coarse_map.query(x, y) - expected)
+        fine_error = abs(fine_map.query(x, y) - expected)
 
-        assert 0 < fine_error < coarse_error, \
-            f"Fine quantization should be more accurate: " \
+        assert fine_error <= coarse_error, \
+            f"Fine quantization should not be less accurate: " \
             f"coarse_error={coarse_error:.3f}, fine_error={fine_error:.3f}"
+        # Fine map error must be bounded by its quantization
+        assert fine_error <= 0.1
+
+    @pytest.mark.parametrize("geometry_name", list(TEST_GEOMETRIES))
+    def test_query_matches_shapely_reference(self, geometry_name):
+        """Ground-truth sweep: query() must match Shapely's exact distance
+        to boundary within a quantization-derived error bound."""
+        poly = self.TEST_GEOMETRIES[geometry_name]
+        quantization = 0.1
+        dist_map = PolyBoundaryDistanceMap(poly, quantization)
+
+        rng = random.Random(42)
+        minx, miny, maxx, maxy = poly.bounds
+        # Sample slightly beyond the bounds to also exercise the exterior
+        pad = 3 * quantization
+
+        checked_interior = 0
+        for _ in range(300):
+            x = rng.uniform(minx - pad, maxx + pad)
+            y = rng.uniform(miny - pad, maxy + pad)
+            point = shapely.geometry.Point(x, y)
+            exact = point.distance(poly.boundary)
+            queried = dist_map.query(x, y)
+
+            if poly.covers(point):
+                if exact <= 2 * quantization:
+                    # Near the boundary the map legitimately blends towards 0
+                    assert 0.0 <= queried <= exact + quantization
+                else:
+                    assert queried == pytest.approx(exact, abs=quantization), \
+                        f"Mismatch at ({x:.4f}, {y:.4f}): " \
+                        f"query={queried:.4f}, exact={exact:.4f}"
+                    checked_interior += 1
+            elif exact > 2 * quantization:
+                assert queried == 0.0, \
+                    f"Exterior point ({x:.4f}, {y:.4f}) should be 0, got {queried}"
+            else:
+                # Exterior but within reach of the interpolation stencil:
+                # may pull in small nonzero values from interior cells
+                assert 0.0 <= queried <= 3 * quantization
+
+        assert checked_interior > 50, "Too few interior points were checked"
+
+    def test_grid_alignment_in_planar_field_region(self):
+        """In regions where the distance field is planar (distance to a single
+        straight edge), bilinear interpolation must reproduce the exact value.
+        Catches half-cell grid misalignment bugs that loose tests miss."""
+        poly = shapely.geometry.box(0, 0, 10, 10)
+        dist_map = PolyBoundaryDistanceMap(poly, 0.5)
+
+        for x, y, expected in [(2.25, 5.1, 2.25),  # field == x near left edge
+                               (7.9, 5.0, 2.1),    # field == 10 - x
+                               (5.0, 1.3, 1.3)]:   # field == y
+            assert dist_map.query(x, y) == pytest.approx(expected, abs=0.01)
+
+    def test_off_origin_negative_coordinates(self):
+        """Polygon not anchored at the origin, spanning negative coordinates."""
+        poly = shapely.geometry.box(-12, -7, -2, 3)
+        dist_map = PolyBoundaryDistanceMap(poly, 0.2)
+
+        # Center of the 10x10 box
+        assert dist_map.query(-7.0, -2.0) == pytest.approx(5.0, abs=0.2)
+        # Near the left edge
+        assert dist_map.query(-11.0, -2.0) == pytest.approx(1.0, abs=0.2)
+        # Outside
+        assert dist_map.query(-14.0, -2.0) == 0.0
+        assert dist_map.query(0.0, 0.0) == 0.0
+
+    def test_polygon_smaller_than_quantization(self):
+        """Polygons smaller than a single grid cell must not crash and must
+        stay within physical bounds."""
+        tiny = shapely.geometry.box(0, 0, 0.3, 0.3)
+        dist_map = PolyBoundaryDistanceMap(tiny, 0.5)
+        assert dist_map.width >= 1
+        assert dist_map.height >= 1
+        # Max possible interior distance is 0.15
+        assert 0.0 <= dist_map.query(0.15, 0.15) <= 0.15
+        assert dist_map.query(5.0, 5.0) == 0.0
+
+        # Quantization vastly larger than the polygon
+        unit = shapely.geometry.box(0, 0, 1, 1)
+        coarse_map = PolyBoundaryDistanceMap(unit, 5.0)
+        assert coarse_map.width >= 1
+        assert coarse_map.height >= 1
+        assert 0.0 <= coarse_map.query(0.5, 0.5) <= 0.5
+
+    def test_thin_sliver_polygon(self):
+        """A sliver much thinner than the quantization must not crash and
+        must return values bounded by its half-thickness."""
+        sliver = shapely.geometry.box(0, 0, 10, 0.05)
+        dist_map = PolyBoundaryDistanceMap(sliver, 0.5)
+
+        for x in [0.5, 5.0, 9.5]:
+            assert 0.0 <= dist_map.query(x, 0.025) <= 0.05
+        assert dist_map.query(5.0, 3.0) == 0.0
+
+    def test_l_shape_distance_map(self):
+        """Non-convex L-shape with analytically known distances, including a
+        point whose nearest boundary is the reflex corner."""
+        poly = shapely.geometry.box(0, 0, 10, 10).difference(
+            shapely.geometry.box(5, 5, 11, 11))
+        dist_map = PolyBoundaryDistanceMap(poly, 0.1)
+
+        # Inside the removed quadrant
+        assert dist_map.query(7.5, 7.5) == 0.0
+        # Middle of the vertical arm
+        assert dist_map.query(2.5, 7.5) == pytest.approx(2.5, abs=0.15)
+        # Middle of the horizontal arm
+        assert dist_map.query(7.5, 2.5) == pytest.approx(2.5, abs=0.15)
+        # Nearest boundary is the reflex corner at (5, 5)
+        assert dist_map.query(4.0, 4.0) == pytest.approx(np.sqrt(2.0), abs=0.15)
 
 
 class TestCGALPolygon:
