@@ -844,6 +844,79 @@ class TestMesh:
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
+    def test_non_manifold_vertex_bowtie(self):
+        """Two triangles sharing only a single vertex form a non-manifold
+        (bowtie) vertex with two outgoing boundary half-edges and must be
+        rejected."""
+        points = [
+            Point(0.0, 0.0),    # 0: shared vertex
+            Point(1.0, 0.0),    # 1
+            Point(1.0, 1.0),    # 2
+            Point(-1.0, 0.0),   # 3
+            Point(-1.0, -1.0),  # 4
+        ]
+        triangles = [
+            (0, 1, 2),
+            (0, 3, 4),
+        ]
+
+        with pytest.raises(ValueError, match="Non-manifold"):
+            Mesh.from_triangle_soup(points, triangles)
+
+    def test_inconsistent_winding(self):
+        """Two adjacent triangles with opposite winding duplicate a directed
+        edge and must be rejected."""
+        points = [
+            Point(0.0, 0.0),  # 0
+            Point(1.0, 0.0),  # 1
+            Point(0.0, 1.0),  # 2
+            Point(1.0, 1.0),  # 3
+        ]
+        # First triangle is CCW, second is CW; both produce the directed
+        # edge (1, 2).
+        triangles = [
+            (0, 1, 2),
+            (1, 2, 3),
+        ]
+
+        with pytest.raises(ValueError, match="Non-manifold"):
+            Mesh.from_triangle_soup(points, triangles)
+
+    def test_grid_mesh(self):
+        """Programmatic N x N grid of squares, each split into two triangles."""
+        n = 20
+        points = [
+            Point(float(x), float(y))
+            for y in range(n + 1)
+            for x in range(n + 1)
+        ]
+
+        def idx(x, y):
+            return y * (n + 1) + x
+
+        triangles = []
+        for y in range(n):
+            for x in range(n):
+                triangles.append((idx(x, y), idx(x + 1, y), idx(x + 1, y + 1)))
+                triangles.append((idx(x, y), idx(x + 1, y + 1), idx(x, y + 1)))
+
+        mesh = Mesh.from_triangle_soup(points, triangles)
+
+        assert len(mesh.vertices) == (n + 1) ** 2
+        assert len(mesh.faces) == 2 * n * n
+        # Edges: horizontal + vertical (n*(n+1) each) + one diagonal per cell
+        assert len(mesh.halfedges) == 2 * (3 * n * n + 2 * n)
+        assert len(mesh.boundaries) == 1
+
+        # The vertices must keep the input ordering
+        for i, p in enumerate(points):
+            assert mesh.vertices.to_object(i).p == p
+
+        boundary = mesh.boundaries.to_object(0)
+        assert len(list(boundary.edge.walk())) == 4 * n
+
+        assert_mesh_topology_okay(mesh)
+        assert_mesh_structure_valid(mesh)
 
 
 class TestMeshStores:
