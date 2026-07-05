@@ -56,6 +56,32 @@ struct Mesh {
         return uint32_t((boundary ? boundary_edge : face_edge).size());
     }
 
+    // Returns the half-edge from v1 to v2, allocating it (and its twin)
+    // if it does not exist yet.
+    uint32_t connect(uint32_t v1, uint32_t v2) {
+        uint64_t key12 = edge_key(v1, v2);
+        auto found = edge_map.find(key12);
+        if (found != edge_map.end())
+            return found->second;
+        // Allocate the half-edge and its twin as an adjacent pair
+        uint32_t e12 = n_halfedges();
+        uint32_t e21 = e12 + 1;
+        for (uint32_t origin : {v1, v2}) {
+            he_origin.push_back(origin);
+            he_next.push_back(INVALID);
+            he_prev.push_back(INVALID);
+            he_face.push_back(INVALID);
+        }
+        edge_map[key12] = e12;
+        edge_map[edge_key(v2, v1)] = e21;
+        // Update the vertex out pointers
+        if (vertex_out[v1] == INVALID)
+            vertex_out[v1] = e12;
+        if (vertex_out[v2] == INVALID)
+            vertex_out[v2] = e21;
+        return e12;
+    }
+
     void rebuild_edge_map() {
         edge_map.clear();
         edge_map.reserve(he_origin.size());
@@ -447,29 +473,6 @@ NB_MODULE(_mesh, m) {
 
         m_.edge_map.reserve(nt * 6);
 
-        // Index-based equivalent of connect_vertices
-        auto connect = [&m_](uint32_t v1, uint32_t v2) {
-            uint64_t key12 = edge_key(v1, v2);
-            auto found = m_.edge_map.find(key12);
-            if (found != m_.edge_map.end())
-                return found->second;
-            uint32_t e12 = m_.n_halfedges();
-            uint32_t e21 = e12 + 1;
-            for (uint32_t origin : {v1, v2}) {
-                m_.he_origin.push_back(origin);
-                m_.he_next.push_back(INVALID);
-                m_.he_prev.push_back(INVALID);
-                m_.he_face.push_back(INVALID);
-            }
-            m_.edge_map[key12] = e12;
-            m_.edge_map[edge_key(v2, v1)] = e21;
-            if (m_.vertex_out[v1] == INVALID)
-                m_.vertex_out[v1] = e12;
-            if (m_.vertex_out[v2] == INVALID)
-                m_.vertex_out[v2] = e21;
-            return e12;
-        };
-
         for (size_t t = 0; t < nt; t++) {
             uint32_t tri[3] = {tdata[3 * t], tdata[3 * t + 1], tdata[3 * t + 2]};
             for (uint32_t v : tri)
@@ -482,7 +485,7 @@ NB_MODULE(_mesh, m) {
             uint32_t hedges[3];
             for (int k = 0; k < 3; k++) {
                 uint32_t u = tri[k], v = tri[(k + 1) % 3];
-                uint32_t h = connect(u, v);
+                uint32_t h = m_.connect(u, v);
                 m_.vertex_out[u] = h;
                 m_.face_edge[face_i] = h;
                 m_.he_face[h] = face_i;
@@ -564,37 +567,13 @@ NB_MODULE(_mesh, m) {
             check_same_mesh(&m_, v1);
             check_same_mesh(&m_, v2);
 
-            uint64_t key12 = edge_key(v1.i, v2.i);
-            uint64_t key21 = edge_key(v2.i, v1.i);
-            auto found = m_.edge_map.find(key12);
-            if (found != m_.edge_map.end()) {
-                if (m_.edge_map.find(key21) == m_.edge_map.end())
-                    throw std::logic_error("Inconsistent half edge state");
-                return HalfEdgeRef{mesh_object(m_), &m_, found->second};
-            }
             // It should not be possible to have one direction without the other
-            if (m_.edge_map.find(key21) != m_.edge_map.end())
+            bool has12 = m_.edge_map.count(edge_key(v1.i, v2.i));
+            bool has21 = m_.edge_map.count(edge_key(v2.i, v1.i));
+            if (has12 != has21)
                 throw std::logic_error("Inconsistent half edge state");
 
-            // Allocate the half-edge and its twin as an adjacent pair
-            uint32_t e12 = m_.n_halfedges();
-            uint32_t e21 = e12 + 1;
-            for (uint32_t origin : {v1.i, v2.i}) {
-                m_.he_origin.push_back(origin);
-                m_.he_next.push_back(INVALID);
-                m_.he_prev.push_back(INVALID);
-                m_.he_face.push_back(INVALID);
-            }
-            m_.edge_map[key12] = e12;
-            m_.edge_map[key21] = e21;
-
-            // Update the vertex out pointers
-            if (m_.vertex_out[v1.i] == INVALID)
-                m_.vertex_out[v1.i] = e12;
-            if (m_.vertex_out[v2.i] == INVALID)
-                m_.vertex_out[v2.i] = e21;
-
-            return HalfEdgeRef{mesh_object(m_), &m_, e12};
+            return HalfEdgeRef{mesh_object(m_), &m_, m_.connect(v1.i, v2.i)};
         }, "v1"_a, "v2"_a)
         .def("make_face", [](Mesh &m_, bool is_boundary) {
             auto &edges = is_boundary ? m_.boundary_edge : m_.face_edge;
