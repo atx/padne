@@ -56,6 +56,32 @@ struct Mesh {
         return uint32_t((boundary ? boundary_edge : face_edge).size());
     }
 
+    // Cotangent weight of edge `h`: sums |cot(opposite angle)| / 2 over the
+    // two adjacent triangles, skipping any side that is a boundary face.
+    // Shared by HalfEdge.cotan and the bulk laplacian loop.
+    double cotan_weight(uint32_t h) const {
+        uint32_t vi = he_origin[h];
+        uint32_t vk = he_origin[h ^ 1];
+        double xi = vertex_x[vi], yi = vertex_y[vi];
+        double xk = vertex_x[vk], yk = vertex_y[vk];
+
+        double ratio = 0.0;
+        for (uint32_t start : {h, h ^ 1}) {
+            uint32_t other = he_next[he_next[start]];
+            // other.next is `start`'s own face; skip if it is a boundary.
+            if (he_face[he_next[other]] & BOUNDARY_BIT)
+                continue;
+            uint32_t vo = he_origin[other];
+            double xo = vertex_x[vo], yo = vertex_y[vo];
+            double dix = xi - xo, diy = yi - yo;
+            double dkx = xk - xo, dky = yk - yo;
+            double dot = dix * dkx + diy * dky;
+            double cross = dix * dky - diy * dkx;
+            ratio += std::fabs(dot / cross) / 2.0;
+        }
+        return ratio;
+    }
+
     // Returns the half-edge from v1 to v2, allocating it (and its twin)
     // if it does not exist yet.
     uint32_t connect(uint32_t v1, uint32_t v2) {
@@ -299,27 +325,7 @@ NB_MODULE(_mesh, m) {
         // the two adjacent triangles, skipping any side that is a boundary
         // face. Mirrors the former pure-Python HalfEdge.cotan.
         .def("cotan", [](const HalfEdgeRef &h) {
-            Mesh *m = h.m;
-            uint32_t vi = m->he_origin[h.i];
-            uint32_t vk = m->he_origin[h.i ^ 1];
-            double xi = m->vertex_x[vi], yi = m->vertex_y[vi];
-            double xk = m->vertex_x[vk], yk = m->vertex_y[vk];
-
-            double ratio = 0.0;
-            for (uint32_t start : {h.i, h.i ^ 1}) {
-                uint32_t other = m->he_next[m->he_next[start]];
-                // other.next is `start`'s own face; skip if it is a boundary.
-                if (m->he_face[m->he_next[other]] & BOUNDARY_BIT)
-                    continue;
-                uint32_t vo = m->he_origin[other];
-                double xo = m->vertex_x[vo], yo = m->vertex_y[vo];
-                double dix = xi - xo, diy = yi - yo;
-                double dkx = xk - xo, dky = yk - yo;
-                double dot = dix * dkx + diy * dky;
-                double cross = dix * dky - diy * dkx;
-                ratio += std::fabs(dot / cross) / 2.0;
-            }
-            return ratio;
+            return h.m->cotan_weight(h.i);
         })
         .def("__eq__", [](const HalfEdgeRef &a, nb::object obj) {
             HalfEdgeRef b;
@@ -639,22 +645,7 @@ NB_MODULE(_mesh, m) {
                 for (uint32_t h = 0; h < nh; h++) {
                     uint32_t vi = m_.he_origin[h];
                     uint32_t vk = m_.he_origin[h ^ 1];
-                    double xi = m_.vertex_x[vi], yi = m_.vertex_y[vi];
-                    double xk = m_.vertex_x[vk], yk = m_.vertex_y[vk];
-                    double ratio = 0.0;
-                    for (uint32_t start : {h, h ^ 1}) {
-                        uint32_t other = m_.he_next[m_.he_next[start]];
-                        // other.next is `start`'s own face; skip if boundary
-                        if (m_.he_face[m_.he_next[other]] & BOUNDARY_BIT)
-                            continue;
-                        uint32_t vo = m_.he_origin[other];
-                        double xo = m_.vertex_x[vo], yo = m_.vertex_y[vo];
-                        double dix = xi - xo, diy = yi - yo;
-                        double dkx = xk - xo, dky = yk - yo;
-                        double dot = dix * dkx + diy * dky;
-                        double cross = dix * dky - diy * dkx;
-                        ratio += std::fabs(dot / cross) / 2.0;
-                    }
+                    double ratio = m_.cotan_weight(h);
                     if (ratio == 0.0)
                         continue;
                     rows->push_back(vi);
