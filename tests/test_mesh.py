@@ -949,6 +949,16 @@ class TestMeshBulkAccessors:
             assert pos[i, 0] == p.x
             assert pos[i, 1] == p.y
 
+    def test_vertex_iteration_order_matches_handle_index(self):
+        # NodeIndexer's arange shortcut pairs positions() rows (handle-index
+        # order) with VertexIndexer keys built via enumerate(mesh.vertices),
+        # so iteration must visit handles 0..n-1 in order.
+        mesh = self.make_mesh_with_hole()
+        for i, vertex in enumerate(mesh.vertices):
+            expected = mesh.vertices.to_object(i).p
+            assert vertex.p.x == expected.x
+            assert vertex.p.y == expected.y
+
     def test_positions_empty_mesh(self):
         assert Mesh().positions().shape == (0, 2)
 
