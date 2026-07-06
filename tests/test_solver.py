@@ -1045,6 +1045,134 @@ class TestComputePowerDensity:
         for face in test_mesh.faces:
             assert power_density[face] == pytest.approx(2.0, abs=1e-6)
 
+    def test_power_density_multi_face_distinct_values(self):
+        """
+        Nonlinear voltage on a multi-triangle mesh: every face has a distinct
+        expected power density, so any face/value misalignment fails.
+        """
+        # Strip of 3 unit squares [0,3]x[0,1], each split into two triangles.
+        points = []
+        triangles = []
+        for k in range(3):
+            base = len(points)
+            points += [
+                mesh.Point(float(k), 0.0),
+                mesh.Point(float(k + 1), 0.0),
+                mesh.Point(float(k + 1), 1.0),
+                mesh.Point(float(k), 1.0),
+            ]
+            triangles += [(base, base + 1, base + 3), (base + 1, base + 2, base + 3)]
+        test_mesh = mesh.Mesh.from_triangle_soup(points, triangles)
+
+        # V(x,y) = x^2 + x*y, sampled at the vertices. The per-face linear
+        # interpolant has an axis-aligned unit leg in each direction, so its
+        # gradient is just the difference of vertex values along those legs:
+        #   lower triangle of square k: grad = (2k+1, k)
+        #   upper triangle of square k: grad = (2k+2, k+1)
+        voltage = mesh.ZeroForm(test_mesh)
+        for vertex in test_mesh.vertices:
+            voltage[vertex] = vertex.p.x ** 2 + vertex.p.x * vertex.p.y
+
+        conductivity = 1.5
+        power_density = solver.compute_power_density(voltage, conductivity)
+
+        seen = set()
+        for face in test_mesh.faces:
+            vertices = list(face.vertices)
+            cx = sum(v.p.x for v in vertices) / 3
+            cy = sum(v.p.y for v in vertices) / 3
+            k = math.floor(cx)
+            if cy < 0.5:  # Lower triangle (centroid at cy = 1/3)
+                grad = (2 * k + 1, k)
+            else:
+                grad = (2 * k + 2, k + 1)
+            expected = conductivity * (grad[0] ** 2 + grad[1] ** 2)
+            assert power_density[face] == pytest.approx(expected, rel=1e-9)
+            seen.add(expected)
+        # Sanity check on the test itself: all expected values are distinct
+        assert len(seen) == 6
+
+    @pytest.mark.parametrize("triangle", [
+        # Translated far from the origin
+        [mesh.Point(1000.0, 2000.0), mesh.Point(1001.0, 2000.0), mesh.Point(1000.0, 2001.0)],
+        # Small scale
+        [mesh.Point(0.0, 0.0), mesh.Point(0.01, 0.0), mesh.Point(0.0, 0.01)],
+        # Skewed, no axis-aligned edges
+        [mesh.Point(1.0, 1.0), mesh.Point(4.0, 2.0), mesh.Point(2.0, 5.0)],
+        # Obtuse
+        [mesh.Point(0.0, 0.0), mesh.Point(10.0, 0.0), mesh.Point(9.0, 0.5)],
+    ], ids=["translated", "small", "skewed", "obtuse"])
+    def test_power_density_irregular_geometry(self, triangle):
+        """
+        The gradient of a linear voltage is recovered exactly on any
+        non-degenerate triangle, independent of its position, scale or shape.
+        """
+        test_mesh = mesh.Mesh.from_triangle_soup(triangle, [(0, 1, 2)])
+
+        # V(x,y) = 2x + 3y + 7 -> grad = (2, 3), |grad|^2 = 13
+        voltage = mesh.ZeroForm(test_mesh)
+        for vertex in test_mesh.vertices:
+            voltage[vertex] = 2.0 * vertex.p.x + 3.0 * vertex.p.y + 7.0
+
+        conductivity = 1.5
+        power_density = solver.compute_power_density(voltage, conductivity)
+
+        for face in test_mesh.faces:
+            assert power_density[face] == pytest.approx(conductivity * 13.0, rel=1e-9)
+
+    def test_power_density_conserves_energy(self):
+        """
+        Total dissipated power equals the power delivered by the source.
+
+        The cotan Laplacian is the P1 FEM stiffness matrix and
+        compute_power_density uses the gradient of the same P1 interpolant,
+        so sum(sigma * |grad v|^2 * area) = v^T (sigma L) v = I * (v_t - v_f)
+        holds exactly in the discrete system, not just in the mesh-refinement
+        limit.
+        """
+        rect_width = 2.0
+        rect_height = 1.0
+        rectangle = shapely.geometry.Polygon([
+            (0, 0), (rect_width, 0), (rect_width, rect_height), (0, rect_height)
+        ])
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([rectangle]),
+            name="TestLayer",
+            conductance=1.5
+        )
+
+        conn_left = problem.Connection(
+            layer=layer, point=shapely.geometry.Point(0.0, rect_height / 2))
+        conn_right = problem.Connection(
+            layer=layer, point=shapely.geometry.Point(rect_width, rect_height / 2))
+        csource = problem.CurrentSource(
+            f=conn_left.node_id,
+            t=conn_right.node_id,
+            current=2.0
+        )
+        network = problem.Network(
+            connections=[conn_left, conn_right],
+            elements=[csource]
+        )
+        prob_synthetic = problem.Problem(layers=[layer], networks=[network])
+
+        solution = solver.solve(prob_synthetic)
+
+        total_power = 0.0
+        for layer_solution in solution.layer_solutions:
+            for power_density in layer_solution.power_densities:
+                for face in power_density.mesh.faces:
+                    total_power += power_density[face] * face.area
+
+        # The source drives its current into the t terminal, so it delivers
+        # I * (v_t - v_f) into the copper.
+        v_f = find_vertex_value(solution, conn_left)
+        v_t = find_vertex_value(solution, conn_right)
+        delivered_power = csource.current * (v_t - v_f)
+
+        assert delivered_power > 0.0
+        assert total_power == pytest.approx(delivered_power, rel=1e-6)
+
     def test_power_density_integration_with_layer_solution(self):
         """Test that power densities are correctly computed and stored in LayerSolution."""
         # Create a simple synthetic problem with a voltage source
