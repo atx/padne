@@ -183,6 +183,15 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
 
 @dataclass
 class VertexIndexer:
+    """
+    Maps between (mesh index, vertex index) pairs and global system indices.
+
+    API contract: global indices are assigned contiguously per mesh, in mesh
+    order and in local vertex order. That is, mesh i occupies the half-open
+    global index range [offset_i, offset_i + len(meshes[i].vertices)) with
+    (i, v) -> offset_i + v. process_mesh_laplace_operators relies on this
+    to translate per-mesh COO blocks by a single offset.
+    """
     global_index_to_vertex_index: list[tuple[int, int]] = field(default_factory=list)
     mesh_vertex_index_to_global_index: dict[tuple[int, int], int] = field(default_factory=dict)
 

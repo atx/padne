@@ -962,6 +962,36 @@ class TestVertexIndexer:
             else:
                 assert 0 <= vertex_idx < len(mesh_2.vertices)
 
+    def test_global_indices_are_contiguous_per_mesh(self):
+        """
+        Global indices are assigned contiguously per mesh, in mesh order and
+        local vertex order: (mesh_i, v) -> offset_i + v. This is part of the
+        VertexIndexer API contract; process_mesh_laplace_operators translates
+        per-mesh COO blocks by a single offset based on it.
+        """
+        meshes = [
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(2.0, 0.0), mesh.Point(3.0, 0.0),
+                 mesh.Point(3.0, 1.0), mesh.Point(2.0, 1.0)],
+                [(0, 1, 2), (0, 2, 3)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(5.0, 0.0), mesh.Point(6.0, 0.0), mesh.Point(5.0, 1.0)],
+                [(0, 1, 2)]),
+        ]
+
+        vindex = solver.VertexIndexer.create(meshes)
+
+        offset = 0
+        for mesh_i, msh in enumerate(meshes):
+            for v in range(len(msh.vertices)):
+                assert vindex.mesh_vertex_index_to_global_index[(mesh_i, v)] == offset + v
+                assert vindex.global_index_to_vertex_index[offset + v] == (mesh_i, v)
+            offset += len(msh.vertices)
+        assert len(vindex.global_index_to_vertex_index) == offset
+
 
 class TestComputePowerDensity:
 
