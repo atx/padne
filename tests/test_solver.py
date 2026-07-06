@@ -993,6 +993,191 @@ class TestVertexIndexer:
         assert len(vindex.global_index_to_vertex_index) == offset
 
 
+class TestNodeIndexer:
+    """
+    Direct tests for NodeIndexer.create. These pin the connection-to-vertex
+    mapping semantics and the index-space layout contract that allocate_system
+    and stamp_network_into_system depend on.
+    """
+
+    @staticmethod
+    def make_layer(name):
+        return problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 10)]),
+            name=name,
+            conductance=1.0,
+        )
+
+    @staticmethod
+    def global_index_at(vindex, meshes, mesh_i, x, y):
+        """Global index of the vertex of meshes[mesh_i] located exactly at (x, y)."""
+        for vertex_i, vertex in enumerate(meshes[mesh_i].vertices):
+            if vertex.p.distance(mesh.Point(x, y)) < 1e-12:
+                return vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
+        raise AssertionError(f"No vertex at ({x}, {y}) in mesh {mesh_i}")
+
+    def make_fixture(self):
+        """
+        Two layers with meshes plus one empty layer (exercises the empty-layer
+        skip in _construct_kdtrees). Layer 0 holds two meshes, layer 1 holds a
+        mesh whose vertices share XY coordinates with mesh 0 on layer 0.
+        """
+        meshes = [
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(2.0, 0.0), mesh.Point(3.0, 0.0),
+                 mesh.Point(3.0, 1.0), mesh.Point(2.0, 1.0)],
+                [(0, 1, 2), (0, 2, 3)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+        ]
+        layers = [self.make_layer("F.Cu"), self.make_layer("B.Cu"),
+                  self.make_layer("Empty.Cu")]
+        mesh_index_to_layer_index = [0, 0, 1]
+        prob = problem.Problem(layers=layers, networks=[])
+        vindex = solver.VertexIndexer.create(meshes)
+        return prob, meshes, mesh_index_to_layer_index, vindex
+
+    def test_connections_map_to_nearest_vertex_on_correct_layer(self):
+        prob, meshes, m2l, vindex = self.make_fixture()
+
+        n_a, n_b, n_c = problem.NodeID(), problem.NodeID(), problem.NodeID()
+        connections = [
+            # Exactly on a vertex of mesh 0 (layer 0)
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=n_a),
+            # Near (but not on) a vertex of mesh 1; must snap to (3, 0) and
+            # must pick mesh 1 even though mesh 0 is on the same layer
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(2.9, 0.1), node_id=n_b),
+            # Same XY as the first connection, but on layer 1: must resolve
+            # to the mesh 2 vertex, not the mesh 0 one
+            problem.Connection(layer=prob.layers[1],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=n_c),
+        ]
+        network = problem.Network(
+            connections=connections,
+            elements=[problem.Resistor(a=n_a, b=n_b, resistance=1.0),
+                      problem.Resistor(a=n_b, b=n_c, resistance=1.0)],
+        )
+
+        indexer = solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+        assert indexer.node_to_global_index[n_a] == \
+            self.global_index_at(vindex, meshes, 0, 0.0, 0.0)
+        assert indexer.node_to_global_index[n_b] == \
+            self.global_index_at(vindex, meshes, 1, 3.0, 0.0)
+        assert indexer.node_to_global_index[n_c] == \
+            self.global_index_at(vindex, meshes, 2, 0.0, 0.0)
+        assert indexer.internal_node_count == 0
+
+    def test_index_layout_contract(self):
+        """
+        Internal nodes get contiguous indices starting right after the mesh
+        vertices, extra source variables follow after those, and
+        connection-bound nodes are never re-allocated as internal.
+        """
+        prob, meshes, m2l, vindex = self.make_fixture()
+
+        n_a, n_b = problem.NodeID(), problem.NodeID()
+        n_int1, n_int2 = problem.NodeID(), problem.NodeID()
+        connections = [
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=n_a),
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(3.0, 0.0), node_id=n_b),
+        ]
+        vsrc1 = problem.VoltageSource(p=n_int1, n=n_int2, voltage=1.0)
+        vsrc2 = problem.VoltageSource(p=n_int2, n=n_b, voltage=2.0)
+        network = problem.Network(
+            connections=connections,
+            elements=[problem.Resistor(a=n_a, b=n_int1, resistance=1.0),
+                      vsrc1, vsrc2],
+        )
+
+        indexer = solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+        vertex_count = len(vindex.global_index_to_vertex_index)
+        assert indexer.internal_node_count == 2
+
+        # Connection-bound nodes point into the vertex range, even though
+        # they also appear in network.nodes
+        assert indexer.node_to_global_index[n_a] < vertex_count
+        assert indexer.node_to_global_index[n_b] < vertex_count
+
+        # Internal nodes occupy the block right after the vertices
+        internal_indices = {indexer.node_to_global_index[n_int1],
+                            indexer.node_to_global_index[n_int2]}
+        assert internal_indices == {vertex_count, vertex_count + 1}
+
+        # Extra source variables occupy the block after the internal nodes
+        extra_indices = {indexer.extra_source_to_global_index[vsrc1],
+                         indexer.extra_source_to_global_index[vsrc2]}
+        assert extra_indices == {vertex_count + 2, vertex_count + 3}
+
+        # The resistor allocates no extra variable
+        assert len(indexer.extra_source_to_global_index) == 2
+
+    def test_duplicate_connection_same_vertex_is_allowed(self):
+        node = problem.NodeID()
+
+        def conns(prob):
+            return [
+                problem.Connection(layer=prob.layers[0],
+                                   point=shapely.geometry.Point(0.0, 0.0), node_id=node),
+                problem.Connection(layer=prob.layers[0],
+                                   point=shapely.geometry.Point(0.0, 0.0), node_id=node),
+            ]
+
+        prob, meshes, m2l, vindex = self.make_fixture()
+        network = problem.Network(connections=conns(prob), elements=[])
+        indexer = solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+        assert indexer.node_to_global_index[node] == \
+            self.global_index_at(vindex, meshes, 0, 0.0, 0.0)
+
+    def test_duplicate_connection_conflicting_vertices_raises(self):
+        prob, meshes, m2l, vindex = self.make_fixture()
+
+        node = problem.NodeID()
+        connections = [
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=node),
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(3.0, 0.0), node_id=node),
+        ]
+        network = problem.Network(connections=connections, elements=[])
+
+        with pytest.raises(ValueError):
+            solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+    def test_multiple_extra_variables_not_implemented(self):
+        @dataclass(frozen=True)
+        class TwoExtraElement(problem.BaseLumped):
+            a: problem.NodeID
+            b: problem.NodeID
+
+            @property
+            def terminals(self):
+                return [self.a, self.b]
+
+            @property
+            def extra_variable_count(self):
+                return 2
+
+        prob, meshes, m2l, vindex = self.make_fixture()
+        network = problem.Network(
+            connections=[],
+            elements=[TwoExtraElement(a=problem.NodeID(), b=problem.NodeID())],
+        )
+
+        with pytest.raises(NotImplementedError):
+            solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+
 class TestComputePowerDensity:
 
     def test_power_density_constant_voltage(self):
