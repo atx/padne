@@ -34,6 +34,8 @@ jobs:
 
       - name: Setup Padne dependencies
         uses: ./.github/actions/setup-padne
+        with:
+          kicad-version: '10.0'
 
       - name: Install PyInstaller
         run: |
@@ -49,3 +51,35 @@ jobs:
           name: ${{ steps.set_artifact_name.outputs.name }}
           path: dist/padne
           retention-days: ${{ inputs.retention_days }}
+
+  test:
+    name: "Test Binary"
+    needs: build
+    runs-on: ubuntu-24.04
+    # Pristine container without KiCad, Qt or Python installed, to verify
+    # that the binary is actually self-contained
+    container:
+      image: ubuntu:24.04
+    steps:
+      # The libraries are the display-stack runtime deps that PyInstaller
+      # deliberately does not bundle; any desktop system has them.
+      - name: Install node and minimal runtime libraries
+        run: |
+          apt-get update
+          apt-get install -y libxcb1 libgtk-3-0t64 libgl1 libopengl0 libegl1
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+
+      - name: Run padne solve on a test project
+        run: |
+          chmod +x ./padne
+          ./padne --version
+          ./padne solve tests/kicad/ldo/ldo.kicad_pro solution.pickle
+          ./padne paraview solution.pickle paraview_out
+          ls -l paraview_out
