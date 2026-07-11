@@ -243,6 +243,70 @@ class ExpectedVoltage:
              f"(Vp={voltage_p:.3f}V, Vn={voltage_n:.3f}V)")
 
 
+class TestLocateConnectionPoints:
+
+    def _make_problem(self) -> problem.Problem:
+        square = shapely.geometry.box(0, 0, 10, 10)
+        # 20x20 square with a 10x10 hole in the middle
+        holed = shapely.geometry.Polygon(
+            [(20, 0), (40, 0), (40, 20), (20, 20)],
+            [[(25, 5), (35, 5), (35, 15), (25, 15)]],
+        )
+        top = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([square, holed]),
+            name="top", conductance=1.0)
+        bottom = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([square]),
+            name="bottom", conductance=1.0)
+
+        self.conn_interior = problem.Connection(
+            layer=top, point=shapely.geometry.Point(5, 5))
+        self.conn_boundary = problem.Connection(
+            layer=top, point=shapely.geometry.Point(0, 5))
+        self.conn_in_hole = problem.Connection(
+            layer=top, point=shapely.geometry.Point(30, 10))
+        self.conn_on_holed = problem.Connection(
+            layer=top, point=shapely.geometry.Point(22, 10))
+        self.conn_off_copper = problem.Connection(
+            layer=top, point=shapely.geometry.Point(100, 100))
+        self.conn_bottom = problem.Connection(
+            layer=bottom, point=shapely.geometry.Point(5, 5))
+
+        networks = [
+            problem.Network(
+                connections=[self.conn_interior, self.conn_boundary,
+                             self.conn_in_hole],
+                elements=[],
+            ),
+            problem.Network(
+                connections=[self.conn_on_holed, self.conn_off_copper,
+                             self.conn_bottom],
+                elements=[],
+            ),
+        ]
+        return problem.Problem(layers=[top, bottom], networks=networks)
+
+    def test_intersects_includes_boundary(self):
+        prob = self._make_problem()
+        locations = solver.locate_connection_points(prob)
+
+        assert locations[self.conn_interior] == [(0, 0)]
+        assert locations[self.conn_boundary] == [(0, 0)]
+        assert locations[self.conn_on_holed] == [(0, 1)]
+        assert locations[self.conn_bottom] == [(1, 0)]
+        assert self.conn_in_hole not in locations
+        assert self.conn_off_copper not in locations
+
+    def test_within_excludes_boundary(self):
+        prob = self._make_problem()
+        locations = solver.locate_connection_points(prob, interior_only=True)
+
+        assert locations[self.conn_interior] == [(0, 0)]
+        assert self.conn_boundary not in locations
+        assert locations[self.conn_on_holed] == [(0, 1)]
+        assert self.conn_in_hole not in locations
+
+
 class TestConnectivityGraph:
 
     def test_simple_geometry(self, kicad_test_projects):
@@ -250,8 +314,7 @@ class TestConnectivityGraph:
         project = kicad_test_projects["simple_geometry"]
         prob = kicad.load_kicad_project(project.pro_path)
 
-        strtrees = solver.construct_strtrees_from_layers(prob.layers)
-        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
         assert len(cg.nodes) == 2
         connected = cg.compute_connected_nodes()
         assert len(connected) == 2
@@ -263,8 +326,7 @@ class TestConnectivityGraph:
         project = kicad_test_projects["different_layer_and_net_same_xy"]
         prob = kicad.load_kicad_project(project.pro_path)
 
-        strtrees = solver.construct_strtrees_from_layers(prob.layers)
-        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
         assert len(cg.nodes) == 3
         connected = cg.compute_connected_nodes()
         assert len(connected) == 2
@@ -273,8 +335,7 @@ class TestConnectivityGraph:
         project = kicad_test_projects["disconnected_components"]
         prob = kicad.load_kicad_project(project.pro_path)
 
-        strtrees = solver.construct_strtrees_from_layers(prob.layers)
-        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
         assert len(cg.nodes) == 11
         connected = cg.compute_connected_nodes()
         assert len(connected) == 5
@@ -298,13 +359,12 @@ class TestSolverMeshLayer:
         mesher = mesh.Mesher()
 
         # Create connectivity graph and find connected layer-mesh pairs
-        strtrees = solver.construct_strtrees_from_layers(prob.layers)
-        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
 
         # Call the function under test with the required argument
         meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
-            prob, mesher, connected_layer_mesh_pairs, strtrees)
+            prob, mesher, connected_layer_mesh_pairs)
 
         # Check that we got the expected result
         assert isinstance(meshes, list), "generate_meshes_for_problem should return a list of meshes"
@@ -342,24 +402,12 @@ class TestSolverMeshLayer:
         mesher = mesh.Mesher()
 
         # Create connectivity graph and find connected layer-mesh pairs
-        strtrees = solver.construct_strtrees_from_layers(prob.layers)
-        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
         connected_layer_mesh_pairs = solver.find_connected_layer_geom_indices(cg)
-
-        # Test that collect_seed_points extracts the right points
-        for layer in prob.layers:
-            seed_points = solver.collect_seed_points(prob, layer)
-
-            # Simple_geometry has 2 lumped elements with 4 terminals total
-            assert len(seed_points) == 4, f"Expected 4 seed points for layer {layer.name}, got {len(seed_points)}"
-
-            # Each point should be a mesh.Point
-            for point in seed_points:
-                assert isinstance(point, mesh.Point), "Seed point should be a mesh.Point instance"
 
         # Call generate_meshes_for_problem with the required argument
         meshes, mesh_index_to_layer_index = solver.generate_meshes_for_problem(
-            prob, mesher, connected_layer_mesh_pairs, strtrees)
+            prob, mesher, connected_layer_mesh_pairs)
 
         # For each connection point in the problem, verify there's a mesh vertex very close to its location
         for network in prob.networks:
@@ -395,8 +443,7 @@ class TestSolverMeshLayer:
         project = kicad_test_projects["simple_geometry"]
         prob = kicad.load_kicad_project(project.pro_path)
         mesher = mesh.Mesher()
-        strtrees = solver.construct_strtrees_from_layers(prob.layers)
-        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        cg = solver.ConnectivityGraph.create_from_problem(prob)
         connected = solver.find_connected_layer_geom_indices(cg)
 
         original_jobs = parallel.config().jobs
@@ -407,7 +454,7 @@ class TestSolverMeshLayer:
             parallel.configure(jobs=jobs)
             try:
                 return solver.generate_meshes_for_problem(
-                    prob, mesher, connected, strtrees)
+                    prob, mesher, connected)
             finally:
                 parallel.shutdown()
 
