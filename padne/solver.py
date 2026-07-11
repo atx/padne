@@ -521,10 +521,35 @@ class NodeIndexer:
         )
 
 
+@dataclass
+class TripletList:
+    """
+    COO triplet accumulator for sparse system assembly.
+
+    Duplicate (row, col) entries sum on conversion, which matches the
+    element-stamping semantics: every stamp is an addition into the matrix.
+    """
+    rows: list[int] = field(default_factory=list)
+    cols: list[int] = field(default_factory=list)
+    values: list[float] = field(default_factory=list)
+
+    def add(self, row: int, col: int, value: float) -> None:
+        self.rows.append(row)
+        self.cols.append(col)
+        self.values.append(value)
+
+    def to_coo(self, N: int) -> scipy.sparse.coo_matrix:
+        return scipy.sparse.coo_matrix(
+            (self.values, (self.rows, self.cols)), shape=(N, N), dtype=DTYPE)
+
+
 def stamp_network_into_system(network: problem.Network,
                               node_indexer: NodeIndexer,
-                              L: scipy.sparse.spmatrix,
+                              triplets: TripletList,
                               r: np.ndarray) -> None:
+    # All stamps accumulate. The voltage-source and regulator entries used to
+    # be plain assignments, but they only touch extra-variable rows/columns,
+    # which no other stamp writes, so accumulation is equivalent.
     for element in network.elements:
         match element:
             case problem.Resistor(a=a, b=b, resistance=resistance):
@@ -532,11 +557,11 @@ def stamp_network_into_system(network: problem.Network,
                 i_b = node_indexer.node_to_global_index[b]
 
                 # (V_b - V_a) / R term
-                L[i_a, i_a] -= 1 / resistance
-                L[i_a, i_b] += 1 / resistance
+                triplets.add(i_a, i_a, -1 / resistance)
+                triplets.add(i_a, i_b, 1 / resistance)
                 # (V_a - V_b) / R term
-                L[i_b, i_b] -= 1 / resistance
-                L[i_b, i_a] += 1 / resistance
+                triplets.add(i_b, i_b, -1 / resistance)
+                triplets.add(i_b, i_a, 1 / resistance)
             case problem.CurrentSource(f=f, t=t, current=current):
                 i_f = node_indexer.node_to_global_index[f]
                 i_t = node_indexer.node_to_global_index[t]
@@ -555,15 +580,15 @@ def stamp_network_into_system(network: problem.Network,
                 # and the _right hand side variable is the voltage_.
                 # So, effectively, we get these equations:
                 # V_p - V_n = voltage
-                L[i_v, i_p] = 1
-                L[i_v, i_n] = -1
+                triplets.add(i_v, i_p, 1)
+                triplets.add(i_v, i_n, -1)
                 r[i_v] = voltage
                 # add and subtract the I_v current from the equations
                 # for the i_p and i_n nodes. Imagine we placed it to the right hand
                 # side where source currents live, but since it is an unknown,
                 # it has to live in the system matrix
-                L[i_p, i_v] = 1
-                L[i_n, i_v] = -1
+                triplets.add(i_p, i_v, 1)
+                triplets.add(i_n, i_v, -1)
             case problem.VoltageRegulator(v_p=v_p, v_n=v_n,
                                           s_f=s_f, s_t=s_t,
                                           voltage=voltage,
@@ -578,10 +603,10 @@ def stamp_network_into_system(network: problem.Network,
 
                 # First, we setup the voltage source part. This is identical
                 # to the VoltageSource case above.
-                L[i_v, i_v_p] = 1
-                L[i_v, i_v_n] = -1
-                L[i_v_p, i_v] = 1
-                L[i_v_n, i_v] = -1
+                triplets.add(i_v, i_v_p, 1)
+                triplets.add(i_v, i_v_n, -1)
+                triplets.add(i_v_p, i_v, 1)
+                triplets.add(i_v_n, i_v, -1)
                 r[i_v] += voltage
 
                 # Now, we need to take bearings. The variable at the index i_v
@@ -589,15 +614,16 @@ def stamp_network_into_system(network: problem.Network,
                 # What we need to do is cause that current to be mirrored
                 # at the input of the regulator
                 # (i_s_f, i_s_t) pair.
-                L[i_s_f, i_v] += gain
-                L[i_s_t, i_v] += -gain
+                triplets.add(i_s_f, i_v, gain)
+                triplets.add(i_s_t, i_v, -gain)
 
             case _:
                 raise NotImplementedError(f"Unsupported node type {element}")
 
 
 def setup_ground_node(i_gnd: int,
-                      L: scipy.sparse.spmatrix,
+                      N: int,
+                      triplets: TripletList,
                       r: np.ndarray) -> None:
     # This effectively wires a voltage source of 0V from i_gnd to a
     # virtual (not in the matrix) "ground" node.
@@ -610,8 +636,8 @@ def setup_ground_node(i_gnd: int,
     # 5. So, we drop both the row and column for the ground node.
     # It's worth noting that there is still a "ground current" variable
     # --- this is the variable at -1 index in the system.
-    L[-1, i_gnd] = 1
-    L[i_gnd, -1] = 1
+    triplets.add(N - 1, i_gnd, 1)
+    triplets.add(i_gnd, N - 1, 1)
     r[-1] = 0  # Ground node voltage is 0
 
 
@@ -784,25 +810,15 @@ def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.T
     return power_density
 
 
-def allocate_system(vindex: VertexIndexer,
-                    node_indexer: NodeIndexer
-                    ) -> tuple[scipy.sparse.dok_matrix, np.ndarray]:
+def system_size(vindex: VertexIndexer, node_indexer: NodeIndexer) -> int:
     """
-    Allocate the global system matrix L and right-hand side vector r.
-
-    The size accounts for mesh vertices, internal network nodes, extra
+    Size of the global system: mesh vertices, internal network nodes, extra
     variables for voltage sources/regulators, plus one ground-node row.
     """
-    N = len(vindex.global_index_to_vertex_index) + \
+    return len(vindex.global_index_to_vertex_index) + \
         node_indexer.internal_node_count + \
         len(node_indexer.extra_source_to_global_index) + \
         1  # +1 for the ground node
-    log.info(f"System matrix size: {N}x{N} variables")
-    # dok_matrix supports the same element-wise stamping as lil_matrix but
-    # is cheaper to convert and add to the COO-assembled Laplacian part.
-    L = scipy.sparse.dok_matrix((N, N), dtype=DTYPE)
-    r = np.zeros(N, dtype=DTYPE)
-    return L, r
 
 
 def _pardiso_thread_count() -> int:
@@ -876,27 +892,19 @@ def assemble_system(prob: problem.Problem,
         prob.layers[mesh_index_to_layer_index[i]].conductance
         for i in range(len(meshes))
     ]
-    L_net, r = allocate_system(vindex, node_indexer)
-    # The mesh Laplacians are assembled separately in COO form; the sparse
-    # stamping structure only receives the (comparatively few) network and
-    # ground-node entries.
-    L_lap = process_mesh_laplace_operators(
-        meshes, mesh_conductances, vindex, L_net.shape[0])
-    # Now, we process the Networks, directly inserting them in-place into the
-    # system matrix. Esthetically, it would be nicer to construct them first
-    # and then insert them, but this requires a bit of extra work with regards
-    # to handling nodes that have Connections and nodes that do not.
+    N = system_size(vindex, node_indexer)
+    log.info(f"System matrix size: {N}x{N} variables")
+    r = np.zeros(N, dtype=DTYPE)
+    # The mesh Laplacians are assembled separately in COO form; the network
+    # and ground-node stamps accumulate in a (comparatively small) triplet
+    # list of their own.
+    L_lap = process_mesh_laplace_operators(meshes, mesh_conductances, vindex, N)
+    triplets = TripletList()
     for network in filtered_networks:
-        stamp_network_into_system(network, node_indexer, L_net, r)
+        stamp_network_into_system(network, node_indexer, triplets, r)
     # TODO: Implement a better way to pick the ground node.
-    setup_ground_node(find_best_ground_node_index(prob, node_indexer), L_net, r)
-    # Summing the two parts is safe even though the network stamping uses
-    # plain assignment in places: those assignments only touch extra-variable
-    # and ground rows/columns, which never carry Laplacian entries. Network
-    # entries that can land inside the Laplacian block (Resistors at
-    # Connection nodes) are stamped with +=, and addition commutes with the
-    # final sum.
-    L = L_lap.tocsc() + L_net.tocsc()
+    setup_ground_node(find_best_ground_node_index(prob, node_indexer), N, triplets, r)
+    L = L_lap.tocsc() + triplets.to_coo(N).tocsc()
     return L, r
 
 

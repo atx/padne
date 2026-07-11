@@ -20,7 +20,7 @@ from test_mesh import assert_meshes_equivalent
 class TestNetworkSolver:
 
     def create_test_system(self, network: problem.Network
-                           ) -> tuple[solver.NodeIndexer, scipy.sparse.lil_matrix, np.ndarray]:
+                           ) -> tuple[solver.NodeIndexer, int, np.ndarray]:
         # For reasons unknown, network.nodes is not a list of NodeIDs
         # but instead a dict mapping NodeIDs to numbers from 0 to N-1.
         # So we just use that here
@@ -40,21 +40,21 @@ class TestNetworkSolver:
         )
 
         N = len(node_indexer.node_to_global_index) + len(node_indexer.extra_source_to_global_index)
-        L = scipy.sparse.lil_matrix((N, N), dtype=solver.DTYPE)
         r = np.zeros(N, dtype=solver.DTYPE)
-        return node_indexer, L, r
+        return node_indexer, N, r
 
     def solve_network(self, network):
         """Solves the given Network and returns a Solution."""
-        node_indexer, L, r = self.create_test_system(network)
-        solver.stamp_network_into_system(network, node_indexer, L, r)
+        node_indexer, N, r = self.create_test_system(network)
+        triplets = solver.TripletList()
+        solver.stamp_network_into_system(network, node_indexer, triplets, r)
         # Drop the first row and column, which correspond to the ground node
         # TODO: It is unclear how is it possible that this works fine
         # in the main solver code, but crashes here.
         # However, the main solver code should also force a ground node
         # to improve numerical stability, so this is a mystery likely not worth
         # solving...
-        L = L.todense()[1:, 1:]
+        L = triplets.to_coo(N).todense()[1:, 1:]
         v = np.linalg.solve(L, r[1:])  # Solve the system
         v = np.concatenate(([0.0], v))  # Add ground node voltage back
         node_to_value = {
