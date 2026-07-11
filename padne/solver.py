@@ -96,22 +96,43 @@ class Solution:
     solver_info: SolverInfo
 
 
-def construct_strtrees_from_layers(layers: list[problem.Layer]
-                                   ) -> list[shapely.strtree.STRtree]:
+def locate_connection_points(prob: problem.Problem,
+                             interior_only: bool = False
+                             ) -> dict[problem.Connection, list[tuple[int, int]]]:
     """
-    Construct STRtrees for each layer in the problem.
+    Resolve which layer geometries each network connection point lies on.
 
-    Args:
-        layers: List of layers to construct STRtrees for
+    Groups the connection points of all networks by layer and runs a single
+    vectorized STRtree query per layer, which is far cheaper than one query
+    plus one predicate evaluation per connection. The tree is built over the
+    points and queried with the layer geometries: shapely prepares the query
+    geometries during predicate evaluation, which makes the point-in-polygon
+    tests logarithmic in polygon size instead of linear.
 
-    Returns:
-        List of STRtrees, one for each layer
+    With interior_only, points exactly on a geometry boundary do not match
+    ("contains"); otherwise they do ("intersects").
+
+    Returns a map from each Connection to the (layer_i, geom_i) pairs it
+    matched; connections that matched nothing are absent.
     """
-    strtrees = []
-    for layer in layers:
-        strtree = shapely.strtree.STRtree(layer.geoms)
-        strtrees.append(strtree)
-    return strtrees
+    predicate = "contains" if interior_only else "intersects"
+    # Layer __eq__ is identity, so an id-keyed map matches list.index()
+    layer_index_by_id = {id(layer): i for i, layer in enumerate(prob.layers)}
+    conns_by_layer = collections.defaultdict(list)
+    for network in prob.networks:
+        for conn in network.connections:
+            conns_by_layer[layer_index_by_id[id(conn.layer)]].append(conn)
+
+    locations: dict[problem.Connection, list[tuple[int, int]]] = {}
+    for layer_i, conns in conns_by_layer.items():
+        conn_tree = shapely.strtree.STRtree([conn.point for conn in conns])
+        geom_idxs, conn_idxs = conn_tree.query(
+            np.array(prob.layers[layer_i].geoms, dtype=object),
+            predicate=predicate,
+        )
+        for conn_i, geom_i in zip(conn_idxs.tolist(), geom_idxs.tolist()):
+            locations.setdefault(conns[conn_i], []).append((layer_i, geom_i))
+    return locations
 
 
 @dataclass
@@ -128,8 +149,7 @@ class ConnectivityGraph:
 
     @classmethod
     def create_from_problem(cls,
-                            problem: problem.Problem,
-                            strtrees: list[shapely.strtree.STRtree]) -> "ConnectivityGraph":
+                            problem: problem.Problem) -> "ConnectivityGraph":
         # First, we construct Node objects for ever layer geometry in the layers
         # that is, a list nodes_by_layers[layer_i][geom_i] gives us the
         # Node that coresponds to the layer_i-th layers geom_i-th geometry
@@ -144,25 +164,16 @@ class ConnectivityGraph:
         # And finally, we walk through each of the networks, figure out
         # which Nodes are connected to each of the Connection and then
         # consider those Nodes connected to each other.
+        conn_locations = locate_connection_points(problem)
         for network in problem.networks:
-            nodes_in_this_network = []
-            for conn in network.connections:
-                # Find the layer index for this connection
-                layer_i = problem.layers.index(conn.layer)
-                kdtree = strtrees[layer_i]
-
-                # Find the closest vertex to this connection
-                candidates = kdtree.query(conn.point)
-
-                for geom_i in candidates:
-                    # Check if this connection is already in the index
-                    if not conn.layer.geoms[geom_i].intersects(conn.point):
-                        continue
-                    intersecting_node = nodes_by_layers[layer_i][geom_i]
-                    nodes_in_this_network.append(intersecting_node)
-
-                    if network.has_source:
-                        intersecting_node.is_root = True
+            nodes_in_this_network = [
+                nodes_by_layers[layer_i][geom_i]
+                for conn in network.connections
+                for layer_i, geom_i in conn_locations.get(conn, [])
+            ]
+            if network.has_source:
+                for node in nodes_in_this_network:
+                    node.is_root = True
             # Wire the nodes together
             for node_a, node_b in itertools.combinations(nodes_in_this_network, 2):
                 node_a.neighbors.add(node_b)
@@ -191,26 +202,6 @@ class ConnectivityGraph:
                     open_set.add(neighbor)
 
         return list(closed_set)
-
-
-def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[mesh.Point]:
-    """
-    Collect all seed points (component pads) that are on this layer.
-
-    Args:
-        problem: The entire problem containing all lumped elements
-        layer: The specific layer to collect seed points for
-
-    Returns:
-        List of Points to be used as mesh seed points
-    """
-    seed_points = []
-    for network in problem.networks:
-        for conn in network.connections:
-            # Check if this connection is on our layer
-            if conn.layer == layer:
-                seed_points.append(mesh.Point(conn.point.x, conn.point.y))
-    return seed_points
 
 
 @stage_timer
@@ -274,77 +265,61 @@ def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
 
 @stage_timer
 def compute_connectivity(prob: problem.Problem
-                         ) -> tuple[list[shapely.strtree.STRtree],
-                                    ConnectivityGraph,
-                                    set[tuple[int, int]]]:
+                         ) -> tuple[ConnectivityGraph, set[tuple[int, int]]]:
     """
     Run the geometric-connectivity pre-pass.
 
-    Builds an STRtree per layer, derives the connectivity graph that links
-    layer geometries via lumped-element networks, and flattens the connected
-    set into the (layer_i, geom_i) pairs reachable from a driven network.
+    Derives the connectivity graph that links layer geometries via
+    lumped-element networks, and flattens the connected set into the
+    (layer_i, geom_i) pairs reachable from a driven network.
 
-    Returns (strtrees, connectivity_graph, connected_layer_mesh_pairs).
+    Returns (connectivity_graph, connected_layer_mesh_pairs).
     """
-    strtrees = construct_strtrees_from_layers(prob.layers)
-    cg = ConnectivityGraph.create_from_problem(prob, strtrees)
-    return strtrees, cg, find_connected_layer_geom_indices(cg)
+    cg = ConnectivityGraph.create_from_problem(prob)
+    return cg, find_connected_layer_geom_indices(cg)
 
 
 @stage_timer
 def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
-                                connected_layer_mesh_pairs: set[tuple[int, int]],
-                                strtrees: list[shapely.strtree.STRtree]
+                                connected_layer_mesh_pairs: set[tuple[int, int]]
                                 ) -> tuple[list[mesh.Mesh], list[int]]:
     # Collect the independent per-region meshing jobs first, then mesh them
     # concurrently. poly_to_mesh's heavy work -- the distance-map
     # rasterization, the Delaunay refinement and the half-edge build --
     # releases the GIL (see _cgal and _mesh), so threads parallelize it.
-    mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point]]] = []
-    mesh_index_to_layer_index: list[int] = []
-
-    for layer_i, layer in enumerate(prob.layers):
-        seed_points_in_layer = collect_seed_points(prob, layer)
-
-        geom_to_seed_points = collections.defaultdict(list)
-
-        for seed_point in seed_points_in_layer:
-            # Shapely point only used for the spatial queries below; the mesher
-            # downstream expects mesh.Point seeds.
-            shapely_point = shapely.geometry.Point(seed_point.x, seed_point.y)
-            candidates = strtrees[layer_i].query(shapely_point)
-
-            for geom_i in candidates:
+    #
+    # Beware! We are only including seed points that are _on the interior_
+    # of the geometry ("contains" excludes boundaries). This is because otherwise
+    # the mesher may attempt to fill in holes due to a seed point being on the
+    # boundary. The rest of the stack _must_ ensure that any points that it
+    # needs to use as Connection points that lie on the boundary should already
+    # be included in the geometry.
+    # TODO: The proper way to solve this is for the mesher to include
+    # boundary points in the rings if it detects the case above,
+    # but this is not yet implemented.
+    # TODO: Add a warning here if we detect the case above
+    conn_locations = locate_connection_points(prob, interior_only=True)
+    geom_to_seed_points = collections.defaultdict(list)
+    for network in prob.networks:
+        for conn in network.connections:
+            for layer_i, geom_i in conn_locations.get(conn, []):
                 if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                     # This geometry is not even connected to any driven
                     # network, so we can just skip it.
                     continue
-                if not layer.geoms[geom_i].contains(shapely_point):
-                    continue
+                # The mesher downstream expects mesh.Point seeds.
+                geom_to_seed_points[(layer_i, geom_i)].append(
+                    mesh.Point(conn.point.x, conn.point.y))
 
-                # This seed point is inside the geometry, so we stick it in
-                geom_to_seed_points[geom_i].append(seed_point)
-
+    mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point]]] = []
+    mesh_index_to_layer_index: list[int] = []
+    for layer_i, layer in enumerate(prob.layers):
         for geom_i, geom in enumerate(layer.geoms):
             if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                 # This layer is not connected to any lumped elements, skip it
                 continue
-            # This layer is connected to at least one lumped element, so we need to mesh it
-
-            # Beware! We are only including seed points that are _on the interior_
-            # of the geometry. This is because otherwise the mesher
-            # may attempt to fill in holes due to a seed point being on the boundary.
-            # The rest of the stack _must_ ensure that any points that it needs
-            # to use as Connection points that lie on the boundary should already
-            # be included in the geometry.
-            # TODO: The proper way to solve this is for the mesher to include
-            # boundary points in the rings if it detects the case above,
-            # but this is not yet implemented.
-            # TODO: Add a warning here if we detect the case above
-            seed_points_in_geom = geom_to_seed_points[geom_i]
-
-            mesh_jobs.append((layer.geoms[geom_i], seed_points_in_geom))
+            mesh_jobs.append((geom, geom_to_seed_points[(layer_i, geom_i)]))
             mesh_index_to_layer_index.append(layer_i)
 
     # Mesh the regions concurrently. thread_map runs serially in-thread when
@@ -711,44 +686,26 @@ def produce_layer_solutions(layers: list[problem.Layer],
 
 
 def network_has_a_dead_terminal(network: problem.Network,
-                                prob: problem.Problem,
-                                connected_layer_mesh_pairs: set[tuple[int, int]],
-                                strtrees: list[shapely.strtree.STRtree]
+                                conn_locations: dict[problem.Connection,
+                                                     list[tuple[int, int]]],
+                                connected_layer_mesh_pairs: set[tuple[int, int]]
                                 ) -> bool:
     """
     Check if a network has any connection on a dead (disconnected) copper region.
+
+    In practice, it should not happen that a network has some dead terminals
+    and some live terminals (that would mean ConnectivityGraph is broken), so
+    finding the first dead terminal is enough to eliminate the whole network.
     """
-    for conn in network.connections:
-        layer_i = prob.layers.index(conn.layer)
-        strtree = strtrees[layer_i]
-
-        candidates = strtree.query(conn.point)
-        for geom_i in candidates:
-            if (layer_i, geom_i) in connected_layer_mesh_pairs:
-                # Would have no effect on whether the network
-                # has a dead terminal or not, do not even bother checking
-                continue
-
-            if not conn.layer.geoms[geom_i].intersects(conn.point):
-                continue
-
-            # Okay, at this point:
-            # * We know that the connection is on (layer_i, geom_i)
-            # * We know that the (layer_i, geom_i) pair got eliminated by
-            # the connectivity graph check.
-            # This means we eliminate the entire network. In practice,
-            # it should not happen that a network has some dead
-            # terminals and some live terminals (that would mean ConnectivityGraph
-            # is broken). So it is enough to just find the first dead terminal
-            # and bail.
-            return True
-
-    return False
+    return any(
+        (layer_i, geom_i) not in connected_layer_mesh_pairs
+        for conn in network.connections
+        for layer_i, geom_i in conn_locations.get(conn, [])
+    )
 
 
 @stage_timer
 def filter_dead_networks(prob: problem.Problem,
-                         strtrees: list[shapely.strtree.STRtree],
                          connected_layer_mesh_pairs: set[tuple[int, int]]
                          ) -> list[problem.Network]:
     """
@@ -758,9 +715,11 @@ def filter_dead_networks(prob: problem.Problem,
     rows that cannot be solved meaningfully, so it is excluded from the
     system. See `network_has_a_dead_terminal` for the per-network check.
     """
+    conn_locations = locate_connection_points(prob)
     return [
         net for net in prob.networks
-        if not network_has_a_dead_terminal(net, prob, connected_layer_mesh_pairs, strtrees)
+        if not network_has_a_dead_terminal(net, conn_locations,
+                                           connected_layer_mesh_pairs)
     ]
 
 
@@ -930,14 +889,14 @@ def solve(prob: problem.Problem,
     mesher = mesh.Mesher(mesher_config)
 
     log.info("Constructing connectivity graph and finding connected layers")
-    strtrees, _, connected_layer_mesh_pairs = compute_connectivity(prob)
+    _, connected_layer_mesh_pairs = compute_connectivity(prob)
 
     # As a first step, we flatten the Layer-Mesh tree to get a flat list of meshes.
     # We also keep track of which layer each mesh belongs to.
     # This will be needed later when we construct the final solution object.
     log.info("Meshing the connected components")
     meshes, mesh_index_to_layer_index = \
-        generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs, strtrees)
+        generate_meshes_for_problem(prob, mesher, connected_layer_mesh_pairs)
 
     log.info("Meshing the disconnected components")
     disconnected_meshes_by_layer = \
@@ -952,7 +911,7 @@ def solve(prob: problem.Problem,
     # Now we need to filter out the lumped element networks that are not connected
     # to any of the meshes that we are driving with a source.
     log.info("Processing lumped element networks")
-    filtered_networks = filter_dead_networks(prob, strtrees, connected_layer_mesh_pairs)
+    filtered_networks = filter_dead_networks(prob, connected_layer_mesh_pairs)
     log.info(f"Filtered networks: {len(filtered_networks)}/{len(prob.networks)}")
 
     # Next, we construct the _internal_ system of equations for each of the
