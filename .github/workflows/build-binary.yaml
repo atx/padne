@@ -76,11 +76,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build.outputs.artifact_name }}
+          # Extract into a subdirectory, since the binary name collides
+          # with the padne/ package directory from the checkout
+          path: bin
 
       - name: Run padne solve on a test project
         run: |
-          chmod +x ./padne
-          ./padne --version
-          ./padne solve tests/kicad/ldo/ldo.kicad_pro solution.pickle
-          ./padne paraview solution.pickle paraview_out
+          chmod +x ./bin/padne
+          ./bin/padne --version
+          ./bin/padne solve tests/kicad/ldo/ldo.kicad_pro solution.pickle
+          ./bin/padne paraview solution.pickle paraview_out
           ls -l paraview_out
