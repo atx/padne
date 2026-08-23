@@ -163,6 +163,52 @@ TEST_SETS: dict[str, TestSet] = {
             M("TP56", "TP55", measured_v=69.0e-3),
         ],
     ),
+    "test_set_1_eurocircuits": TestSet(
+        project="test_set_1",
+        cal_traces=[
+            CT(M("TP61", "TP60", measured_v=236.0e-3), nominal_width_mm=0.2, length_mm=70),
+            CT(M("TP63", "TP62", measured_v=139.3e-3), nominal_width_mm=0.3, length_mm=70),
+            CT(M("TP65", "TP64", measured_v=97.0e-3), nominal_width_mm=0.4, length_mm=70),
+            CT(M("TP67", "TP66", measured_v=75.6e-3), nominal_width_mm=0.5, length_mm=70),
+        ],
+        measurements=[
+            M("TP34", "TP33", measured_v=55.6e-3),
+            M("TP36", "TP35", measured_v=107.8e-3),
+            M("TP30", "TP29", measured_v=45.7e-3),
+            M("TP32", "TP31", measured_v=98.9e-3),
+            M("TP26", "TP25", measured_v=38.7e-3),
+            M("TP28", "TP27", measured_v=73.2e-3),
+            M("TP22", "TP21", measured_v=35.0e-3),
+            M("TP24", "TP23", measured_v=71.9e-3),
+            M("TP18", "TP17", measured_v=20.4e-3),
+            M("TP20", "TP19", measured_v=15.5e-3),
+            M("TP14", "TP13", measured_v=44.7e-3),
+            M("TP16", "TP15", measured_v=49.0e-3),
+            M("TP10", "TP9", measured_v=33.0e-3),
+            M("TP12", "TP11", measured_v=74.4e-3),
+            # TODO: Maybe some these measurements should be done at higher current
+            M("TP4", "TP1", measured_v=14.0e-3),
+            M("TP3", "TP1", measured_v=5.13e-3),
+            M("TP8", "TP5", measured_v=11.47e-3),
+            M("TP6", "TP5", measured_v=6.93e-3),
+            M("TP38", "TP37", measured_v=23.9e-3),
+            M("TP41", "TP37", measured_v=14.1e-3),
+            M("TP40", "TP39", measured_v=62.6e-3),
+            M("TP42", "TP39", measured_v=22.6e-3),
+            M("TP44", "TP43", measured_v=7.63e-3),
+            M("TP45", "TP44", measured_v=6.89e-3),
+            # Resistor chains
+            M("TP47", "TP46", measured_v=102.3e-3),
+            M("TP59", "TP46", measured_v=57.0e-3),
+            M("TP48", "TP49", measured_v=68.0e-3),
+            M("TP58", "TP49", measured_v=37.3e-3),
+            M("TP51", "TP52", measured_v=26.7e-3),
+            M("TP50", "TP53", measured_v=65.8e-3),
+            M("TP57", "TP53", measured_v=30.0e-3),
+            M("TP54", "TP55", measured_v=104.9e-3),
+            M("TP56", "TP55", measured_v=71.5e-3),
+        ],
+    )
 }
 
 
