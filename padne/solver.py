@@ -773,8 +773,8 @@ def solve_system(L: scipy.sparse.spmatrix,
 
     residual_norm = np.linalg.norm(L_csc @ v - r)
     solver_info = SolverInfo(
-        ground_node_current=v[-1],
-        residual_norm=residual_norm,
+        ground_node_current=float(v[-1]),  # Force a float for deterministic pickling reasons
+        residual_norm=float(residual_norm),
     )
     return v, solver_info
 

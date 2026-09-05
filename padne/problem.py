@@ -82,18 +82,16 @@ class Network:
     has_source: bool = field(init=False)
 
     def __post_init__(self):
-        # Initialize the nodes
-        node_set = set()
+        # Number the nodes in element/terminal order. This helps in making the
+        # structures deterministic
+        nodes = {}
         for element in self.elements:
             for terminal in element.terminals:
                 if not isinstance(terminal, NodeID):
                     raise TypeError("Terminal must be a NodeID")
-                node_set.add(terminal)
+                if terminal not in nodes:
+                    nodes[terminal] = len(nodes)
 
-        # Connections need not be owned by an element: a PROBE directive emits a
-        # connection with no element purely to force a mesh seed point at a pad.
-        keys = list(node_set)
-        nodes = {key: i for i, key in enumerate(keys)}
         # This bypasses the frozen dataclass restriction
         object.__setattr__(self, "nodes", nodes)
         # Check if the network has a source

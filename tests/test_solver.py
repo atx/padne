@@ -2460,6 +2460,25 @@ class TestSolutionPickling:
             # Check disconnected meshes
             assert len(unpick_ls.disconnected_meshes) == len(orig_ls.disconnected_meshes)
 
+    # tht_component drives several networks, which is what makes it sensitive
+    # to the node numbering; the other two add a regulator and a 4-layer stackup.
+    DETERMINISM_PROJECTS = ["ldo", "tht_component", "via_tht_4layer"]
+
+    @for_all_kicad_projects(include=DETERMINISM_PROJECTS)
+    def test_solve_pipeline_is_byte_reproducible(self, project):
+        """Two runs of load -> solve -> save must produce identical files."""
+        first = pickle.dumps(solver.solve(kicad.load_kicad_project(project.pro_path)))
+        second = pickle.dumps(solver.solve(kicad.load_kicad_project(project.pro_path)))
+
+        assert first == second
+
+    @for_all_kicad_projects(include=DETERMINISM_PROJECTS)
+    def test_pickled_solution_survives_a_round_trip_unchanged(self, project):
+        """save -> load -> save must reproduce the saved file byte for byte."""
+        saved = pickle.dumps(solver.solve(kicad.load_kicad_project(project.pro_path)))
+
+        assert pickle.dumps(pickle.loads(saved)) == saved
+
 
 @for_all_kicad_projects(exclude=["unterminated_current_loop", "nested_schematic_twoinstances"])
 def test_solution_residual(project):
