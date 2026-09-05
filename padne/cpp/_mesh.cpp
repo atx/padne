@@ -12,9 +12,9 @@
 //    face store when BOUNDARY_BIT is set. INVALID means "no face yet".
 //  - INVALID marks unset references in all index arrays.
 //
-// Algorithmic methods (orbit, walk, area, from_triangle_soup, ...) are
-// attached to these types from padne/mesh.py so that they stay identical to
-// the original pure-Python implementation for now.
+// Traversal helpers (orbit, walk, area, centroid, ...) are plain Python
+// attached to these types from padne/mesh.py; only the hot paths
+// (from_triangle_soup, cotan, laplacian, bulk accessors) live here.
 
 #include <cmath>
 #include <cstdint>

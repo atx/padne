@@ -70,9 +70,8 @@ class Point:
 # as struct-of-arrays index storage. Vertex/HalfEdge/Face are lightweight
 # value-type handles into that storage
 #
-# The algorithmic methods below are implemented in Python and attached onto
-# the bound types; they are kept verbatim from the original pure-Python
-# implementation. They will be moved into C++ in later commits.
+# The traversal helpers below (orbit, walk, edges, centroid, ...) are plain
+# Python attached onto the bound types; only the hot paths live in C++.
 Mesh = _mesh.Mesh
 Vertex = _mesh.Vertex
 HalfEdge = _mesh.HalfEdge

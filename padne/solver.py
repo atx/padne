@@ -245,10 +245,9 @@ def generate_meshes_for_problem(prob: problem.Problem,
                                 strtrees: list[shapely.strtree.STRtree]
                                 ) -> tuple[list[mesh.Mesh], list[int]]:
     # Collect the independent per-region meshing jobs first, then mesh them
-    # concurrently. poly_to_mesh's heavy CGAL work -- the distance-map
-    # rasterization and the Delaunay refinement -- releases the GIL (see _cgal),
-    # so threads parallelize it; the Python-side half-edge build stays GIL-bound
-    # and is effectively serialized, which is acceptable for now.
+    # concurrently. poly_to_mesh's heavy work -- the distance-map
+    # rasterization, the Delaunay refinement and the half-edge build --
+    # releases the GIL (see _cgal and _mesh), so threads parallelize it.
     mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point]]] = []
     mesh_index_to_layer_index: list[int] = []
 
