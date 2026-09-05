@@ -194,16 +194,26 @@ class VertexIndexer:
     """
     global_index_to_vertex_index: list[tuple[int, int]] = field(default_factory=list)
     mesh_vertex_index_to_global_index: dict[tuple[int, int], int] = field(default_factory=dict)
+    # Global index of local vertex 0 of each mesh, defined even for empty meshes
+    mesh_offsets: list[int] = field(default_factory=list)
 
     @classmethod
     def create(cls, meshes: list[mesh.Mesh]) -> "VertexIndexer":
         vindex = cls()
         for mesh_idx, msh in enumerate(meshes):
+            vindex.mesh_offsets.append(len(vindex.global_index_to_vertex_index))
             for vertex_idx, _ in enumerate(msh.vertices):
                 global_index = len(vindex.global_index_to_vertex_index)
                 vindex.global_index_to_vertex_index.append((mesh_idx, vertex_idx))
                 vindex.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
         return vindex
+
+    def mesh_offset(self, mesh_idx: int) -> int:
+        """
+        Global index of local vertex 0 of the given mesh. Local vertex v of
+        that mesh maps to mesh_offset(mesh_idx) + v.
+        """
+        return self.mesh_offsets[mesh_idx]
 
 
 def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
@@ -372,10 +382,7 @@ class NodeIndexer:
                 if mesh_index_to_layer_index[mesh_i] != layer_i:
                     continue
                 n = len(msh.vertices)
-                if n == 0:
-                    continue
-                # VertexIndexer assigns global indices contiguously per mesh
-                start = vindex.mesh_vertex_index_to_global_index[(mesh_i, 0)]
+                start = vindex.mesh_offset(mesh_i)
                 coords_list.append(msh.positions())
                 gidx_list.append(np.arange(start, start + n))
             if not coords_list:
@@ -582,7 +589,7 @@ def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
     rows, cols, values = [], [], []
     for mesh_i, (msh, conductance) in enumerate(zip(meshes, conductances)):
         L_msh = laplace_operator(msh)
-        offset = vindex.mesh_vertex_index_to_global_index[(mesh_i, 0)]
+        offset = vindex.mesh_offset(mesh_i)
         rows.append(L_msh.row.astype(np.int64) + offset)
         cols.append(L_msh.col.astype(np.int64) + offset)
         values.append(L_msh.data * conductance)
@@ -613,7 +620,7 @@ def produce_layer_solutions(layers: list[problem.Layer],
             # and fill it with values from the global value array (solution of
             # the system). VertexIndexer assigns global indices contiguously
             # in mesh order, so this is a plain slice.
-            start = vindex.mesh_vertex_index_to_global_index[(mesh_i, 0)]
+            start = vindex.mesh_offset(mesh_i)
             vertex_values.values[:] = v[start:start + len(msh.vertices)]
 
             # Compute power density for this mesh

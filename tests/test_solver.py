@@ -992,6 +992,74 @@ class TestVertexIndexer:
             offset += len(msh.vertices)
         assert len(vindex.global_index_to_vertex_index) == offset
 
+    @staticmethod
+    def make_meshes():
+        return [
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(2.0, 0.0), mesh.Point(3.0, 0.0),
+                 mesh.Point(3.0, 1.0), mesh.Point(2.0, 1.0)],
+                [(0, 1, 2), (0, 2, 3)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(5.0, 0.0), mesh.Point(6.0, 0.0), mesh.Point(5.0, 1.0)],
+                [(0, 1, 2)]),
+        ]
+
+    def test_mesh_offset_matches_vertex_mapping(self):
+        meshes = self.make_meshes()
+        vindex = solver.VertexIndexer.create(meshes)
+
+        assert vindex.mesh_offsets == [0, 3, 7]
+        for mesh_i, msh in enumerate(meshes):
+            offset = vindex.mesh_offset(mesh_i)
+            for v in range(len(msh.vertices)):
+                assert vindex.mesh_vertex_index_to_global_index[(mesh_i, v)] == offset + v
+
+    def test_mesh_offset_defined_for_empty_mesh(self):
+        """
+        An empty mesh has no (mesh_i, 0) entry in the vertex mapping, but it
+        still occupies a (zero-width) slot in the global index space and the
+        following mesh must start right where the previous one ended.
+        """
+        meshes = self.make_meshes()
+        meshes.insert(1, mesh.Mesh())
+        vindex = solver.VertexIndexer.create(meshes)
+
+        assert vindex.mesh_offsets == [0, 3, 3, 7]
+        assert (1, 0) not in vindex.mesh_vertex_index_to_global_index
+        assert vindex.mesh_offset(1) == 3
+        assert vindex.mesh_offset(2) == 3
+        assert len(vindex.global_index_to_vertex_index) == 10
+
+    def test_mesh_offset_out_of_range_raises(self):
+        vindex = solver.VertexIndexer.create(self.make_meshes())
+        with pytest.raises(IndexError):
+            vindex.mesh_offset(3)
+
+    def test_empty_mesh_flows_through_laplacian_assembly(self):
+        """
+        process_mesh_laplace_operators must translate every mesh by its offset
+        even when one of the meshes contributes no vertices.
+        """
+        meshes = self.make_meshes()
+        meshes.insert(1, mesh.Mesh())
+        vindex = solver.VertexIndexer.create(meshes)
+        N = len(vindex.global_index_to_vertex_index) + 1
+
+        L = solver.process_mesh_laplace_operators(
+            meshes, [1.0] * len(meshes), vindex, N).toarray()
+
+        # Each mesh's block sits at its offset; nothing lands outside of it.
+        for mesh_i, msh in enumerate(meshes):
+            start = vindex.mesh_offset(mesh_i)
+            n = len(msh.vertices)
+            block = L[start:start + n, start:start + n]
+            np.testing.assert_allclose(block.sum(axis=1), np.zeros(n), atol=1e-12)
+            L[start:start + n, start:start + n] = 0.0
+        assert not L.any()
+
 
 class TestNodeIndexer:
     """
