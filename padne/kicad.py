@@ -6,18 +6,17 @@ import enum
 import math
 import logging
 import pathlib
-import pygerber.gerber.api
-import pygerber.vm
 import sexpdata
 import shapely
-import shapely.affinity
 import tempfile
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Iterator, ClassVar, Iterable, Union
+from typing import Any, Optional, Iterator, ClassVar, Iterable
 
-from . import problem, units
+from . import parallel, problem, units
+from .context import stage_timer
+from .gerber import ensure_geometry_is_multipolygon, gerber_file_to_shapely
 
 
 log = logging.getLogger(__name__)
@@ -90,15 +89,6 @@ def nm_to_mm(f: float) -> float:
     return f / 1000000
 
 
-def ensure_geometry_is_multipolygon(geometry: Union[shapely.geometry.Polygon, shapely.geometry.MultiPolygon]) -> shapely.geometry.MultiPolygon:
-    """Convert Polygon to MultiPolygon if needed, ensuring consistent interface."""
-    if geometry.geom_type == "Polygon":
-        return shapely.geometry.MultiPolygon([geometry])
-    if geometry.geom_type != "MultiPolygon":
-        raise ValueError(f"Expected Polygon or MultiPolygon, got {geometry.geom_type}")
-    return geometry
-
-
 @dataclass
 class StackupItem:
 
@@ -136,6 +126,7 @@ def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
         yield layer_id
 
 
+@stage_timer
 def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
                                    copper_conductivity: float = COPPER_CONDUCTIVITY
                                    ) -> Stackup:
@@ -1052,6 +1043,7 @@ def process_directives(directives: list[Directive]) -> Directives:
                       probe_specs=probe_specs)
 
 
+@stage_timer
 def build_schema_hierarchy(sch_file_path: pathlib.Path,
                            sheet_name: str = "Root") -> SchemaInstance:
     """
@@ -1260,6 +1252,7 @@ class PlottedGerberLayer:
     geometry: shapely.geometry.MultiPolygon
 
 
+@stage_timer
 def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> list[PlottedGerberLayer]:
     """
     Generate Gerber files from a KiCad PCB file and convert them to PlottedGerberLayer objects.
@@ -1284,6 +1277,7 @@ def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> 
         return extract_layers_from_gerbers(board, gerber_layers)
 
 
+@stage_timer
 def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: Path):
     """
     Plot copper layers of a KiCad board to Gerber files.
@@ -1334,68 +1328,7 @@ def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: 
         plot_controller.ClosePlot()
 
 
-def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile
-                        ) -> shapely.geometry.MultiPolygon:
-    # We have to call all of this manually, since we need to manually configure the
-    # amount of segments in our arcs
-    rvmc = gerber_data._get_rvmc()
-
-    def angle_length_to_segment_count(angle_length: float) -> int:
-        return int(abs(angle_length) * 0.4 + 10)
-
-    result = pygerber.vm.render(
-        rvmc,
-        backend="shapely",
-        angle_length_to_segment_count=angle_length_to_segment_count
-    )
-    return result.shape
-
-
-def gerber_file_to_shapely(gerber_path: Path) -> Optional[shapely.geometry.MultiPolygon]:
-    """Loads data from a Gerber file and converts it to a Shapely geometry."""
-    gerber_data = pygerber.gerber.api.GerberFile.from_file(gerber_path)
-    try:
-        geometry = render_with_shapely(gerber_data)
-    except AssertionError:
-        # This is a bug in pygerber, which gets triggered if the
-        # gerber file is empty. We should fix this in pygerber ideally
-        # TODO: Figure out if there is at least a way to check if the
-        # gerber file is empty before we try to render it
-        return None
-
-    # For reasons to be determined, the geometry generated like this has
-    # a flipped y axis. Flip it back.
-    geometry = shapely.affinity.scale(geometry, 1.0, -1.0, origin=(0, 0))
-
-    # First, we try to clean up the geometry by inflating and deflating.
-    # This should remove any tiny slivers or gaps, usually caused by
-    # pygerber not quite matching starts and ends of consecutive traces.
-    # (see the test case "broken_trace_geometry" for an example)
-    geometry = geometry.buffer(1e-4).buffer(-1e-4)
-
-    # Simplify the geometry to remove almost-duplicate points
-    # This is unfortunately a "bug" in pygerber, where drawing
-    # a circle is implemented by drawing an arbitrary degree arc,
-    # which sometimes results to the "starting" and "ending" points
-    # not being exactly the same such as
-    # (-1.0, 0.0) vs  (-1.0, 1.2246467991473532e-16)
-    # Again, it would be nice to fix this in pygerber, but that
-    # is a task for another day...
-    geometry = geometry.simplify(tolerance=1e-4, preserve_topology=True)
-    # Unfortunately, the above simplification can sometimes miss issues
-    # with the polygon. Setting preserve_topology=False fixes it, but
-    # who knows what other issues it may cause. Running a dedicated
-    # point deduplication step seems to fix the issue, but again,
-    # could potentially break the geometry. The "degenerate_hole_geometry"
-    # test project exhibits this issue.
-    geometry = shapely.remove_repeated_points(geometry, tolerance=1e-8)
-
-    # If the layer has only a single connected component, convert it to a MultiPolygon
-    geometry = ensure_geometry_is_multipolygon(geometry)
-
-    return geometry
-
-
+@stage_timer
 def extract_layers_from_gerbers(board,
                                 gerber_layers: dict[int, Path]
                                 ) -> list[PlottedGerberLayer]:
@@ -1409,24 +1342,24 @@ def extract_layers_from_gerbers(board,
     Returns:
         List of PlottedGerberLayer objects
     """
+    # The pygerber rendering is pure-Python and GIL-bound, so fan the layers
+    # out to worker processes. gerber_file_to_shapely lives in padne.gerber,
+    # which workers can import without paying for the pcbnew import.
+    geometries = parallel.process_map(
+        gerber_file_to_shapely,
+        list(gerber_layers.values()),
+    )
+
     plotted_layers = []
-
-    for layer_id, gerber_path in gerber_layers.items():
-        # Get layer name from the board
-        layer_name = board.GetLayerName(layer_id)
-
-        geometry = gerber_file_to_shapely(gerber_path)
+    for (layer_id, gerber_path), geometry in zip(gerber_layers.items(), geometries):
         if geometry is None:
             continue
 
-        # Create a PlottedGerberLayer object
-        plotted_layer = PlottedGerberLayer(
-            name=layer_name,
+        plotted_layers.append(PlottedGerberLayer(
+            name=board.GetLayerName(layer_id),
             layer_id=layer_id,
             geometry=geometry
-        )
-
-        plotted_layers.append(plotted_layer)
+        ))
 
     return plotted_layers
 
@@ -1585,6 +1518,7 @@ def process_via_spec(via_spec: ViaSpec,
     return resistor_stack
 
 
+@stage_timer
 def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
                     via_specs: list[ViaSpec]) -> list[PlottedGerberLayer]:
 
@@ -1689,6 +1623,7 @@ def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
     )
 
 
+@stage_timer
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.

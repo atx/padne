@@ -32,58 +32,6 @@
 namespace nb = nanobind;
 using namespace nb::literals;
 
-// Replacement for pybind11's scoped_ostream_redirect: routes std::cout (or
-// another std::ostream) through a Python file-like object for the lifetime
-// of the instance.
-// The mostly just serves for debugging allowing us to std::cout in C++.
-// TODO: This should be dropped and replaced with a more robust logging system.
-class scoped_ostream_redirect {
-public:
-    explicit scoped_ostream_redirect(
-        std::ostream& stream = std::cout,
-        nb::object py_stream = nb::module_::import_("sys").attr("stdout"))
-        : stream_(stream),
-          buf_(std::move(py_stream)),
-          old_buf_(stream.rdbuf(&buf_)) {}
-
-    ~scoped_ostream_redirect() { stream_.rdbuf(old_buf_); }
-
-    scoped_ostream_redirect(const scoped_ostream_redirect&) = delete;
-    scoped_ostream_redirect& operator=(const scoped_ostream_redirect&) = delete;
-
-private:
-    class py_streambuf : public std::streambuf {
-    public:
-        explicit py_streambuf(nb::object stream) : py_stream_(std::move(stream)) {}
-
-    protected:
-        std::streamsize xsputn(const char* s, std::streamsize n) override {
-            nb::gil_scoped_acquire gil;
-            py_stream_.attr("write")(nb::str(s, static_cast<size_t>(n)));
-            return n;
-        }
-        int_type overflow(int_type c) override {
-            if (c != traits_type::eof()) {
-                char ch = static_cast<char>(c);
-                xsputn(&ch, 1);
-            }
-            return c;
-        }
-        int sync() override {
-            nb::gil_scoped_acquire gil;
-            py_stream_.attr("flush")();
-            return 0;
-        }
-
-    private:
-        nb::object py_stream_;
-    };
-
-    std::ostream& stream_;
-    py_streambuf buf_;
-    std::streambuf* old_buf_;
-};
-
 // Type definitions
 typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
 typedef CGAL::Polygon_2<K> Polygon_2;
@@ -110,6 +58,7 @@ public:
     CGALPolygon(nb::object shapely_polygon);
     bool contains(double x, double y) const;
     double distance_to_boundary(double x, double y) const;
+    const std::vector<Segment_2>& edges() const { return all_edges; }
 };
 
 // PolyBoundaryDistanceMap class for computing distance-based variable density
@@ -394,36 +343,6 @@ static void set_mesher_seeds(Mesher& mesher,
     mesher.set_seeds(seed_points.begin(), seed_points.end(), mark);
 }
 
-void setup_mesher(Mesher& mesher,
-                  const nb::object& py_config,
-                  const std::vector<std::pair<double, double>>& seeds,
-                  const PolyBoundaryDistanceMap* distance_map_ptr) {
-    // Extract standard parameters
-    auto minimum_angle = nb::cast<float>(py_config.attr("minimum_angle"));
-    auto B = 1 / (2*sin(minimum_angle * M_PI / 180.0));
-    auto b = 1 / (4*B*B);
-    auto maximum_size = nb::cast<float>(py_config.attr("maximum_size"));
-
-    // Extract variable density parameters
-    auto min_distance = nb::cast<double>(py_config.attr("variable_density_min_distance"));
-    auto max_distance = nb::cast<double>(py_config.attr("variable_density_max_distance"));
-    auto size_factor = nb::cast<double>(py_config.attr("variable_size_maximum_factor"));
-
-    mesher.set_criteria(Criteria(
-            b,
-            maximum_size,
-            distance_map_ptr,
-            min_distance,
-            max_distance,
-            size_factor,
-            K()
-        )
-    );
-
-    set_mesher_seeds(mesher, seeds);
-}
-
-
 std::pair<nb::list, nb::list> convert_meshing_result_to_python(CDT &cdt)
 {
     nb::list py_vertices;
@@ -464,17 +383,33 @@ nb::dict mesh(const nb::object& py_config,
               const std::vector<std::pair<double, double>>& seeds,
               const PolyBoundaryDistanceMap* distance_map_ptr) {
 
-    // Redirect via python during the scope of this function
-    scoped_ostream_redirect stream_redirect;
+    // Pull the meshing criteria out of the Python config object while the GIL
+    // is held; everything below this point is pure C++.
+    const float minimum_angle = nb::cast<float>(py_config.attr("minimum_angle"));
+    const double B = 1.0 / (2 * sin(minimum_angle * M_PI / 180.0));
+    const double aspect_bound = 1.0 / (4 * B * B);
+    const float maximum_size = nb::cast<float>(py_config.attr("maximum_size"));
+    const double min_distance = nb::cast<double>(py_config.attr("variable_density_min_distance"));
+    const double max_distance = nb::cast<double>(py_config.attr("variable_density_max_distance"));
+    const double size_factor = nb::cast<double>(py_config.attr("variable_size_maximum_factor"));
 
     CDT cdt;
-    setup_cdt(cdt, vertices, segments, seeds);
+    {
+        // The CGAL meshing touches no Python state: the geometry inputs are
+        // owned C++ copies and the distance map is precomputed and kept alive
+        // by the caller. Releasing the GIL lets sibling meshing threads run
+        // concurrently. nb::gil_scoped_release re-acquires the GIL on scope
+        // exit, including while a C++ exception unwinds.
+        nb::gil_scoped_release nogil;
 
-    Mesher mesher(cdt);
+        setup_cdt(cdt, vertices, segments, seeds);
 
-    setup_mesher(mesher, py_config, seeds, distance_map_ptr);
-
-    mesher.refine_mesh();
+        Mesher mesher(cdt);
+        mesher.set_criteria(Criteria(aspect_bound, maximum_size, distance_map_ptr,
+                                     min_distance, max_distance, size_factor, K()));
+        set_mesher_seeds(mesher, seeds);
+        mesher.refine_mesh();
+    }
 
     // Okay, so for the result, we return
     // result["vertices"], which is a list of tuples (x, y) from the triangulation
@@ -508,29 +443,111 @@ PolyBoundaryDistanceMap::PolyBoundaryDistanceMap(nb::object polygon, double quan
     // Initialize distance array
     distances.resize(width * height);
 
-    // Compute distances
-    compute_distances();
+    // Rasterizing the distance-to-boundary grid is the dominant cost of meshing
+    // a large region, and it is pure C++ (cgal_polygon holds no Python state by
+    // now). Drop the GIL so sibling meshing threads run concurrently.
+    {
+        nb::gil_scoped_release nogil;
+        compute_distances();
+    }
 }
 
 
-void PolyBoundaryDistanceMap::compute_distances() {
-
-    for (int j = 0; j < height; ++j) {
-        for (int i = 0; i < width; ++i) {
-            // Compute world coordinates of pixel center (i+0.5, j+0.5)
-            auto [world_x, world_y] = grid_to_world(i + 0.5, j + 0.5);
-
-            double distance;
-            if (cgal_polygon.contains(world_x, world_y)) {
-                // Point is inside polygon - compute distance to boundary
-                distance = cgal_polygon.distance_to_boundary(world_x, world_y);
+// One-dimensional squared euclidean distance transform (Felzenszwalb &
+// Huttenlocher): d[q] = min_p ((q - p)^2 + f[p]) for finite f. v and z are
+// scratch of size n and n + 1.
+static void edt_1d(const double *f, double *d, int n, int *v, double *z) {
+    constexpr double INF = std::numeric_limits<double>::infinity();
+    int k = 0;
+    v[0] = 0;
+    z[0] = -INF;
+    z[1] = INF;
+    for (int q = 1; q < n; q++) {
+        double s;
+        while (true) {
+            s = ((f[q] + double(q) * q) - (f[v[k]] + double(v[k]) * v[k]))
+                / (2.0 * q - 2.0 * v[k]);
+            if (s <= z[k]) {
+                k--;
             } else {
-                // Outside polygon, distance = 0
-                distance = 0.0;
+                break;
             }
+        }
+        k++;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = INF;
+    }
+    for (int q = 0, j = 0; q < n; q++) {
+        while (z[j + 1] < q)
+            j++;
+        double dq = double(q) - v[j];
+        d[q] = dq * dq + f[v[j]];
+    }
+}
 
-            // Store distance in flat array
-            distances[grid_to_index(i, j)] = distance;
+void PolyBoundaryDistanceMap::compute_distances() {
+    // The distance map only feeds the mesh sizing field, so it works on the
+    // rasterized grid: scanline-rasterize the polygon interior at the cell
+    // centers, then run an exact euclidean distance transform towards the
+    // outside cells. This is O(rows * edges + cells) instead of the
+    // O(cells * edges) per-cell exact distance computation it replaces, at
+    // the cost of a quantization-sized error in the sizing field.
+
+    // 1) Rasterize the interior at cell centers (even-odd rule; hole edges
+    // are part of cgal_polygon.edges() so holes fall out automatically).
+    std::vector<uint8_t> inside(size_t(width) * height, 0);
+    std::vector<double> crossings;
+    for (int j = 0; j < height; ++j) {
+        double y = min_y + (j + 0.5) * quantization;
+        crossings.clear();
+        for (const auto &edge : cgal_polygon.edges()) {
+            double y1 = edge.source().y(), y2 = edge.target().y();
+            if ((y1 <= y) == (y2 <= y))
+                continue;
+            double x1 = edge.source().x(), x2 = edge.target().x();
+            crossings.push_back(x1 + (y - y1) * (x2 - x1) / (y2 - y1));
+        }
+        std::sort(crossings.begin(), crossings.end());
+        for (size_t k = 0; k + 1 < crossings.size(); k += 2) {
+            int i0 = std::max(0, int(std::ceil((crossings[k] - min_x) / quantization - 0.5)));
+            int i1 = std::min(width - 1, int(std::floor((crossings[k + 1] - min_x) / quantization - 0.5)));
+            for (int i = i0; i <= i1; ++i)
+                inside[grid_to_index(i, j)] = 1;
+        }
+    }
+
+    // 2) Per-column integer distance to the nearest outside cell in the same
+    // column. The constructor pads the bounding box by two cells of margin,
+    // so the border rows are always outside and every value ends up finite.
+    std::vector<double> colsq(size_t(width) * height);
+    for (int i = 0; i < width; ++i) {
+        int run = height;  // "outside cell is far above" sentinel
+        for (int j = 0; j < height; ++j) {
+            run = inside[grid_to_index(i, j)] ? run + 1 : 0;
+            colsq[grid_to_index(i, j)] = run;
+        }
+        run = height;
+        for (int j = height - 1; j >= 0; --j) {
+            run = inside[grid_to_index(i, j)] ? run + 1 : 0;
+            double &g = colsq[grid_to_index(i, j)];
+            g = std::min(g, double(run));
+            g = g * g;
+        }
+    }
+
+    // 3) Per-row lower-envelope pass completes the exact 2D EDT.
+    std::vector<double> f(width), d(width), z(width + 1);
+    std::vector<int> v(width);
+    for (int j = 0; j < height; ++j) {
+        for (int i = 0; i < width; ++i)
+            f[i] = colsq[grid_to_index(i, j)];
+        edt_1d(f.data(), d.data(), width, v.data(), z.data());
+        for (int i = 0; i < width; ++i) {
+            // The -q/2 correction here attempts to correct for the fact that
+            // we are computing distance from cell center outside of the polygon.
+            // It is only an approximation but makes the number a bit more accurate.
+            distances[grid_to_index(i, j)] = std::max(std::sqrt(d[i]) * quantization - quantization * 0.5, 0.0);
         }
     }
 }
@@ -541,8 +558,12 @@ double PolyBoundaryDistanceMap::query(double x, double y) const {
         return 0.0;
     }
 
-    // Convert world coordinates to grid coordinates using transformation method
-    auto [gx, gy] = world_to_grid(x, y);
+    // Convert world coordinates to grid coordinates using transformation method.
+    // Samples are taken at pixel centers (i+0.5, j+0.5), so shift by half a
+    // cell to align the interpolation grid with the sample locations.
+    auto [gx_raw, gy_raw] = world_to_grid(x, y);
+    double gx = gx_raw - 0.5;
+    double gy = gy_raw - 0.5;
 
     // Find integer grid coordinates
     int i0 = static_cast<int>(std::floor(gx));

@@ -149,8 +149,7 @@ class TestPointDataCreation:
     def test_create_point_data_basic(self):
         # Create a minimal mesh with one vertex
         test_mesh = mesh.Mesh()
-        vertex = mesh.Vertex(mesh.Point(1.0, 2.0))
-        test_mesh.vertices.add(vertex)
+        vertex = test_mesh.make_vertex(mesh.Point(1.0, 2.0))
 
         # Create ZeroForm with one value
         potentials = mesh.ZeroForm(test_mesh)
@@ -171,12 +170,10 @@ class TestPointDataCreation:
     def test_create_point_data_multiple_vertices(self):
         test_mesh = mesh.Mesh()
         vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),
-            mesh.Vertex(mesh.Point(1.0, 0.0)),
-            mesh.Vertex(mesh.Point(0.0, 1.0))
+            test_mesh.make_vertex(mesh.Point(0.0, 0.0)),
+            test_mesh.make_vertex(mesh.Point(1.0, 0.0)),
+            test_mesh.make_vertex(mesh.Point(0.0, 1.0))
         ]
-        for vertex in vertices:
-            test_mesh.vertices.add(vertex)
 
         potentials = mesh.ZeroForm(test_mesh)
         potentials[vertices[0]] = 1.0
@@ -194,8 +191,7 @@ class TestPointDataCreation:
 class TestPointsCreation:
     def test_create_points_basic(self):
         test_mesh = mesh.Mesh()
-        vertex = mesh.Vertex(mesh.Point(1.5, 2.5))
-        test_mesh.vertices.add(vertex)
+        vertex = test_mesh.make_vertex(mesh.Point(1.5, 2.5))
 
         points = paraview.create_points(test_mesh)
 
@@ -211,12 +207,10 @@ class TestPointsCreation:
     def test_create_points_multiple_vertices(self):
         test_mesh = mesh.Mesh()
         vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),
-            mesh.Vertex(mesh.Point(1.0, 0.0)),
-            mesh.Vertex(mesh.Point(0.0, 1.0))
+            test_mesh.make_vertex(mesh.Point(0.0, 0.0)),
+            test_mesh.make_vertex(mesh.Point(1.0, 0.0)),
+            test_mesh.make_vertex(mesh.Point(0.0, 1.0))
         ]
-        for vertex in vertices:
-            test_mesh.vertices.add(vertex)
 
         points = paraview.create_points(test_mesh)
         data_array = points.find("DataArray")
@@ -235,25 +229,15 @@ class TestTriangleConnectivity:
         test_mesh = mesh.Mesh()
 
         # Add vertices
-        v0 = mesh.Vertex(mesh.Point(0.0, 0.0))
-        v1 = mesh.Vertex(mesh.Point(1.0, 0.0))
-        v2 = mesh.Vertex(mesh.Point(0.0, 1.0))
-        test_mesh.vertices.add(v0)
-        test_mesh.vertices.add(v1)
-        test_mesh.vertices.add(v2)
+        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
+        v1 = test_mesh.make_vertex(mesh.Point(1.0, 0.0))
+        v2 = test_mesh.make_vertex(mesh.Point(0.0, 1.0))
 
-        # Create face and half-edges
-        face = mesh.Face()
-        test_mesh.faces.add(face)
-
-        # Create half-edges forming a triangle
-        e0 = mesh.HalfEdge(origin=v0)
-        e1 = mesh.HalfEdge(origin=v1)
-        e2 = mesh.HalfEdge(origin=v2)
-
-        test_mesh.halfedges.add(e0)
-        test_mesh.halfedges.add(e1)
-        test_mesh.halfedges.add(e2)
+        # Create face and half-edges forming a triangle
+        face = test_mesh.make_face()
+        e0 = test_mesh.connect_vertices(v0, v1)
+        e1 = test_mesh.connect_vertices(v1, v2)
+        e2 = test_mesh.connect_vertices(v2, v0)
 
         # Connect the edges in a loop
         mesh.HalfEdge.connect(e0, e1)
@@ -278,12 +262,10 @@ class TestTriangleConnectivity:
         test_mesh = mesh.Mesh()
 
         # Add vertices
-        v0 = mesh.Vertex(mesh.Point(0.0, 0.0))
-        test_mesh.vertices.add(v0)
+        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
 
-        # Create boundary face
-        boundary_face = mesh.Face(is_boundary=True)
-        test_mesh.faces.add(boundary_face)
+        # Create boundary face (lives in the boundaries store, not faces)
+        test_mesh.make_face(is_boundary=True)
 
         triangles = paraview._extract_triangle_connectivity(test_mesh)
 
@@ -351,25 +333,15 @@ class TestPieceCreation:
         test_mesh = mesh.Mesh()
 
         # Add three vertices for a triangle
-        v0 = mesh.Vertex(mesh.Point(0.0, 0.0))
-        v1 = mesh.Vertex(mesh.Point(1.0, 0.0))
-        v2 = mesh.Vertex(mesh.Point(0.0, 1.0))
-        test_mesh.vertices.add(v0)
-        test_mesh.vertices.add(v1)
-        test_mesh.vertices.add(v2)
+        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
+        v1 = test_mesh.make_vertex(mesh.Point(1.0, 0.0))
+        v2 = test_mesh.make_vertex(mesh.Point(0.0, 1.0))
 
-        # Create face and half-edges
-        face = mesh.Face(is_boundary=False)
-        test_mesh.faces.add(face)
-
-        # Create half-edges forming a triangle
-        e0 = mesh.HalfEdge(origin=v0)
-        e1 = mesh.HalfEdge(origin=v1)
-        e2 = mesh.HalfEdge(origin=v2)
-
-        test_mesh.halfedges.add(e0)
-        test_mesh.halfedges.add(e1)
-        test_mesh.halfedges.add(e2)
+        # Create face and half-edges forming a triangle
+        face = test_mesh.make_face()
+        e0 = test_mesh.connect_vertices(v0, v1)
+        e1 = test_mesh.connect_vertices(v1, v2)
+        e2 = test_mesh.connect_vertices(v2, v0)
 
         # Connect the edges in a loop
         mesh.HalfEdge.connect(e0, e1)
@@ -414,8 +386,7 @@ class TestSolutionExport:
 
         # Create minimal mesh and potentials
         test_mesh = mesh.Mesh()
-        vertex = mesh.Vertex(mesh.Point(1.0, 2.0))
-        test_mesh.vertices.add(vertex)
+        vertex = test_mesh.make_vertex(mesh.Point(1.0, 2.0))
 
         potentials = mesh.ZeroForm(test_mesh)
         potentials[vertex] = 3.3
@@ -476,8 +447,7 @@ class TestSolutionExport:
         layer_solutions = []
         for layer_idx in range(2):
             test_mesh = mesh.Mesh()
-            vertex = mesh.Vertex(mesh.Point(float(layer_idx), 0.0))
-            test_mesh.vertices.add(vertex)
+            vertex = test_mesh.make_vertex(mesh.Point(float(layer_idx), 0.0))
 
             potentials = mesh.ZeroForm(test_mesh)
             potentials[vertex] = float(layer_idx + 1)
@@ -524,12 +494,10 @@ class TestXMLValidation:
 
         test_mesh = mesh.Mesh()
         vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),
-            mesh.Vertex(mesh.Point(1.0, 0.0)),
-            mesh.Vertex(mesh.Point(0.0, 1.0))
+            test_mesh.make_vertex(mesh.Point(0.0, 0.0)),
+            test_mesh.make_vertex(mesh.Point(1.0, 0.0)),
+            test_mesh.make_vertex(mesh.Point(0.0, 1.0))
         ]
-        for vertex in vertices:
-            test_mesh.vertices.add(vertex)
 
         potentials = mesh.ZeroForm(test_mesh)
         for i, vertex in enumerate(vertices):
@@ -579,8 +547,7 @@ class TestXMLValidation:
 
         # Test data array attributes
         test_mesh = mesh.Mesh()
-        vertex = mesh.Vertex(mesh.Point(1.0, 2.0))
-        test_mesh.vertices.add(vertex)
+        vertex = test_mesh.make_vertex(mesh.Point(1.0, 2.0))
 
         potentials = mesh.ZeroForm(test_mesh)
         potentials[vertex] = 1.5

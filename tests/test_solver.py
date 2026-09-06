@@ -9,8 +9,8 @@ import pickle
 from dataclasses import dataclass
 from typing import Optional, Any
 
-from padne import solver, problem, mesh, kicad
-from padne.kicad import ensure_geometry_is_multipolygon
+from padne import solver, problem, mesh, kicad, parallel
+from padne.gerber import ensure_geometry_is_multipolygon
 
 from conftest import for_all_kicad_projects
 from test_mesh import assert_meshes_equivalent
@@ -388,6 +388,51 @@ class TestSolverMeshLayer:
                     f"Connection point {conn_point_mesh} on layer {connection.layer.name} "
                     f"should be represented by a vertex in the mesh"
                 )
+
+    def test_threaded_meshing_matches_serial(self, kicad_test_projects):
+        """Meshing across worker threads (which release the GIL inside CGAL)
+        must produce the same meshes as meshing serially in one thread."""
+        project = kicad_test_projects["simple_geometry"]
+        prob = kicad.load_kicad_project(project.pro_path)
+        mesher = mesh.Mesher()
+        strtrees = solver.construct_strtrees_from_layers(prob.layers)
+        cg = solver.ConnectivityGraph.create_from_problem(prob, strtrees)
+        connected = solver.find_connected_layer_geom_indices(cg)
+
+        original_jobs = parallel.config().jobs
+
+        def mesh_with_jobs(jobs):
+            # configure() refuses to run while a pool is live, so tear down first.
+            parallel.shutdown()
+            parallel.configure(jobs=jobs)
+            try:
+                return solver.generate_meshes_for_problem(
+                    prob, mesher, connected, strtrees)
+            finally:
+                parallel.shutdown()
+
+        try:
+            serial_meshes, serial_layers = mesh_with_jobs(1)
+            threaded_meshes, threaded_layers = mesh_with_jobs(4)
+        finally:
+            parallel.shutdown()
+            parallel.configure(jobs=original_jobs)
+
+        # Compare geometric content rather than half-edge indices, since
+        # from_triangle_soup's internal numbering is not deterministic across
+        # builds. Keyed by rounded coordinates so it is numbering-invariant.
+        def geometry(m):
+            verts = sorted((round(v.p.x, 9), round(v.p.y, 9)) for v in m.vertices)
+            tris = sorted(
+                tuple(sorted((round(vt.p.x, 9), round(vt.p.y, 9)) for vt in f.vertices))
+                for f in m.faces
+            )
+            return verts, tris
+
+        assert threaded_layers == serial_layers
+        assert len(threaded_meshes) == len(serial_meshes)
+        for serial_m, threaded_m in zip(serial_meshes, threaded_meshes):
+            assert geometry(serial_m) == geometry(threaded_m)
 
 
 class TestProbeDirective:
@@ -917,6 +962,289 @@ class TestVertexIndexer:
             else:
                 assert 0 <= vertex_idx < len(mesh_2.vertices)
 
+    def test_global_indices_are_contiguous_per_mesh(self):
+        """
+        Global indices are assigned contiguously per mesh, in mesh order and
+        local vertex order: (mesh_i, v) -> offset_i + v. This is part of the
+        VertexIndexer API contract; process_mesh_laplace_operators translates
+        per-mesh COO blocks by a single offset based on it.
+        """
+        meshes = [
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(2.0, 0.0), mesh.Point(3.0, 0.0),
+                 mesh.Point(3.0, 1.0), mesh.Point(2.0, 1.0)],
+                [(0, 1, 2), (0, 2, 3)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(5.0, 0.0), mesh.Point(6.0, 0.0), mesh.Point(5.0, 1.0)],
+                [(0, 1, 2)]),
+        ]
+
+        vindex = solver.VertexIndexer.create(meshes)
+
+        offset = 0
+        for mesh_i, msh in enumerate(meshes):
+            for v in range(len(msh.vertices)):
+                assert vindex.mesh_vertex_index_to_global_index[(mesh_i, v)] == offset + v
+                assert vindex.global_index_to_vertex_index[offset + v] == (mesh_i, v)
+            offset += len(msh.vertices)
+        assert len(vindex.global_index_to_vertex_index) == offset
+
+    @staticmethod
+    def make_meshes():
+        return [
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(2.0, 0.0), mesh.Point(3.0, 0.0),
+                 mesh.Point(3.0, 1.0), mesh.Point(2.0, 1.0)],
+                [(0, 1, 2), (0, 2, 3)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(5.0, 0.0), mesh.Point(6.0, 0.0), mesh.Point(5.0, 1.0)],
+                [(0, 1, 2)]),
+        ]
+
+    def test_mesh_offset_matches_vertex_mapping(self):
+        meshes = self.make_meshes()
+        vindex = solver.VertexIndexer.create(meshes)
+
+        assert vindex.mesh_offsets == [0, 3, 7]
+        for mesh_i, msh in enumerate(meshes):
+            offset = vindex.mesh_offset(mesh_i)
+            for v in range(len(msh.vertices)):
+                assert vindex.mesh_vertex_index_to_global_index[(mesh_i, v)] == offset + v
+
+    def test_mesh_offset_defined_for_empty_mesh(self):
+        """
+        An empty mesh has no (mesh_i, 0) entry in the vertex mapping, but it
+        still occupies a (zero-width) slot in the global index space and the
+        following mesh must start right where the previous one ended.
+        """
+        meshes = self.make_meshes()
+        meshes.insert(1, mesh.Mesh())
+        vindex = solver.VertexIndexer.create(meshes)
+
+        assert vindex.mesh_offsets == [0, 3, 3, 7]
+        assert (1, 0) not in vindex.mesh_vertex_index_to_global_index
+        assert vindex.mesh_offset(1) == 3
+        assert vindex.mesh_offset(2) == 3
+        assert len(vindex.global_index_to_vertex_index) == 10
+
+    def test_mesh_offset_out_of_range_raises(self):
+        vindex = solver.VertexIndexer.create(self.make_meshes())
+        with pytest.raises(IndexError):
+            vindex.mesh_offset(3)
+
+    def test_empty_mesh_flows_through_laplacian_assembly(self):
+        """
+        process_mesh_laplace_operators must translate every mesh by its offset
+        even when one of the meshes contributes no vertices.
+        """
+        meshes = self.make_meshes()
+        meshes.insert(1, mesh.Mesh())
+        vindex = solver.VertexIndexer.create(meshes)
+        N = len(vindex.global_index_to_vertex_index) + 1
+
+        L = solver.process_mesh_laplace_operators(
+            meshes, [1.0] * len(meshes), vindex, N).toarray()
+
+        # Each mesh's block sits at its offset; nothing lands outside of it.
+        for mesh_i, msh in enumerate(meshes):
+            start = vindex.mesh_offset(mesh_i)
+            n = len(msh.vertices)
+            block = L[start:start + n, start:start + n]
+            np.testing.assert_allclose(block.sum(axis=1), np.zeros(n), atol=1e-12)
+            L[start:start + n, start:start + n] = 0.0
+        assert not L.any()
+
+
+class TestNodeIndexer:
+    """
+    Direct tests for NodeIndexer.create. These pin the connection-to-vertex
+    mapping semantics and the index-space layout contract that allocate_system
+    and stamp_network_into_system depend on.
+    """
+
+    @staticmethod
+    def make_layer(name):
+        return problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 10)]),
+            name=name,
+            conductance=1.0,
+        )
+
+    @staticmethod
+    def global_index_at(vindex, meshes, mesh_i, x, y):
+        """Global index of the vertex of meshes[mesh_i] located exactly at (x, y)."""
+        for vertex_i, vertex in enumerate(meshes[mesh_i].vertices):
+            if vertex.p.distance(mesh.Point(x, y)) < 1e-12:
+                return vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
+        raise AssertionError(f"No vertex at ({x}, {y}) in mesh {mesh_i}")
+
+    def make_fixture(self):
+        """
+        Two layers with meshes plus one empty layer (exercises the empty-layer
+        skip in _construct_kdtrees). Layer 0 holds two meshes, layer 1 holds a
+        mesh whose vertices share XY coordinates with mesh 0 on layer 0.
+        """
+        meshes = [
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(2.0, 0.0), mesh.Point(3.0, 0.0),
+                 mesh.Point(3.0, 1.0), mesh.Point(2.0, 1.0)],
+                [(0, 1, 2), (0, 2, 3)]),
+            mesh.Mesh.from_triangle_soup(
+                [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+                [(0, 1, 2)]),
+        ]
+        layers = [self.make_layer("F.Cu"), self.make_layer("B.Cu"),
+                  self.make_layer("Empty.Cu")]
+        mesh_index_to_layer_index = [0, 0, 1]
+        prob = problem.Problem(layers=layers, networks=[])
+        vindex = solver.VertexIndexer.create(meshes)
+        return prob, meshes, mesh_index_to_layer_index, vindex
+
+    def test_connections_map_to_nearest_vertex_on_correct_layer(self):
+        prob, meshes, m2l, vindex = self.make_fixture()
+
+        n_a, n_b, n_c = problem.NodeID(), problem.NodeID(), problem.NodeID()
+        connections = [
+            # Exactly on a vertex of mesh 0 (layer 0)
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=n_a),
+            # Near (but not on) a vertex of mesh 1; must snap to (3, 0) and
+            # must pick mesh 1 even though mesh 0 is on the same layer
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(2.9, 0.1), node_id=n_b),
+            # Same XY as the first connection, but on layer 1: must resolve
+            # to the mesh 2 vertex, not the mesh 0 one
+            problem.Connection(layer=prob.layers[1],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=n_c),
+        ]
+        network = problem.Network(
+            connections=connections,
+            elements=[problem.Resistor(a=n_a, b=n_b, resistance=1.0),
+                      problem.Resistor(a=n_b, b=n_c, resistance=1.0)],
+        )
+
+        indexer = solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+        assert indexer.node_to_global_index[n_a] == \
+            self.global_index_at(vindex, meshes, 0, 0.0, 0.0)
+        assert indexer.node_to_global_index[n_b] == \
+            self.global_index_at(vindex, meshes, 1, 3.0, 0.0)
+        assert indexer.node_to_global_index[n_c] == \
+            self.global_index_at(vindex, meshes, 2, 0.0, 0.0)
+        assert indexer.internal_node_count == 0
+
+    def test_index_layout_contract(self):
+        """
+        Internal nodes get contiguous indices starting right after the mesh
+        vertices, extra source variables follow after those, and
+        connection-bound nodes are never re-allocated as internal.
+        """
+        prob, meshes, m2l, vindex = self.make_fixture()
+
+        n_a, n_b = problem.NodeID(), problem.NodeID()
+        n_int1, n_int2 = problem.NodeID(), problem.NodeID()
+        connections = [
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=n_a),
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(3.0, 0.0), node_id=n_b),
+        ]
+        vsrc1 = problem.VoltageSource(p=n_int1, n=n_int2, voltage=1.0)
+        vsrc2 = problem.VoltageSource(p=n_int2, n=n_b, voltage=2.0)
+        network = problem.Network(
+            connections=connections,
+            elements=[problem.Resistor(a=n_a, b=n_int1, resistance=1.0),
+                      vsrc1, vsrc2],
+        )
+
+        indexer = solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+        vertex_count = len(vindex.global_index_to_vertex_index)
+        assert indexer.internal_node_count == 2
+
+        # Connection-bound nodes point into the vertex range, even though
+        # they also appear in network.nodes
+        assert indexer.node_to_global_index[n_a] < vertex_count
+        assert indexer.node_to_global_index[n_b] < vertex_count
+
+        # Internal nodes occupy the block right after the vertices
+        internal_indices = {indexer.node_to_global_index[n_int1],
+                            indexer.node_to_global_index[n_int2]}
+        assert internal_indices == {vertex_count, vertex_count + 1}
+
+        # Extra source variables occupy the block after the internal nodes
+        extra_indices = {indexer.extra_source_to_global_index[vsrc1],
+                         indexer.extra_source_to_global_index[vsrc2]}
+        assert extra_indices == {vertex_count + 2, vertex_count + 3}
+
+        # The resistor allocates no extra variable
+        assert len(indexer.extra_source_to_global_index) == 2
+
+    def test_duplicate_connection_same_vertex_is_allowed(self):
+        node = problem.NodeID()
+
+        def conns(prob):
+            return [
+                problem.Connection(layer=prob.layers[0],
+                                   point=shapely.geometry.Point(0.0, 0.0), node_id=node),
+                problem.Connection(layer=prob.layers[0],
+                                   point=shapely.geometry.Point(0.0, 0.0), node_id=node),
+            ]
+
+        prob, meshes, m2l, vindex = self.make_fixture()
+        network = problem.Network(connections=conns(prob), elements=[])
+        indexer = solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+        assert indexer.node_to_global_index[node] == \
+            self.global_index_at(vindex, meshes, 0, 0.0, 0.0)
+
+    def test_duplicate_connection_conflicting_vertices_raises(self):
+        prob, meshes, m2l, vindex = self.make_fixture()
+
+        node = problem.NodeID()
+        connections = [
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(0.0, 0.0), node_id=node),
+            problem.Connection(layer=prob.layers[0],
+                               point=shapely.geometry.Point(3.0, 0.0), node_id=node),
+        ]
+        network = problem.Network(connections=connections, elements=[])
+
+        with pytest.raises(ValueError):
+            solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
+    def test_multiple_extra_variables_not_implemented(self):
+        @dataclass(frozen=True)
+        class TwoExtraElement(problem.BaseLumped):
+            a: problem.NodeID
+            b: problem.NodeID
+
+            @property
+            def terminals(self):
+                return [self.a, self.b]
+
+            @property
+            def extra_variable_count(self):
+                return 2
+
+        prob, meshes, m2l, vindex = self.make_fixture()
+        network = problem.Network(
+            connections=[],
+            elements=[TwoExtraElement(a=problem.NodeID(), b=problem.NodeID())],
+        )
+
+        with pytest.raises(NotImplementedError):
+            solver.NodeIndexer.create(prob, meshes, m2l, vindex, [network])
+
 
 class TestComputePowerDensity:
 
@@ -969,6 +1297,134 @@ class TestComputePowerDensity:
         # Power density = J · E = 2 * 1 = 2.0
         for face in test_mesh.faces:
             assert power_density[face] == pytest.approx(2.0, abs=1e-6)
+
+    def test_power_density_multi_face_distinct_values(self):
+        """
+        Nonlinear voltage on a multi-triangle mesh: every face has a distinct
+        expected power density, so any face/value misalignment fails.
+        """
+        # Strip of 3 unit squares [0,3]x[0,1], each split into two triangles.
+        points = []
+        triangles = []
+        for k in range(3):
+            base = len(points)
+            points += [
+                mesh.Point(float(k), 0.0),
+                mesh.Point(float(k + 1), 0.0),
+                mesh.Point(float(k + 1), 1.0),
+                mesh.Point(float(k), 1.0),
+            ]
+            triangles += [(base, base + 1, base + 3), (base + 1, base + 2, base + 3)]
+        test_mesh = mesh.Mesh.from_triangle_soup(points, triangles)
+
+        # V(x,y) = x^2 + x*y, sampled at the vertices. The per-face linear
+        # interpolant has an axis-aligned unit leg in each direction, so its
+        # gradient is just the difference of vertex values along those legs:
+        #   lower triangle of square k: grad = (2k+1, k)
+        #   upper triangle of square k: grad = (2k+2, k+1)
+        voltage = mesh.ZeroForm(test_mesh)
+        for vertex in test_mesh.vertices:
+            voltage[vertex] = vertex.p.x ** 2 + vertex.p.x * vertex.p.y
+
+        conductivity = 1.5
+        power_density = solver.compute_power_density(voltage, conductivity)
+
+        seen = set()
+        for face in test_mesh.faces:
+            vertices = list(face.vertices)
+            cx = sum(v.p.x for v in vertices) / 3
+            cy = sum(v.p.y for v in vertices) / 3
+            k = math.floor(cx)
+            if cy < 0.5:  # Lower triangle (centroid at cy = 1/3)
+                grad = (2 * k + 1, k)
+            else:
+                grad = (2 * k + 2, k + 1)
+            expected = conductivity * (grad[0] ** 2 + grad[1] ** 2)
+            assert power_density[face] == pytest.approx(expected, rel=1e-9)
+            seen.add(expected)
+        # Sanity check on the test itself: all expected values are distinct
+        assert len(seen) == 6
+
+    @pytest.mark.parametrize("triangle", [
+        # Translated far from the origin
+        [mesh.Point(1000.0, 2000.0), mesh.Point(1001.0, 2000.0), mesh.Point(1000.0, 2001.0)],
+        # Small scale
+        [mesh.Point(0.0, 0.0), mesh.Point(0.01, 0.0), mesh.Point(0.0, 0.01)],
+        # Skewed, no axis-aligned edges
+        [mesh.Point(1.0, 1.0), mesh.Point(4.0, 2.0), mesh.Point(2.0, 5.0)],
+        # Obtuse
+        [mesh.Point(0.0, 0.0), mesh.Point(10.0, 0.0), mesh.Point(9.0, 0.5)],
+    ], ids=["translated", "small", "skewed", "obtuse"])
+    def test_power_density_irregular_geometry(self, triangle):
+        """
+        The gradient of a linear voltage is recovered exactly on any
+        non-degenerate triangle, independent of its position, scale or shape.
+        """
+        test_mesh = mesh.Mesh.from_triangle_soup(triangle, [(0, 1, 2)])
+
+        # V(x,y) = 2x + 3y + 7 -> grad = (2, 3), |grad|^2 = 13
+        voltage = mesh.ZeroForm(test_mesh)
+        for vertex in test_mesh.vertices:
+            voltage[vertex] = 2.0 * vertex.p.x + 3.0 * vertex.p.y + 7.0
+
+        conductivity = 1.5
+        power_density = solver.compute_power_density(voltage, conductivity)
+
+        for face in test_mesh.faces:
+            assert power_density[face] == pytest.approx(conductivity * 13.0, rel=1e-9)
+
+    def test_power_density_conserves_energy(self):
+        """
+        Total dissipated power equals the power delivered by the source.
+
+        The cotan Laplacian is the P1 FEM stiffness matrix and
+        compute_power_density uses the gradient of the same P1 interpolant,
+        so sum(sigma * |grad v|^2 * area) = v^T (sigma L) v = I * (v_t - v_f)
+        holds exactly in the discrete system, not just in the mesh-refinement
+        limit.
+        """
+        rect_width = 2.0
+        rect_height = 1.0
+        rectangle = shapely.geometry.Polygon([
+            (0, 0), (rect_width, 0), (rect_width, rect_height), (0, rect_height)
+        ])
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([rectangle]),
+            name="TestLayer",
+            conductance=1.5
+        )
+
+        conn_left = problem.Connection(
+            layer=layer, point=shapely.geometry.Point(0.0, rect_height / 2))
+        conn_right = problem.Connection(
+            layer=layer, point=shapely.geometry.Point(rect_width, rect_height / 2))
+        csource = problem.CurrentSource(
+            f=conn_left.node_id,
+            t=conn_right.node_id,
+            current=2.0
+        )
+        network = problem.Network(
+            connections=[conn_left, conn_right],
+            elements=[csource]
+        )
+        prob_synthetic = problem.Problem(layers=[layer], networks=[network])
+
+        solution = solver.solve(prob_synthetic)
+
+        total_power = 0.0
+        for layer_solution in solution.layer_solutions:
+            for power_density in layer_solution.power_densities:
+                for face in power_density.mesh.faces:
+                    total_power += power_density[face] * face.area
+
+        # The source drives its current into the t terminal, so it delivers
+        # I * (v_t - v_f) into the copper.
+        v_f = find_vertex_value(solution, conn_left)
+        v_t = find_vertex_value(solution, conn_right)
+        delivered_power = csource.current * (v_t - v_f)
+
+        assert delivered_power > 0.0
+        assert total_power == pytest.approx(delivered_power, rel=1e-6)
 
     def test_power_density_integration_with_layer_solution(self):
         """Test that power densities are correctly computed and stored in LayerSolution."""
@@ -1035,81 +1491,6 @@ class TestComputePowerDensity:
 
         # Total power should be positive since we have current flow
         assert total_power > 0.0
-
-
-class TestComputeTriangleGradient:
-
-    def test_constant_function(self):
-        """Test gradient of a constant function (should be zero)."""
-        # Create three vertices for a simple triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),
-            mesh.Vertex(mesh.Point(1.0, 0.0)),
-            mesh.Vertex(mesh.Point(0.0, 1.0))
-        ]
-
-        # Constant function value of 5.0 at all vertices
-        values = [5.0, 5.0, 5.0]
-
-        gradient = solver.compute_triangle_gradient(vertices, values)
-
-        # Gradient of constant function should be zero
-        assert gradient.dx == pytest.approx(0.0, abs=1e-10)
-        assert gradient.dy == pytest.approx(0.0, abs=1e-10)
-
-    def test_linear_function_x(self):
-        """Test gradient of f(x,y) = x (linear in x direction)."""
-        # Create vertices for unit right triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 1
-            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 0
-        ]
-
-        # Function values: f(x,y) = x
-        values = [0.0, 1.0, 0.0]
-
-        gradient = solver.compute_triangle_gradient(vertices, values)
-
-        # Gradient should be (1, 0) since ∂f/∂x = 1, ∂f/∂y = 0
-        assert gradient.dx == pytest.approx(1.0, abs=1e-10)
-        assert gradient.dy == pytest.approx(0.0, abs=1e-10)
-
-    def test_linear_function_y(self):
-        """Test gradient of f(x,y) = y (linear in y direction)."""
-        # Create vertices for unit right triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 1
-        ]
-
-        # Function values: f(x,y) = y
-        values = [0.0, 0.0, 1.0]
-
-        gradient = solver.compute_triangle_gradient(vertices, values)
-
-        # Gradient should be (0, 1) since ∂f/∂x = 0, ∂f/∂y = 1
-        assert gradient.dx == pytest.approx(0.0, abs=1e-10)
-        assert gradient.dy == pytest.approx(1.0, abs=1e-10)
-
-    def test_linear_function_xy(self):
-        """Test gradient of f(x,y) = x + y."""
-        # Create vertices for unit right triangle
-        vertices = [
-            mesh.Vertex(mesh.Point(0.0, 0.0)),  # f = 0
-            mesh.Vertex(mesh.Point(1.0, 0.0)),  # f = 1
-            mesh.Vertex(mesh.Point(0.0, 1.0))   # f = 1
-        ]
-
-        # Function values: f(x,y) = x + y
-        values = [0.0, 1.0, 1.0]
-
-        gradient = solver.compute_triangle_gradient(vertices, values)
-
-        # Gradient should be (1, 1) since ∂f/∂x = 1, ∂f/∂y = 1
-        assert gradient.dx == pytest.approx(1.0, abs=1e-10)
-        assert gradient.dy == pytest.approx(1.0, abs=1e-10)
 
 
 class TestSolverEndToEnd:
@@ -2078,6 +2459,25 @@ class TestSolutionPickling:
 
             # Check disconnected meshes
             assert len(unpick_ls.disconnected_meshes) == len(orig_ls.disconnected_meshes)
+
+    # tht_component drives several networks, which is what makes it sensitive
+    # to the node numbering; the other two add a regulator and a 4-layer stackup.
+    DETERMINISM_PROJECTS = ["ldo", "tht_component", "via_tht_4layer"]
+
+    @for_all_kicad_projects(include=DETERMINISM_PROJECTS)
+    def test_solve_pipeline_is_byte_reproducible(self, project):
+        """Two runs of load -> solve -> save must produce identical files."""
+        first = pickle.dumps(solver.solve(kicad.load_kicad_project(project.pro_path)))
+        second = pickle.dumps(solver.solve(kicad.load_kicad_project(project.pro_path)))
+
+        assert first == second
+
+    @for_all_kicad_projects(include=DETERMINISM_PROJECTS)
+    def test_pickled_solution_survives_a_round_trip_unchanged(self, project):
+        """save -> load -> save must reproduce the saved file byte for byte."""
+        saved = pickle.dumps(solver.solve(kicad.load_kicad_project(project.pro_path)))
+
+        assert pickle.dumps(pickle.loads(saved)) == saved
 
 
 @for_all_kicad_projects(exclude=["unterminated_current_loop", "nested_schematic_twoinstances"])

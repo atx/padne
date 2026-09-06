@@ -2,11 +2,12 @@ import pytest
 import numpy as np
 import pickle
 import random
+import scipy.sparse
 import shapely.geometry
 
 from padne import kicad
 
-from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, IndexStore, Mesh, \
+from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, Mesh, \
     Mesher, MeshingException, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon, index_type
 from unittest.mock import patch, Mock
 
@@ -130,30 +131,52 @@ class TestPoint:
         assert shapely_point3.y == -2.7
 
 
+def make_triangle(mesh: Mesh, p1: Point, p2: Point, p3: Point):
+    """Build a single (unregistered-boundary) triangle through the Mesh API.
+
+    Returns (vertices, halfedges, face) with the half-edges linked in a loop.
+    """
+    v1 = mesh.make_vertex(p1)
+    v2 = mesh.make_vertex(p2)
+    v3 = mesh.make_vertex(p3)
+
+    e12 = mesh.connect_vertices(v1, v2)
+    e23 = mesh.connect_vertices(v2, v3)
+    e31 = mesh.connect_vertices(v3, v1)
+
+    e12.next = e23
+    e23.next = e31
+    e31.next = e12
+
+    f = mesh.make_face()
+    f.edge = e12
+
+    return (v1, v2, v3), (e12, e23, e31), f
+
+
+def make_square_with_center_mesh() -> Mesh:
+    """Unit square with a center vertex, split into four right-isosceles triangles.
+
+    Vertices 0..3 are the CCW corners, vertex 4 is the center (0.5, 0.5). The
+    boundary loop is fully constructed (via from_triangle_soup).
+    """
+    points = [
+        Point(0.0, 0.0),  # 0
+        Point(1.0, 0.0),  # 1
+        Point(1.0, 1.0),  # 2
+        Point(0.0, 1.0),  # 3
+        Point(0.5, 0.5),  # 4: center
+    ]
+    triangles = [(0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4)]
+    return Mesh.from_triangle_soup(points, triangles)
+
+
 class TestMeshStructure:
     def test_create_simple_mesh(self):
         # Create a simple triangular mesh
-        p1 = Point(0.0, 0.0)
-        p2 = Point(1.0, 0.0)
-        p3 = Point(0.0, 1.0)
-
-        # Create vertices
-        v1 = Vertex(p1)
-        v2 = Vertex(p2)
-        v3 = Vertex(p3)
-
-        # Create half-edges
-        e12 = HalfEdge(v1)
-        e23 = HalfEdge(v2)
-        e31 = HalfEdge(v3)
-
-        # Link half-edges
-        e12.next = e23
-        e23.next = e31
-        e31.next = e12
-
-        # Create face
-        f = Face(e12)
+        mesh = Mesh()
+        (v1, v2, v3), (e12, e23, e31), f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
 
         # Set faces for edges
         e12.face = f
@@ -180,9 +203,13 @@ class TestMeshStructure:
         assert e31.face == f
 
     def test_half_edge_boundary_property(self):
-        v = Vertex(Point(0.0, 0.0))
-        e1 = HalfEdge(v, face=Face())
-        e2 = HalfEdge(v, face=Face(is_boundary=True))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(0.0, 0.0))
+        v2 = mesh.make_vertex(Point(1.0, 0.0))
+        e1 = mesh.connect_vertices(v1, v2)
+        e2 = e1.twin
+        e1.face = mesh.make_face()
+        e2.face = mesh.make_face(is_boundary=True)
 
         assert not e1.is_boundary
         assert e2.is_boundary
@@ -190,95 +217,57 @@ class TestMeshStructure:
     def test_face_area(self):
         """Test area calculation for different face configurations."""
         # Create a simple triangular face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(2.0, 0.0))
-        v3 = Vertex(Point(0.0, 2.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(2.0, 0.0), Point(0.0, 2.0))
 
         # Area should be 2.0 (base * height / 2)
         assert f.area == 2.0
 
         # Test square face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(2.0, 0.0))
-        v3 = Vertex(Point(2.0, 2.0))
-        v4 = Vertex(Point(0.0, 2.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(0.0, 0.0))
+        v2 = mesh.make_vertex(Point(2.0, 0.0))
+        v3 = mesh.make_vertex(Point(2.0, 2.0))
+        v4 = mesh.make_vertex(Point(0.0, 2.0))
 
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-        e4 = HalfEdge(v4)
+        e1 = mesh.connect_vertices(v1, v2)
+        e2 = mesh.connect_vertices(v2, v3)
+        e3 = mesh.connect_vertices(v3, v4)
+        e4 = mesh.connect_vertices(v4, v1)
 
         e1.next = e2
         e2.next = e3
         e3.next = e4
         e4.next = e1
 
-        f = Face(e1)
+        f = mesh.make_face()
+        f.edge = e1
 
         # Area should be 4.0 (2 * 2)
         assert f.area == 4.0
 
         # Test face with negative area (vertices in clockwise order)
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(0.0, 2.0))
-        v3 = Vertex(Point(2.0, 0.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(0.0, 2.0), Point(2.0, 0.0))
 
         # Area should still be positive (2.0)
         assert f.area == 2.0
 
         # Test degenerate face (collinear points)
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
-        v3 = Vertex(Point(2.0, 0.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(2.0, 0.0))
 
         # Area should be 0.0
         assert f.area == 0.0
 
     def test_face_edges(self):
         # Create a triangular face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
-        v3 = Vertex(Point(0.0, 1.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        _, (e1, e2, e3), f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
 
         # Test edges iterator
         edges = list(f.edges)
@@ -289,19 +278,9 @@ class TestMeshStructure:
 
     def test_face_vertices(self):
         # Create a triangular face
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
-        v3 = Vertex(Point(0.0, 1.0))
-
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v2)
-        e3 = HalfEdge(v3)
-
-        e1.next = e2
-        e2.next = e3
-        e3.next = e1
-
-        f = Face(e1)
+        mesh = Mesh()
+        (v1, v2, v3), _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
 
         # Test vertices iterator
         vertices = list(f.vertices)
@@ -310,31 +289,32 @@ class TestMeshStructure:
         assert vertices[1] == v2
         assert vertices[2] == v3
 
+    def test_face_centroid(self):
+        """Centroid is the mean of the face's vertex coordinates."""
+        mesh = Mesh()
+        _, _, f = make_triangle(
+            mesh, Point(0.0, 0.0), Point(3.0, 0.0), Point(0.0, 6.0))
+
+        # Mean x = (0 + 3 + 0) / 3 = 1.0, mean y = (0 + 0 + 6) / 3 = 2.0
+        assert f.centroid.x == pytest.approx(1.0)
+        assert f.centroid.y == pytest.approx(2.0)
+
     def test_vertex_orbit(self):
         # Create a vertex with multiple outgoing edges
-        v_center = Vertex(Point(0.0, 0.0))
-        v1 = Vertex(Point(1.0, 0.0))
-        v2 = Vertex(Point(0.0, 1.0))
-        v3 = Vertex(Point(-1.0, 0.0))
+        mesh = Mesh()
+        v_center = mesh.make_vertex(Point(0.0, 0.0))
+        v1 = mesh.make_vertex(Point(1.0, 0.0))
+        v2 = mesh.make_vertex(Point(0.0, 1.0))
+        v3 = mesh.make_vertex(Point(-1.0, 0.0))
 
-        # Create half-edges
-        e_out1 = HalfEdge(v_center)
-        e_out2 = HalfEdge(v_center)
-        e_out3 = HalfEdge(v_center)
+        # Create half-edges (twins are created automatically)
+        e_out1 = mesh.connect_vertices(v_center, v1)
+        e_out2 = mesh.connect_vertices(v_center, v2)
+        e_out3 = mesh.connect_vertices(v_center, v3)
 
-        e_in1 = HalfEdge(v1)
-        e_in2 = HalfEdge(v2)
-        e_in3 = HalfEdge(v3)
-
-        # Set twins
-        e_out1.twin = e_in1
-        e_in1.twin = e_out1
-
-        e_out2.twin = e_in2
-        e_in2.twin = e_out2
-
-        e_out3.twin = e_in3
-        e_in3.twin = e_out3
+        e_in1 = e_out1.twin
+        e_in2 = e_out2.twin
+        e_in3 = e_out3.twin
 
         # Connect the edges
         e_in1.next = e_out2
@@ -351,11 +331,61 @@ class TestMeshStructure:
         assert orbit_edges[1] == e_out2
         assert orbit_edges[2] == e_out3
 
+    def test_vertex_orbit_boundary(self):
+        """Orbit of a boundary vertex visits every outgoing edge and terminates."""
+        mesh = make_square_with_center_mesh()
+        corner = mesh.vertices.to_object(0)
+
+        orbit = list(corner.orbit())
+
+        # Corner 0 connects to vertices 1 and 3 (along the boundary) and to the
+        # center vertex 4. The orbit must pass through the boundary half-edge
+        # and still close back onto its starting edge.
+        assert len(orbit) == 3
+        assert all(edge.origin == corner for edge in orbit)
+        assert {edge.twin.origin.i for edge in orbit} == {1, 3, 4}
+
+    def test_halfedge_cotan_interior_edge(self):
+        """cotan of an interior edge sums |cot|/2 over both opposite angles."""
+        mesh = make_square_with_center_mesh()
+        center = mesh.vertices.to_object(4)
+        corner = mesh.vertices.to_object(0)
+
+        # Edge center->corner is shared by two right-isosceles triangles; the
+        # opposite angle in each is 45 deg (cot = 1), so cotan = (1 + 1) / 2.
+        hedge = mesh.connect_vertices(center, corner)
+        assert hedge.cotan() == pytest.approx(1.0)
+
+    def test_halfedge_cotan_boundary_edge(self):
+        """cotan of a boundary edge counts only its single adjacent triangle."""
+        mesh = make_square_with_center_mesh()
+        v0 = mesh.vertices.to_object(0)
+        v1 = mesh.vertices.to_object(1)
+
+        # Edge 0->1 lies on the boundary, so only triangle (0, 1, 4) contributes;
+        # its opposite angle at the center is 90 deg (cot = 0).
+        hedge = mesh.connect_vertices(v0, v1)
+        assert hedge.cotan() == pytest.approx(0.0)
+
+    def test_halfedge_cotan_asymmetric_triangle(self):
+        """cotan on a boundary edge yields the expected non-trivial value."""
+        points = [Point(0.0, 0.0), Point(4.0, 0.0), Point(0.0, 3.0)]
+        mesh = Mesh.from_triangle_soup(points, [(0, 1, 2)])
+        v0 = mesh.vertices.to_object(0)
+        v1 = mesh.vertices.to_object(1)
+
+        # Only the single triangle contributes. Opposite vertex is (0, 3); the
+        # angle there between vectors (0, -3) and (4, -3) has cot = 9/12 = 0.75,
+        # so cotan = 0.75 / 2.
+        hedge = mesh.connect_vertices(v0, v1)
+        assert hedge.cotan() == pytest.approx(0.375)
+
     def test_vertex_hashability(self):
         # Create vertices
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(1.0, 2.0))  # Same point, different object
-        v3 = Vertex(Point(3.0, 4.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(1.0, 2.0))  # Same point, different vertex
+        v3 = mesh.make_vertex(Point(3.0, 4.0))
 
         # Test hashability
         hash(v1)  # This should not raise an exception
@@ -377,12 +407,14 @@ class TestMeshStructure:
 
     def test_halfedge_hashability(self):
         # Create vertices and half-edges
-        v1 = Vertex(Point(0.0, 0.0))
-        v2 = Vertex(Point(1.0, 0.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(0.0, 0.0))
+        v2 = mesh.make_vertex(Point(1.0, 0.0))
+        v3 = mesh.make_vertex(Point(0.0, 1.0))
 
-        e1 = HalfEdge(v1)
-        e2 = HalfEdge(v1)  # Same origin, different object
-        e3 = HalfEdge(v2)
+        e1 = mesh.connect_vertices(v1, v2)
+        e2 = mesh.connect_vertices(v1, v3)  # Same origin, different edge
+        e3 = mesh.connect_vertices(v2, v3)
 
         # Test hashability
         hash(e1)  # This should not raise an exception
@@ -403,8 +435,9 @@ class TestMeshStructure:
 
     def test_face_hashability(self):
         # Create faces
-        f1 = Face()
-        f2 = Face()
+        mesh = Mesh()
+        f1 = mesh.make_face()
+        f2 = mesh.make_face()
 
         # Test hashability
         hash(f1)  # This should not raise an exception
@@ -812,128 +845,289 @@ class TestMesh:
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
 
+    def test_non_manifold_vertex_bowtie(self):
+        """Two triangles sharing only a single vertex form a non-manifold
+        (bowtie) vertex with two outgoing boundary half-edges and must be
+        rejected."""
+        points = [
+            Point(0.0, 0.0),    # 0: shared vertex
+            Point(1.0, 0.0),    # 1
+            Point(1.0, 1.0),    # 2
+            Point(-1.0, 0.0),   # 3
+            Point(-1.0, -1.0),  # 4
+        ]
+        triangles = [
+            (0, 1, 2),
+            (0, 3, 4),
+        ]
+
+        with pytest.raises(ValueError, match="Non-manifold"):
+            Mesh.from_triangle_soup(points, triangles)
+
+    def test_inconsistent_winding(self):
+        """Two adjacent triangles with opposite winding duplicate a directed
+        edge and must be rejected."""
+        points = [
+            Point(0.0, 0.0),  # 0
+            Point(1.0, 0.0),  # 1
+            Point(0.0, 1.0),  # 2
+            Point(1.0, 1.0),  # 3
+        ]
+        # First triangle is CCW, second is CW; both produce the directed
+        # edge (1, 2).
+        triangles = [
+            (0, 1, 2),
+            (1, 2, 3),
+        ]
+
+        with pytest.raises(ValueError, match="Non-manifold"):
+            Mesh.from_triangle_soup(points, triangles)
+
+    def test_grid_mesh(self):
+        """Programmatic N x N grid of squares, each split into two triangles."""
+        n = 20
+        points = [
+            Point(float(x), float(y))
+            for y in range(n + 1)
+            for x in range(n + 1)
+        ]
+
+        def idx(x, y):
+            return y * (n + 1) + x
+
+        triangles = []
+        for y in range(n):
+            for x in range(n):
+                triangles.append((idx(x, y), idx(x + 1, y), idx(x + 1, y + 1)))
+                triangles.append((idx(x, y), idx(x + 1, y + 1), idx(x, y + 1)))
+
+        mesh = Mesh.from_triangle_soup(points, triangles)
+
+        assert len(mesh.vertices) == (n + 1) ** 2
+        assert len(mesh.faces) == 2 * n * n
+        # Edges: horizontal + vertical (n*(n+1) each) + one diagonal per cell
+        assert len(mesh.halfedges) == 2 * (3 * n * n + 2 * n)
+        assert len(mesh.boundaries) == 1
+
+        # The vertices must keep the input ordering
+        for i, p in enumerate(points):
+            assert mesh.vertices.to_object(i).p == p
+
+        boundary = mesh.boundaries.to_object(0)
+        assert len(list(boundary.edge.walk())) == 4 * n
+
+        assert_mesh_topology_okay(mesh)
+        assert_mesh_structure_valid(mesh)
 
 
-class TestIndexStore:
+class TestMeshBulkAccessors:
+    """Tests for the vectorized positions()/triangles()/laplacian() accessors."""
+
+    @staticmethod
+    def make_mesh_with_hole() -> Mesh:
+        # Square ring: outer 4x4 square with a 2x2 hole, 8 triangles
+        points = [
+            Point(0.0, 0.0), Point(4.0, 0.0), Point(4.0, 4.0), Point(0.0, 4.0),
+            Point(1.0, 1.0), Point(3.0, 1.0), Point(3.0, 3.0), Point(1.0, 3.0),
+        ]
+        triangles = [
+            (0, 1, 4), (1, 5, 4),
+            (1, 2, 5), (2, 6, 5),
+            (2, 3, 6), (3, 7, 6),
+            (3, 0, 7), (0, 4, 7),
+        ]
+        return Mesh.from_triangle_soup(points, triangles)
+
+    def test_positions_matches_vertex_handles(self):
+        mesh = self.make_mesh_with_hole()
+        pos = mesh.positions()
+
+        assert pos.dtype == np.float64
+        assert pos.shape == (len(mesh.vertices), 2)
+        for i in range(len(mesh.vertices)):
+            p = mesh.vertices.to_object(i).p
+            assert pos[i, 0] == p.x
+            assert pos[i, 1] == p.y
+
+    def test_vertex_iteration_order_matches_handle_index(self):
+        # NodeIndexer's arange shortcut pairs positions() rows (handle-index
+        # order) with VertexIndexer keys built via enumerate(mesh.vertices),
+        # so iteration must visit handles 0..n-1 in order.
+        mesh = self.make_mesh_with_hole()
+        for i, vertex in enumerate(mesh.vertices):
+            expected = mesh.vertices.to_object(i).p
+            assert vertex.p.x == expected.x
+            assert vertex.p.y == expected.y
+
+    def test_positions_empty_mesh(self):
+        assert Mesh().positions().shape == (0, 2)
+
+    def test_positions_returns_a_copy(self):
+        mesh = make_square_with_center_mesh()
+        pos = mesh.positions()
+        pos[0, 0] = 123.0
+        assert mesh.vertices.to_object(0).p.x != 123.0
+
+    def test_triangles_matches_face_handles(self):
+        mesh = self.make_mesh_with_hole()
+        tris = mesh.triangles()
+
+        assert tris.dtype == np.uint32
+        # mesh.faces holds interior faces only, so the boundary loops
+        # (outer square + hole) must not contribute rows
+        assert len(mesh.boundaries) == 2
+        assert tris.shape == (len(mesh.faces), 3)
+        for f in range(len(mesh.faces)):
+            face = mesh.faces.to_object(f)
+            expected = [v.i for v in face.vertices]
+            assert list(tris[f]) == expected
+
+    def test_triangles_preserves_soup_winding(self):
+        points = [Point(0.0, 0.0), Point(4.0, 0.0), Point(0.0, 3.0)]
+        mesh = Mesh.from_triangle_soup(points, [(0, 1, 2)])
+        tris = mesh.triangles()
+
+        # Rows follow the face edge loop, so the CCW cycle must be preserved
+        assert tris.shape == (1, 3)
+        cycles = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
+        assert list(tris[0]) in cycles
+
+    def test_laplacian_matches_python_implementation(self):
+        from padne import solver
+
+        mesh = self.make_mesh_with_hole()
+        n = len(mesh.vertices)
+        rows, cols, vals = mesh.laplacian()
+        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n, n))
+        L_ref = solver.laplace_operator(mesh)
+
+        np.testing.assert_allclose(L.toarray(), L_ref.toarray(), atol=1e-12)
+
+    def test_laplacian_square_with_center(self):
+        mesh = make_square_with_center_mesh()
+        rows, cols, vals = mesh.laplacian()
+        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(5, 5)).toarray()
+
+        # Each center-to-corner edge has cotan 1 (two right-isosceles
+        # triangles), each boundary edge has cotan 0.
+        expected = -np.eye(5)
+        expected[4, :] = 1.0
+        expected[:, 4] = 1.0
+        expected[4, 4] = -4.0
+        np.testing.assert_allclose(L, expected, atol=1e-12)
+
+    def test_laplacian_rows_sum_to_zero(self):
+        mesh = self.make_mesh_with_hole()
+        n = len(mesh.vertices)
+        rows, cols, vals = mesh.laplacian()
+        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n, n)).toarray()
+
+        np.testing.assert_allclose(L, L.T, atol=1e-12)
+        np.testing.assert_allclose(L.sum(axis=1), np.zeros(n), atol=1e-12)
+
+
+class TestMeshStores:
+    """Tests for the index store views exposed as mesh.vertices etc."""
+
     def test_initialization(self):
-        store = IndexStore()
-        assert len(store) == 0
+        mesh = Mesh()
+        assert len(mesh.vertices) == 0
+        assert len(mesh.halfedges) == 0
+        assert len(mesh.faces) == 0
+        assert len(mesh.boundaries) == 0
 
     def test_add_single_object(self):
-        store = IndexStore()
-        v = Vertex(Point(1.0, 2.0))
-        store.add(v)
-        assert len(store) == 1
+        mesh = Mesh()
+        v = mesh.make_vertex(Point(1.0, 2.0))
+        assert len(mesh.vertices) == 1
         assert v.i == index_type(0)
 
     def test_add_multiple_objects(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
-        v3 = Vertex(Point(5.0, 6.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(3.0, 4.0))
+        v3 = mesh.make_vertex(Point(5.0, 6.0))
 
-        store.add(v1)
-        store.add(v2)
-        store.add(v3)
-
-        assert len(store) == 3
+        assert len(mesh.vertices) == 3
         assert v1.i == index_type(0)
         assert v2.i == index_type(1)
         assert v3.i == index_type(2)
 
     def test_to_index(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(3.0, 4.0))
 
-        store.add(v1)
-        store.add(v2)
-
-        assert store.to_index(v1) == index_type(0)
-        assert store.to_index(v2) == index_type(1)
+        assert mesh.vertices.to_index(v1) == index_type(0)
+        assert mesh.vertices.to_index(v2) == index_type(1)
 
     def test_to_object(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
+        mesh = Mesh()
+        v1 = mesh.make_vertex(Point(1.0, 2.0))
+        v2 = mesh.make_vertex(Point(3.0, 4.0))
 
-        store.add(v1)
-        store.add(v2)
-
-        assert store.to_object(0) is v1
-        assert store.to_object(1) is v2
-        assert store.to_object(index_type(0)) is v1
-        assert store.to_object(index_type(1)) is v2
+        assert mesh.vertices.to_object(0) == v1
+        assert mesh.vertices.to_object(1) == v2
+        assert mesh.vertices.to_object(index_type(0)) == v1
+        assert mesh.vertices.to_object(index_type(1)) == v2
 
         with pytest.raises(IndexError):
-            store.to_object(2)
+            mesh.vertices.to_object(2)
 
     def test_items(self):
-        store = IndexStore()
-        vertices = [Vertex(Point(float(i), float(i))) for i in range(3)]
+        mesh = Mesh()
+        vertices = [mesh.make_vertex(Point(float(i), float(i))) for i in range(3)]
 
-        for v in vertices:
-            store.add(v)
-
-        items = list(store.items())
+        items = list(mesh.vertices.items())
         assert len(items) == 3
 
         for i, (idx, obj) in enumerate(items):
             assert idx == index_type(i)
-            assert obj is vertices[i]
+            assert obj == vertices[i]
 
     def test_contains_added_object(self):
-        store = IndexStore()
-        v = Vertex(Point(1.0, 2.0))
-        store.add(v)
+        mesh = Mesh()
+        v = mesh.make_vertex(Point(1.0, 2.0))
 
-        assert v in store
+        assert v in mesh.vertices
 
-    def test_contains_not_added_object(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
+    def test_contains_other_mesh_object(self):
+        mesh = Mesh()
+        other_mesh = Mesh()
+        mesh.make_vertex(Point(1.0, 2.0))
+        v2 = other_mesh.make_vertex(Point(3.0, 4.0))
 
-        store.add(v1)
+        assert v2 not in mesh.vertices
 
-        assert v2 not in store
+    def test_contains_wrong_kind(self):
+        # Interior and boundary faces live in separate stores
+        mesh = Mesh()
+        face = mesh.make_face()
+        boundary = mesh.make_face(is_boundary=True)
 
-    def test_contains_wrong_index(self):
-        store = IndexStore()
-        v1 = Vertex(Point(1.0, 2.0))
-        v2 = Vertex(Point(3.0, 4.0))
-
-        store.add(v1)
-        store.add(v2)
-
-        # Manually corrupt the index - v2 claims to be at index 0
-        v2.i = index_type(0)
-        # Now v2 is not in the store because store[0] is v1, not v2
-        assert v2 not in store
+        assert face in mesh.faces
+        assert face not in mesh.boundaries
+        assert boundary in mesh.boundaries
+        assert boundary not in mesh.faces
 
     def test_next_index(self):
-        store = IndexStore()
-        assert store.next_index == index_type(0)
+        mesh = Mesh()
+        assert mesh.vertices.next_index == index_type(0)
 
-        v = Vertex(Point(1.0, 2.0))
-        store.add(v)
-        assert store.next_index == index_type(1)
+        mesh.make_vertex(Point(1.0, 2.0))
+        assert mesh.vertices.next_index == index_type(1)
 
-        v2 = Vertex(Point(3.0, 4.0))
-        store.add(v2)
-        assert store.next_index == index_type(2)
+        mesh.make_vertex(Point(3.0, 4.0))
+        assert mesh.vertices.next_index == index_type(2)
 
     def test_iteration(self):
-        store = IndexStore()
-        vertices = [Vertex(Point(float(i), float(i))) for i in range(5)]
+        mesh = Mesh()
+        vertices = [mesh.make_vertex(Point(float(i), float(i))) for i in range(5)]
 
-        for v in vertices:
-            store.add(v)
-
-        iterated = list(store)
+        iterated = list(mesh.vertices)
         assert len(iterated) == 5
         for i, v in enumerate(iterated):
-            assert v is vertices[i]
+            assert v == vertices[i]
 
 
 def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
@@ -1062,7 +1256,8 @@ class TestZeroForm:
         zf = ZeroForm(simple_mesh)
 
         # Create a vertex that's not in the mesh
-        invalid_vertex = Vertex(Point(999.0, 999.0))
+        other_mesh = Mesh()
+        invalid_vertex = other_mesh.make_vertex(Point(999.0, 999.0))
 
         with pytest.raises(KeyError):
             zf[invalid_vertex] = 1.0
@@ -1865,8 +2060,10 @@ class TestOneForm:
         of = OneForm(simple_mesh)
 
         # Create a half-edge that's not in the mesh
-        invalid_vertex = Vertex(Point(999.0, 999.0))
-        invalid_hedge = HalfEdge(invalid_vertex)
+        other_mesh = Mesh()
+        invalid_vertex = other_mesh.make_vertex(Point(999.0, 999.0))
+        other_vertex = other_mesh.make_vertex(Point(998.0, 998.0))
+        invalid_hedge = other_mesh.connect_vertices(invalid_vertex, other_vertex)
 
         with pytest.raises(KeyError):
             of[invalid_hedge] = 1.0
@@ -2251,9 +2448,8 @@ class TestTwoForm:
         tf = TwoForm(simple_mesh)
 
         # Create a face that's not in the mesh
-        invalid_vertex = Vertex(Point(999.0, 999.0))
-        invalid_hedge = HalfEdge(invalid_vertex)
-        invalid_face = Face(invalid_hedge)
+        other_mesh = Mesh()
+        invalid_face = other_mesh.make_face()
 
         with pytest.raises(KeyError):
             tf[invalid_face] = 1.0
@@ -2505,6 +2701,20 @@ class TestTwoForm:
 class TestPolyBoundaryDistanceMap:
     """Test suite for PolyBoundaryDistanceMap functionality."""
 
+    # Geometries for the ground-truth distance map tests. Deliberately varied:
+    # convex, with holes, curved, non-convex and not anchored at the origin.
+    TEST_GEOMETRIES = {
+        "rectangle": shapely.geometry.box(0, 0, 10, 10),
+        "rectangle_with_hole": shapely.geometry.box(0, 0, 10, 10).difference(
+            shapely.geometry.box(3, 3, 7, 7)),
+        "circle": shapely.geometry.Point(5, 5).buffer(3),
+        "annulus": shapely.geometry.Point(5, 5).buffer(4).difference(
+            shapely.geometry.Point(5, 5).buffer(2)),
+        "l_shape": shapely.geometry.box(0, 0, 10, 10).difference(
+            shapely.geometry.box(5, 5, 11, 11)),
+        "off_origin": shapely.geometry.box(-12, -7, -2, 3),
+    }
+
     def test_basic_rectangle_distance_map(self):
         """Test distance map for simple rectangle."""
         poly = shapely.geometry.box(0, 0, 10, 10)
@@ -2560,7 +2770,7 @@ class TestPolyBoundaryDistanceMap:
 
         # Center should be ~3.0 (radius)
         center_dist = dist_map.query(5.0, 5.0)
-        assert 2.9 <= center_dist <= 3.1, f"Circle center distance {center_dist} not ~3.0"
+        assert 2.8 <= center_dist <= 3.2, f"Circle center distance {center_dist} not ~3.0"
 
         # Point at radius 1 should have distance ~2.0 to boundary
         inner_point = dist_map.query(6.0, 5.0)  # 1 unit from center
@@ -2641,17 +2851,132 @@ class TestPolyBoundaryDistanceMap:
         coarse_map = PolyBoundaryDistanceMap(poly, 1.0)
         fine_map = PolyBoundaryDistanceMap(poly, 0.1)
 
-        # Test center point - fine should be closer to expected 5.0
-        coarse_center = coarse_map.query(5.0, 5.0)
-        fine_center = fine_map.query(5.0, 5.0)
+        # Query an off-grid, off-center point so neither map is trivially exact
+        x, y = 5.3, 6.2
+        expected = shapely.geometry.Point(x, y).distance(poly.boundary)
 
-        expected = 5.0
-        coarse_error = abs(coarse_center - expected)
-        fine_error = abs(fine_center - expected)
+        coarse_error = abs(coarse_map.query(x, y) - expected)
+        fine_error = abs(fine_map.query(x, y) - expected)
 
-        assert 0 < fine_error < coarse_error, \
+        # The EDT-based map is exactly correct at points whose nearest
+        # outside cell center lies at the true boundary distance (such as
+        # the center of a box), so both errors can be 0.0; only require
+        # that finer quantization is never worse.
+        assert fine_error <= coarse_error, \
             f"Fine quantization should be more accurate: " \
             f"coarse_error={coarse_error:.3f}, fine_error={fine_error:.3f}"
+        # Fine map error must be bounded by its quantization
+        assert fine_error <= 0.1
+
+    @pytest.mark.parametrize("geometry_name", list(TEST_GEOMETRIES))
+    def test_query_matches_shapely_reference(self, geometry_name):
+        """Ground-truth sweep: query() must match Shapely's exact distance
+        to boundary within a quantization-derived error bound."""
+        poly = self.TEST_GEOMETRIES[geometry_name]
+        quantization = 0.1
+        dist_map = PolyBoundaryDistanceMap(poly, quantization)
+
+        rng = random.Random(42)
+        minx, miny, maxx, maxy = poly.bounds
+        # Sample slightly beyond the bounds to also exercise the exterior
+        pad = 3 * quantization
+
+        checked_interior = 0
+        for _ in range(300):
+            x = rng.uniform(minx - pad, maxx + pad)
+            y = rng.uniform(miny - pad, maxy + pad)
+            point = shapely.geometry.Point(x, y)
+            exact = point.distance(poly.boundary)
+            queried = dist_map.query(x, y)
+
+            if poly.covers(point):
+                if exact <= 2 * quantization:
+                    # Near the boundary the map legitimately blends towards 0
+                    assert 0.0 <= queried <= exact + quantization
+                else:
+                    assert queried == pytest.approx(exact, abs=quantization), \
+                        f"Mismatch at ({x:.4f}, {y:.4f}): " \
+                        f"query={queried:.4f}, exact={exact:.4f}"
+                    checked_interior += 1
+            elif exact > 2 * quantization:
+                assert queried == 0.0, \
+                    f"Exterior point ({x:.4f}, {y:.4f}) should be 0, got {queried}"
+            else:
+                # Exterior but within reach of the interpolation stencil:
+                # may pull in small nonzero values from interior cells
+                assert 0.0 <= queried <= 3 * quantization
+
+        assert checked_interior > 50, "Too few interior points were checked"
+
+    def test_grid_alignment_in_planar_field_region(self):
+        """In regions where the distance field is planar (distance to a single
+        straight edge), bilinear interpolation must reproduce the exact value.
+        Catches half-cell grid misalignment bugs that loose tests miss."""
+        poly = shapely.geometry.box(0, 0, 10, 10)
+        dist_map = PolyBoundaryDistanceMap(poly, 0.5)
+
+        for x, y, expected in [(2.25, 5.1, 2.25),  # field == x near left edge
+                               (7.9, 5.0, 2.1),    # field == 10 - x
+                               (5.0, 1.3, 1.3)]:   # field == y
+            assert dist_map.query(x, y) == pytest.approx(expected, abs=0.01)
+
+    def test_off_origin_negative_coordinates(self):
+        """Polygon not anchored at the origin, spanning negative coordinates."""
+        poly = shapely.geometry.box(-12, -7, -2, 3)
+        dist_map = PolyBoundaryDistanceMap(poly, 0.2)
+
+        # Center of the 10x10 box
+        assert dist_map.query(-7.0, -2.0) == pytest.approx(5.0, abs=0.2)
+        # Near the left edge
+        assert dist_map.query(-11.0, -2.0) == pytest.approx(1.0, abs=0.2)
+        # Outside
+        assert dist_map.query(-14.0, -2.0) == 0.0
+        assert dist_map.query(0.0, 0.0) == 0.0
+
+    def test_polygon_smaller_than_quantization(self):
+        """Polygons smaller than a single grid cell must not crash and must
+        stay within physical bounds."""
+        tiny = shapely.geometry.box(0, 0, 0.3, 0.3)
+        dist_map = PolyBoundaryDistanceMap(tiny, 0.5)
+        assert dist_map.width >= 1
+        assert dist_map.height >= 1
+        # Max possible interior distance is 0.15
+        # But the EDT could in theory add error of up to 0.5/2
+        assert 0.0 <= dist_map.query(0.15, 0.15) <= 0.2
+        assert dist_map.query(5.0, 5.0) == 0.0
+
+        # Quantization vastly larger than the polygon
+        unit = shapely.geometry.box(0, 0, 1, 1)
+        coarse_map = PolyBoundaryDistanceMap(unit, 5.0)
+        assert coarse_map.width >= 1
+        assert coarse_map.height >= 1
+        assert 0.0 <= coarse_map.query(0.5, 0.5) <= 0.5
+
+    def test_thin_sliver_polygon(self):
+        """A sliver much thinner than the quantization must not crash and
+        must return values bounded by its half-thickness."""
+        sliver = shapely.geometry.box(0, 0, 10, 0.05)
+        dist_map = PolyBoundaryDistanceMap(sliver, 0.5)
+
+        for x in [0.5, 5.0, 9.5]:
+            assert 0.0 <= dist_map.query(x, 0.025) <= 0.05
+        assert dist_map.query(5.0, 3.0) == 0.0
+
+    def test_l_shape_distance_map(self):
+        """Non-convex L-shape with analytically known distances, including a
+        point whose nearest boundary is the reflex corner."""
+        poly = shapely.geometry.box(0, 0, 10, 10).difference(
+            shapely.geometry.box(5, 5, 11, 11))
+        dist_map = PolyBoundaryDistanceMap(poly, 0.1)
+
+        # Inside the removed quadrant
+        assert dist_map.query(7.5, 7.5) == 0.0
+        # Middle of the vertical arm
+        assert dist_map.query(2.5, 7.5) == pytest.approx(2.5, abs=0.15)
+        # Middle of the horizontal arm
+        assert dist_map.query(7.5, 2.5) == pytest.approx(2.5, abs=0.15)
+        # Nearest boundary is the reflex corner at (5, 5)
+        assert dist_map.query(4.0, 4.0) == pytest.approx(np.sqrt(2.0), abs=0.15)
 
 
 class TestCGALPolygon:

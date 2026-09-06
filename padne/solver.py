@@ -13,7 +13,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import problem, mesh
+from . import problem, mesh, context, parallel
+from .context import stage_timer
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,8 @@ class ConnectivityGraph:
         layer_i: int  # Index of the layer in the Problem
         geom_i: int   # Index of this particular polygon in the layer.geoms tuple
         is_root: bool = False
-        neighbors: set["ConnectivityGraph.Node"] = field(default_factory=set)
+        # repr=False to avoid cyclic references
+        neighbors: set["ConnectivityGraph.Node"] = field(default_factory=set, repr=False)
 
     @classmethod
     def create_from_problem(cls,
@@ -130,7 +132,7 @@ class ConnectivityGraph:
 
         return cls(nodes=nodes)
 
-    def compute_connected_nodes(self) -> list[Node]:
+    def compute_connected_nodes(self) -> list["ConnectivityGraph.Node"]:
         """
         Return a list of all nodes that are either root nodes themselves
         or are connected to a root node via any connection.
@@ -168,65 +170,50 @@ def collect_seed_points(problem: problem.Problem, layer: problem.Layer) -> list[
     return seed_points
 
 
+@stage_timer
 def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
     """
     Compute the Laplace operator for a given mesh. This is in "mesh-local"
     indices, so the variable indices are given by the mesh.vertices indices.
     """
     N = len(mesh.vertices)
-
-    row_is = []
-    col_is = []
-    values = []
-    diagonal_entries = np.zeros(N, dtype=DTYPE)
-
-    for i, vertex_i in enumerate(mesh.vertices):
-        for edge in vertex_i.orbit():
-            ratio = edge.cotan()
-
-            if ratio == 0:
-                # I do not think this happens all that often, except for maybe
-                # some degenerate cases
-                continue
-
-            vertex_k = edge.twin.origin
-            k = mesh.vertices.to_index(vertex_k)
-
-            # Note that we are iterating over everything, so the (k, i) pair gets
-            # set in a different iteration
-            # The below is equivalent to:
-            # L[i, i] -= ratio
-            # L[i, k] += ratio
-            row_is.append(i)
-            col_is.append(k)
-            values.append(ratio)
-            diagonal_entries[i] -= ratio
-
-    # Insert the diagonal entries
-    for i, val in enumerate(diagonal_entries):
-        row_is.append(i)
-        col_is.append(i)
-        values.append(val)
-
-    L = scipy.sparse.coo_matrix((values, (row_is, col_is)), shape=(N, N), dtype=DTYPE)
-
-    return L
+    rows, cols, values = mesh.laplacian()
+    return scipy.sparse.coo_matrix((values, (rows, cols)), shape=(N, N), dtype=DTYPE)
 
 
 @dataclass
 class VertexIndexer:
+    """
+    Maps between (mesh index, vertex index) pairs and global system indices.
+
+    API contract: global indices are assigned contiguously per mesh, in mesh
+    order and in local vertex order. That is, mesh i occupies the half-open
+    global index range [offset_i, offset_i + len(meshes[i].vertices)) with
+    (i, v) -> offset_i + v. process_mesh_laplace_operators relies on this
+    to translate per-mesh COO blocks by a single offset.
+    """
     global_index_to_vertex_index: list[tuple[int, int]] = field(default_factory=list)
     mesh_vertex_index_to_global_index: dict[tuple[int, int], int] = field(default_factory=dict)
+    # Global index of local vertex 0 of each mesh, defined even for empty meshes
+    mesh_offsets: list[int] = field(default_factory=list)
 
     @classmethod
     def create(cls, meshes: list[mesh.Mesh]) -> "VertexIndexer":
         vindex = cls()
         for mesh_idx, msh in enumerate(meshes):
+            vindex.mesh_offsets.append(len(vindex.global_index_to_vertex_index))
             for vertex_idx, _ in enumerate(msh.vertices):
                 global_index = len(vindex.global_index_to_vertex_index)
                 vindex.global_index_to_vertex_index.append((mesh_idx, vertex_idx))
                 vindex.mesh_vertex_index_to_global_index[(mesh_idx, vertex_idx)] = global_index
         return vindex
+
+    def mesh_offset(self, mesh_idx: int) -> int:
+        """
+        Global index of local vertex 0 of the given mesh. Local vertex v of
+        that mesh maps to mesh_offset(mesh_idx) + v.
+        """
+        return self.mesh_offsets[mesh_idx]
 
 
 def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
@@ -242,6 +229,7 @@ def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
     return layer_mesh_pairs
 
 
+@stage_timer
 def compute_connectivity(prob: problem.Problem
                          ) -> tuple[list[shapely.strtree.STRtree],
                                     ConnectivityGraph,
@@ -260,31 +248,36 @@ def compute_connectivity(prob: problem.Problem
     return strtrees, cg, find_connected_layer_geom_indices(cg)
 
 
+@stage_timer
 def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
                                 connected_layer_mesh_pairs: set[tuple[int, int]],
                                 strtrees: list[shapely.strtree.STRtree]
                                 ) -> tuple[list[mesh.Mesh], list[int]]:
-    meshes: list[mesh.Mesh] = []
+    # Collect the independent per-region meshing jobs first, then mesh them
+    # concurrently. poly_to_mesh's heavy work -- the distance-map
+    # rasterization, the Delaunay refinement and the half-edge build --
+    # releases the GIL (see _cgal and _mesh), so threads parallelize it.
+    mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point]]] = []
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
-        seed_points_in_layer = [
-            shapely.geometry.Point(p.x, p.y)
-            for p in collect_seed_points(prob, layer)
-        ]
+        seed_points_in_layer = collect_seed_points(prob, layer)
 
         geom_to_seed_points = collections.defaultdict(list)
 
         for seed_point in seed_points_in_layer:
-            candidates = strtrees[layer_i].query(seed_point)
+            # Shapely point only used for the spatial queries below; the mesher
+            # downstream expects mesh.Point seeds.
+            shapely_point = shapely.geometry.Point(seed_point.x, seed_point.y)
+            candidates = strtrees[layer_i].query(shapely_point)
 
             for geom_i in candidates:
                 if (layer_i, geom_i) not in connected_layer_mesh_pairs:
                     # This geometry is not even connected to any driven
                     # network, so we can just skip it.
                     continue
-                if not layer.geoms[geom_i].contains(seed_point):
+                if not layer.geoms[geom_i].contains(shapely_point):
                     continue
 
                 # This seed point is inside the geometry, so we stick it in
@@ -308,16 +301,20 @@ def generate_meshes_for_problem(prob: problem.Problem,
             # TODO: Add a warning here if we detect the case above
             seed_points_in_geom = geom_to_seed_points[geom_i]
 
-            m = mesher.poly_to_mesh(
-                layer.geoms[geom_i],
-                seed_points_in_geom
-            )
-            meshes.append(m)
+            mesh_jobs.append((layer.geoms[geom_i], seed_points_in_geom))
             mesh_index_to_layer_index.append(layer_i)
+
+    # Mesh the regions concurrently. thread_map runs serially in-thread when
+    # jobs == 1, so single-job runs keep clean tracebacks and full coverage.
+    meshes = parallel.thread_map(
+        lambda job: mesher.poly_to_mesh(job[0], job[1]),
+        mesh_jobs,
+    )
 
     return meshes, mesh_index_to_layer_index
 
 
+@stage_timer
 def generate_disconnected_meshes(prob: problem.Problem,
                                  connected_layer_mesh_pairs: set[tuple[int, int]],
                                  ) -> list[list[mesh.Mesh]]:
@@ -335,14 +332,21 @@ def generate_disconnected_meshes(prob: problem.Problem,
     relaxed_mesher = mesh.Mesher(mesh.Mesher.Config.RELAXED)
     disconnected_meshes_by_layer: list[list[mesh.Mesh]] = [[] for _ in prob.layers]
 
-    for layer_i, layer in enumerate(prob.layers):
-        for geom_i, geom in enumerate(layer.geoms):
-            if (layer_i, geom_i) in connected_layer_mesh_pairs:
-                continue
-            # This layer is not connected to any lumped elements
-            # Triangulate it for display as disconnected copper
-            m = relaxed_mesher.poly_to_mesh(layer.geoms[geom_i])
-            disconnected_meshes_by_layer[layer_i].append(m)
+    # Collect the disconnected regions first, then triangulate them
+    # concurrently; poly_to_mesh releases the GIL for the CGAL and
+    # topology-building work.
+    jobs = [
+        (layer_i, layer.geoms[geom_i])
+        for layer_i, layer in enumerate(prob.layers)
+        for geom_i in range(len(layer.geoms))
+        if (layer_i, geom_i) not in connected_layer_mesh_pairs
+    ]
+    meshes = parallel.thread_map(
+        lambda job: relaxed_mesher.poly_to_mesh(job[1]),
+        jobs,
+    )
+    for (layer_i, _), m in zip(jobs, meshes):
+        disconnected_meshes_by_layer[layer_i].append(m)
 
     return disconnected_meshes_by_layer
 
@@ -365,35 +369,36 @@ class NodeIndexer:
         """
         # Maps a layer to a kdtree of _all_ vertices in _all_ meshes in that layer
         layer_to_kdtree = {}
-        # Maps a layer to a list of (global_index, vertex) tuples
-        # This can be used to retrieve the original vertex from the index that
-        # gets returned by the kdtree query
-        layer_global_index_and_vertex = {}
+        # Maps a layer to an array of global indices, positionally matching
+        # the kdtree points; used to translate kdtree query results back to
+        # global vertex indices
+        layer_global_indices = {}
 
         for layer_i in range(len(prob.layers)):
-            layer_vertices = []
+            coords_list = []
+            gidx_list = []
 
             for mesh_i, msh in enumerate(meshes):
                 if mesh_index_to_layer_index[mesh_i] != layer_i:
                     continue
-
-                for vertex_i, vertex in enumerate(msh.vertices):
-                    global_index = vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
-                    layer_vertices.append((global_index, vertex.p))
-            if not layer_vertices:
+                n = len(msh.vertices)
+                start = vindex.mesh_offset(mesh_i)
+                coords_list.append(msh.positions())
+                gidx_list.append(np.arange(start, start + n))
+            if not coords_list:
                 # No vertices in this layer, skip it
                 # In theory, there _could_ be a terminal that attempts to bind to
                 # an empty layer. This is going to crash weirdly after, but
                 # we are not going to handle it for now.
                 continue
 
-            layer_global_index_and_vertex[layer_i] = layer_vertices
+            layer_global_indices[layer_i] = np.concatenate(gidx_list)
             layer_to_kdtree[layer_i] = scipy.spatial.KDTree(
-                [(p.x, p.y) for _, p in layer_vertices],
+                np.vstack(coords_list),
                 leafsize=32,
             )
 
-        return layer_to_kdtree, layer_global_index_and_vertex
+        return layer_to_kdtree, layer_global_indices
 
     @classmethod
     def create(cls,
@@ -403,7 +408,7 @@ class NodeIndexer:
                vindex: VertexIndexer,
                filtered_networks: list[problem.Network]) -> "NodeIndexer":
 
-        layer_to_kdtree, layer_global_index_and_vertex = cls._construct_kdtrees(
+        layer_to_kdtree, layer_global_indices = cls._construct_kdtrees(
             prob,
             meshes,
             mesh_index_to_layer_index,
@@ -414,23 +419,30 @@ class NodeIndexer:
         # "virtual" nodes that only live inside a Network
         node_to_global_index = {}
 
-        # First, we index the NodeIDs that are used in a Connection
+        # First, we index the NodeIDs that are used in a Connection.
+        # The nearest-vertex lookups are batched per layer: one vectorized
+        # KDTree query per layer is much faster than one query per connection.
         connections = [
             conn for network in filtered_networks for conn in network.connections
         ]
+        layer_to_connections = collections.defaultdict(list)
         for conn in connections:
-            layer_i = prob.layers.index(conn.layer)
+            layer_to_connections[prob.layers.index(conn.layer)].append(conn)
+
+        for layer_i, layer_conns in layer_to_connections.items():
             kdtree = layer_to_kdtree[layer_i]
+            points = [(conn.point.x, conn.point.y) for conn in layer_conns]
+            _, vertex_idxs_in_kdtree = kdtree.query(points, k=1)
 
-            _, vertex_idx_in_kdtree = kdtree.query((conn.point.x, conn.point.y), k=1)
-            vertex_global_idx = layer_global_index_and_vertex[layer_i][vertex_idx_in_kdtree][0]
-            node = conn.node_id
+            for conn, vertex_idx_in_kdtree in zip(layer_conns, vertex_idxs_in_kdtree):
+                vertex_global_idx = int(layer_global_indices[layer_i][vertex_idx_in_kdtree])
+                node = conn.node_id
 
-            # Check that we are not overwriting an existing node with different
-            # vertex index. This should never happen in practice
-            if node in node_to_global_index and node_to_global_index[node] != vertex_global_idx:
-                raise ValueError("Duplicate connection vertices found, this should not happen.")
-            node_to_global_index[node] = vertex_global_idx
+                # Check that we are not overwriting an existing node with different
+                # vertex index. This should never happen in practice
+                if node in node_to_global_index and node_to_global_index[node] != vertex_global_idx:
+                    raise ValueError("Duplicate connection vertices found, this should not happen.")
+                node_to_global_index[node] = vertex_global_idx
 
         # Next, we allocate new indices for all the yet to be allocated nodes
         nodes = [
@@ -468,7 +480,7 @@ class NodeIndexer:
 
 def stamp_network_into_system(network: problem.Network,
                               node_indexer: NodeIndexer,
-                              L: scipy.sparse.lil_matrix,
+                              L: scipy.sparse.spmatrix,
                               r: np.ndarray) -> None:
     for element in network.elements:
         match element:
@@ -542,7 +554,7 @@ def stamp_network_into_system(network: problem.Network,
 
 
 def setup_ground_node(i_gnd: int,
-                      L: scipy.sparse.lil_matrix,
+                      L: scipy.sparse.spmatrix,
                       r: np.ndarray) -> None:
     # This effectively wires a voltage source of 0V from i_gnd to a
     # virtual (not in the matrix) "ground" node.
@@ -563,18 +575,31 @@ def setup_ground_node(i_gnd: int,
 def process_mesh_laplace_operators(meshes: list[mesh.Mesh],
                                    conductances: list[float],
                                    vindex: VertexIndexer,
-                                   L: scipy.sparse.lil_matrix) -> None:
+                                   N: int) -> scipy.sparse.coo_matrix:
+    """
+    Assemble the mesh Laplacians into one global NxN COO matrix.
+
+    VertexIndexer assigns global indices contiguously in mesh order, so the
+    local COO indices of each mesh translate to global ones by adding the
+    mesh's offset. Everything stays in numpy; no per-entry Python work.
+    """
+    if not meshes:
+        return scipy.sparse.coo_matrix((N, N), dtype=DTYPE)
+
+    rows, cols, values = [], [], []
     for mesh_i, (msh, conductance) in enumerate(zip(meshes, conductances)):
-        L_msh = conductance * laplace_operator(msh)
+        L_msh = laplace_operator(msh)
+        offset = vindex.mesh_offset(mesh_i)
+        rows.append(L_msh.row.astype(np.int64) + offset)
+        cols.append(L_msh.col.astype(np.int64) + offset)
+        values.append(L_msh.data * conductance)
 
-        # Glue them together into the global matrix
-        for i, j, v in zip(L_msh.row, L_msh.col, L_msh.data):
-            global_i = vindex.mesh_vertex_index_to_global_index[(mesh_i, i)]
-            global_j = vindex.mesh_vertex_index_to_global_index[(mesh_i, j)]
-            # TODO: Is there any possibility that the COO matrix contains duplicates?
-            L[global_i, global_j] += v
+    return scipy.sparse.coo_matrix(
+        (np.concatenate(values), (np.concatenate(rows), np.concatenate(cols))),
+        shape=(N, N), dtype=DTYPE)
 
 
+@stage_timer
 def produce_layer_solutions(layers: list[problem.Layer],
                             vindex: VertexIndexer,
                             meshes: list[mesh.Mesh],
@@ -592,10 +617,11 @@ def produce_layer_solutions(layers: list[problem.Layer],
 
             # Initialize an empty ZeroForm on this Mesh
             vertex_values = mesh.ZeroForm(msh)
-            # and fill it with values from the global value array (solution of the system)
-            for vertex_i, vertex in enumerate(msh.vertices):
-                global_index = vindex.mesh_vertex_index_to_global_index[(mesh_i, vertex_i)]
-                vertex_values[vertex] = v[global_index]
+            # and fill it with values from the global value array (solution of
+            # the system). VertexIndexer assigns global indices contiguously
+            # in mesh order, so this is a plain slice.
+            start = vindex.mesh_offset(mesh_i)
+            vertex_values.values[:] = v[start:start + len(msh.vertices)]
 
             # Compute power density for this mesh
             power_density = compute_power_density(vertex_values, layer.conductance)
@@ -651,6 +677,7 @@ def network_has_a_dead_terminal(network: problem.Network,
     return False
 
 
+@stage_timer
 def filter_dead_networks(prob: problem.Problem,
                          strtrees: list[shapely.strtree.STRtree],
                          connected_layer_mesh_pairs: set[tuple[int, int]]
@@ -686,68 +713,37 @@ def find_best_ground_node_index(prob: problem.Problem, node_indexer: NodeIndexer
     return ground_node_index
 
 
-def compute_triangle_gradient(vertices: list[mesh.Vertex],
-                              values: list[float]) -> mesh.Vector:
-    """
-    Compute the gradient of a function that is a linear interpolation of the
-    values at the vertices of a triangle.
-    """
-    if len(vertices) != 3 or len(values) != 3:
-        raise ValueError("Vertices and values must be of length 3 for a triangle")
-    # Ugh. This is all veeeeery adhoc.
-    # The magical keywords here are
-    # * Finite Element Exterior Calculus
-    # * Whitney Forms
-    # * Nedelec elements
-    # So, ultimately, this should all be implemented in mesh.py and we would just
-    # like take the exterior derivative and have the interpolant etc.
-    # However, for now, I want to get a simple solution and get the more
-    # complicated stuff going later.
-    v1, v2, v3 = vertices
-    x1, y1 = v1.p.x, v1.p.y
-    x2, y2 = v2.p.x, v2.p.y
-    x3, y3 = v3.p.x, v3.p.y
-    f1, f2, f3 = values
-
-    def interpolate(x, y) -> float:
-        # Barycentric coordinates
-        D = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
-        l1 = ((y2 - y3) * (x - x3) + (x3 - x2) * (y - y3)) / D
-        l2 = ((y3 - y1) * (x - x3) + (x1 - x3) * (y - y3)) / D
-        l3 = 1 - l1 - l2
-        return l1 * f1 + l2 * f2 + l3 * f3
-
-    # Since this is a linear interpolation, the gradient is just equal to the
-    # difference quotient
-    partial_x = interpolate(x1 + 1, y1) - f1
-    partial_y = interpolate(x1, y1 + 1) - f1
-    # TODO: mesh.Vector is semantically not quite the right type here
-    return mesh.Vector(partial_x, partial_y)
-
-
+@stage_timer
 def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.TwoForm:
     """
     Compute the power density at the mesh faces.
     """
     power_density = mesh.TwoForm(voltage.mesh)
-    for face in voltage.mesh.faces:
-        vertices = list(face.vertices)
-        if len(vertices) != 3:
-            continue
-        # Electric field is the gradient of the voltage
-        E = compute_triangle_gradient(
-            vertices,
-            [voltage[v] for v in vertices]
-        )
-        J = E * conductivity
-        p = J.dot(E)
-        power_density[face] = p
+    tris = voltage.mesh.triangles().astype(np.int64)
+    if len(tris) == 0:
+        return power_density
+    pos = voltage.mesh.positions()
+    f = voltage.values
+
+    # The voltage is interpolated linearly over each triangle, so the
+    # electric field is the (constant) gradient of that interpolant:
+    # solve [p2-p1; p3-p1] @ E = [f2-f1; f3-f1] via the explicit 2x2 inverse.
+    p1, p2, p3 = pos[tris[:, 0]], pos[tris[:, 1]], pos[tris[:, 2]]
+    f21 = f[tris[:, 1]] - f[tris[:, 0]]
+    f31 = f[tris[:, 2]] - f[tris[:, 0]]
+    d2 = p2 - p1
+    d3 = p3 - p1
+    det = d2[:, 0] * d3[:, 1] - d2[:, 1] * d3[:, 0]
+    e_x = (f21 * d3[:, 1] - f31 * d2[:, 1]) / det
+    e_y = (-f21 * d3[:, 0] + f31 * d2[:, 0]) / det
+
+    power_density.values[:] = conductivity * (e_x * e_x + e_y * e_y)
     return power_density
 
 
 def allocate_system(vindex: VertexIndexer,
                     node_indexer: NodeIndexer
-                    ) -> tuple[scipy.sparse.lil_matrix, np.ndarray]:
+                    ) -> tuple[scipy.sparse.dok_matrix, np.ndarray]:
     """
     Allocate the global system matrix L and right-hand side vector r.
 
@@ -759,12 +755,15 @@ def allocate_system(vindex: VertexIndexer,
         len(node_indexer.extra_source_to_global_index) + \
         1  # +1 for the ground node
     log.info(f"System matrix size: {N}x{N} variables")
-    L = scipy.sparse.lil_matrix((N, N), dtype=DTYPE)
+    # dok_matrix supports the same element-wise stamping as lil_matrix but
+    # is cheaper to convert and add to the COO-assembled Laplacian part.
+    L = scipy.sparse.dok_matrix((N, N), dtype=DTYPE)
     r = np.zeros(N, dtype=DTYPE)
     return L, r
 
 
-def solve_system(L: scipy.sparse.lil_matrix,
+@stage_timer
+def solve_system(L: scipy.sparse.spmatrix,
                  r: np.ndarray) -> tuple[np.ndarray, SolverInfo]:
     """
     Solve L * v = r and return the solution vector together with diagnostics.
@@ -774,19 +773,20 @@ def solve_system(L: scipy.sparse.lil_matrix,
 
     residual_norm = np.linalg.norm(L_csc @ v - r)
     solver_info = SolverInfo(
-        ground_node_current=v[-1],
-        residual_norm=residual_norm,
+        ground_node_current=float(v[-1]),  # Force a float for deterministic pickling reasons
+        residual_norm=float(residual_norm),
     )
     return v, solver_info
 
 
+@stage_timer
 def assemble_system(prob: problem.Problem,
                     meshes: list[mesh.Mesh],
                     mesh_index_to_layer_index: list[int],
                     vindex: VertexIndexer,
                     filtered_networks: list[problem.Network],
                     node_indexer: NodeIndexer
-                    ) -> tuple[scipy.sparse.lil_matrix, np.ndarray]:
+                    ) -> tuple[scipy.sparse.csc_matrix, np.ndarray]:
     """
     Allocate (L, r) and stamp the mesh Laplacians, all networks, and the
     ground node. Returns the system ready to be passed to `solve_system`.
@@ -797,21 +797,31 @@ def assemble_system(prob: problem.Problem,
         prob.layers[mesh_index_to_layer_index[i]].conductance
         for i in range(len(meshes))
     ]
-    L, r = allocate_system(vindex, node_indexer)
-    # Compute the Laplace operator for each mesh and insert it into the
-    # global L matrix.
-    process_mesh_laplace_operators(meshes, mesh_conductances, vindex, L)
+    L_net, r = allocate_system(vindex, node_indexer)
+    # The mesh Laplacians are assembled separately in COO form; the sparse
+    # stamping structure only receives the (comparatively few) network and
+    # ground-node entries.
+    L_lap = process_mesh_laplace_operators(
+        meshes, mesh_conductances, vindex, L_net.shape[0])
     # Now, we process the Networks, directly inserting them in-place into the
     # system matrix. Esthetically, it would be nicer to construct them first
     # and then insert them, but this requires a bit of extra work with regards
     # to handling nodes that have Connections and nodes that do not.
     for network in filtered_networks:
-        stamp_network_into_system(network, node_indexer, L, r)
+        stamp_network_into_system(network, node_indexer, L_net, r)
     # TODO: Implement a better way to pick the ground node.
-    setup_ground_node(find_best_ground_node_index(prob, node_indexer), L, r)
+    setup_ground_node(find_best_ground_node_index(prob, node_indexer), L_net, r)
+    # Summing the two parts is safe even though the network stamping uses
+    # plain assignment in places: those assignments only touch extra-variable
+    # and ground rows/columns, which never carry Laplacian entries. Network
+    # entries that can land inside the Laplacian block (Resistors at
+    # Connection nodes) are stamped with +=, and addition commutes with the
+    # final sum.
+    L = L_lap.tocsc() + L_net.tocsc()
     return L, r
 
 
+@stage_timer
 def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = None) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
@@ -858,9 +868,10 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     # Next, we construct the _internal_ system of equations for each of the
     # network.
     log.info("Constructing node index for networks")
-    node_indexer = NodeIndexer.create(
-        prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
-    )
+    with context.stage_timer("node_indexing"):
+        node_indexer = NodeIndexer.create(
+            prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
+        )
 
     # We are solving the equation L * v = r
     # where L is the "laplace operator",
