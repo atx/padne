@@ -329,7 +329,8 @@ class PadIndex:
                 # Get the layer for SMD pads
                 layer_id = pad_obj.GetLayer()
 
-                # Handle flipped footprints
+                # pad.GetPosition() is already the post-flip board position,
+                # but GetLayer() still reports the unflipped layer.
                 if footprint.IsFlipped():
                     match layer_id:
                         case pcbnew.F_Cu:
@@ -338,8 +339,6 @@ class PadIndex:
                             layer_id = pcbnew.F_Cu
                         case _:
                             raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
-                    footprint_pos_y = nm_to_mm(footprint.GetPosition().y)
-                    y_mm = 2 * footprint_pos_y - y_mm
 
                 layer_name = board.GetLayerName(layer_id)
                 point = shapely.geometry.Point(x_mm, y_mm)

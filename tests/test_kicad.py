@@ -922,6 +922,33 @@ class TestLoadKicadProject:
         assert f_cu_layer.name == "F.Cu", f"Expected F.Cu layer, got {f_cu_layer.name}"
         assert b_cu_layer.name == "B.Cu", f"Expected B.Cu layer, got {b_cu_layer.name}"
 
+    def test_flipped_pads_with_pad_offset_are_not_mirrored(self, kicad_test_projects):
+        """
+        Test that pads offset from the origin of a flipped footprint keep their
+        position. pcbnew already reports the post-flip absolute pad position,
+        so mirroring it about the footprint origin would move the connection
+        point onto the decoy trace (a different net) 8mm away.
+        """
+        project = kicad_test_projects["flipped_offset_pads"]
+
+        result = kicad.load_kicad_project(project.pro_path)
+
+        voltage_network = next(
+            network
+            for network in result.networks
+            if any(isinstance(e, problem.VoltageSource) for e in network.elements)
+        )
+
+        points = sorted(
+            (c.layer.name, c.point.x, c.point.y)
+            for c in voltage_network.connections
+        )
+
+        assert points == [
+            ("B.Cu", pytest.approx(100), pytest.approx(104)),
+            ("B.Cu", pytest.approx(140), pytest.approx(104)),
+        ]
+
     def test_layer_order(self, kicad_test_projects):
         project = kicad_test_projects["via_tht_4layer"]
 
