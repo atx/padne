@@ -41,6 +41,7 @@ out/
 # KiCad lock files
 *kicad_pcb.lck
 *kicad_sch.lck
+*kicad_pro.lck
 
 # KiCad backup files
 *kicad_sch-bak
