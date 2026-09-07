@@ -2,6 +2,7 @@ import argparse
 import warnings
 import unittest.mock
 import logging
+import multiprocessing
 import pickle
 import sys
 import traceback
@@ -254,6 +255,9 @@ def do_paraview(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # PyInstaller builds re-execute this binary for every spawned worker;
+    # freeze_support() runs the worker and exits. A no-op otherwise.
+    multiprocessing.freeze_support()
     args = parse_args()
     setup_logging(args.debug)
     parallel.configure(jobs=args.jobs)
