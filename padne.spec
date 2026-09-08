@@ -80,7 +80,7 @@ excludes = [
     # Exlude random Qt shit that is wayyyy too large
     # QtWebEngine is like 160MB...
     'PySide6.QtWebEngine',
-    'PySide6.QtWebEngineCore', 
+    'PySide6.QtWebEngineCore',
     'PySide6.QtWebEngineWidgets',
     'PySide6.QtWebChannel',
     'PySide6.QtWebSockets',
@@ -134,7 +134,11 @@ binaries_exclude = [
 # TODO: This is not ideal, I don't think we should be importing padne in
 # the spec file.
 import padne._cgal
-cgal_path = padne._cgal.__file__
+import padne._mesh
+extension_binaries = [
+    (padne._cgal.__file__, 'padne'),
+    (padne._mesh.__file__, 'padne'),
+]
 
 import PyInstaller.utils.hooks
 
@@ -143,10 +147,7 @@ original_collect_data_files = PyInstaller.utils.hooks.collect_data_files
 a = Analysis(
     ['padne/cli.py'],
     pathex=[],
-    binaries=[
-        # Add the compiled CGAL extension
-        (cgal_path, 'padne'),
-    ],
+    binaries=extension_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
