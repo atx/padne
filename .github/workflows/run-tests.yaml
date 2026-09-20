@@ -29,12 +29,15 @@ jobs:
     steps:
     # actions/checkout needs git in the container, otherwise it downloads a REST
     # API tarball, which cannot fetch submodules. sudo is a no-op here (we are
-    # already root), but lets setup-padne run unmodified.
+    # already root), but lets setup-padne run unmodified. The workspace belongs
+    # to the host runner user, so git needs it marked safe for the root we run
+    # as - checkout only does so in a temporary config that later steps lose.
     - name: Bootstrap container
       if: matrix.container
       run: |
         apt-get update
         apt-get install -y git sudo
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
     - name: Check out repository
       uses: actions/checkout@v4
