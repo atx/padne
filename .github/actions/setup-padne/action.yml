@@ -2,7 +2,7 @@ name: 'Setup padne'
 description: 'Install system dependencies, KiCad, and padne itself'
 inputs:
   kicad-version:
-    description: 'KiCad major.minor version to install (e.g. 9.0, 10.0)'
+    description: 'KiCad major.minor version to install (e.g. 9.0, 10.0). Ubuntu only, Debian uses the packaged KiCad.'
     required: false
     default: '9.0'
 runs:
@@ -14,11 +14,15 @@ runs:
         sudo apt-get update
         sudo apt-get install -y python3-full python3-dev python3-pip git libegl1 libegl1-mesa-dev libmpfr-dev libgmp-dev libboost-dev
 
-    - name: Add KiCad PPA and install KiCad
+    - name: Install KiCad
       shell: bash
       run: |
-        sudo add-apt-repository --yes ppa:kicad/kicad-${{ inputs.kicad-version }}-releases
-        sudo apt-get update
+        # Ubuntu needs the PPA to get a current KiCad, Debian ships it directly.
+        . /etc/os-release
+        if [ "$ID" = "ubuntu" ]; then
+          sudo add-apt-repository --yes ppa:kicad/kicad-${{ inputs.kicad-version }}-releases
+          sudo apt-get update
+        fi
         sudo apt-get install -y --no-install-recommends kicad
 
     - name: Build C++ part of the repository, install the package

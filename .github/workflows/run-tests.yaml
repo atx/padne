@@ -7,13 +7,35 @@ permissions:
 
 jobs:
   build_and_test:
-    name: "Run Tests (KiCad ${{ matrix.kicad-version }})"
-    runs-on: ubuntu-24.04
+    name: "Run Tests (${{ matrix.name }})"
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
-        kicad-version: ['9.0', '10.0']
+        include:
+          - name: "Ubuntu 24.04, KiCad 9.0"
+            os: ubuntu-24.04
+            kicad-version: '9.0'
+          - name: "Ubuntu 24.04, KiCad 10.0"
+            os: ubuntu-24.04
+            kicad-version: '10.0'
+          - name: "Ubuntu 26.04, KiCad 10.0"
+            os: ubuntu-26.04
+            kicad-version: '10.0'
+          - name: "Debian sid, KiCad 10.0"
+            os: ubuntu-24.04
+            container: 'debian:sid'
     steps:
+    # actions/checkout needs git in the container, otherwise it downloads a REST
+    # API tarball, which cannot fetch submodules. sudo is a no-op here (we are
+    # already root), but lets setup-padne run unmodified.
+    - name: Bootstrap container
+      if: matrix.container
+      run: |
+        apt-get update
+        apt-get install -y git sudo
+
     - name: Check out repository
       uses: actions/checkout@v4
       with:
@@ -32,8 +54,8 @@ jobs:
       uses: dorny/test-reporter@v1
       if: always() # Always run this step to publish results, even if tests fail
       with:
-        name: Pytest Results (KiCad ${{ matrix.kicad-version }})
+        name: Pytest Results (${{ matrix.name }})
         path: pytest-results.xml
         reporter: java-junit
         fail-on-error: 'true'
-        badge-title: 'Tests (KiCad ${{ matrix.kicad-version }})'
+        badge-title: 'Tests (${{ matrix.name }})'
