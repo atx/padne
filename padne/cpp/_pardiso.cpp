@@ -33,6 +33,13 @@ public:
         // our planar 2D meshes the reordering dominates the total time and
         // minimum degree is ~3x cheaper with no worse fill-in.
         iparm_[1] = 0;
+        // This sets up some PARDISO magic that prevents it from breaking on
+        // some of the TestSyntheticProblems problems. I think most of those
+        // should never ocurr in real life, so these parameters may not be needed
+        // but let's be careful.
+        // Explanation is kinda in https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2026-0/pardiso-iparm-parameter.html but eh
+        iparm_[10] = 0;
+        iparm_[12] = 1;
     }
 
     ~Handle() {
