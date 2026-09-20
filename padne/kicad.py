@@ -888,8 +888,10 @@ def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
     """
     via_specs = []
 
-    # Get the tracks (which include vias)
-    for track in board.GetTracks():
+    # Get the tracks (which include vias). Indexed rather than GetTracks(), whose
+    # TRACKS.__iter__ calls SwigPyIterator.next(), gone since SWIG 4.5.
+    tracks = board.Tracks()
+    for track in (tracks[i] for i in range(len(tracks))):
         # Check if the track is a via
         if track.Type() != pcbnew.PCB_VIA_T:
             continue
