@@ -291,12 +291,13 @@ def _calibrated_problem(ts: TestSet) -> problem.Problem:
     return prob
 
 
-def solve_test_set(ts: TestSet, mesher_config=None
+def solve_test_set(ts: TestSet, mesher_config=None,
+                   backend: Optional[solver.SolverBackend] = None
                    ) -> tuple[solver.Solution, pcbnew.BOARD]:
     """Load the (calibrated) project, solve it, and return solution plus board."""
     prob = _calibrated_problem(ts)
     board = pcbnew.LoadBoard(str(KICAD_DIR / ts.project / f"{ts.project}.kicad_pcb"))
-    sol = solver.solve(prob, mesher_config=mesher_config)
+    sol = solver.solve(prob, mesher_config=mesher_config, backend=backend)
     return sol, board
 
 
@@ -337,8 +338,8 @@ def extract_calibration(ts: TestSet) -> CalibrationResult:
 
 
 @functools.lru_cache(maxsize=None)
-def _solved(ts_name: str) -> tuple[solver.Solution, pcbnew.BOARD]:
-    return solve_test_set(TEST_SETS[ts_name])
+def _solved(ts_name: str, backend: solver.SolverBackend) -> tuple[solver.Solution, pcbnew.BOARD]:
+    return solve_test_set(TEST_SETS[ts_name], backend=backend)
 
 
 def _measurement_cases() -> list[tuple[str, Measurement]]:
@@ -354,8 +355,8 @@ def _fmt_tol(tol: Optional[float]) -> str:
     _measurement_cases(),
     ids=[f"{n}:{m.p_ref}-{m.n_ref}" for n, m in _measurement_cases()],
 )
-def test_measurement(ts_name, measurement):
-    sol, board = _solved(ts_name)
+def test_measurement(ts_name, measurement, solver_backend):
+    sol, board = _solved(ts_name, solver_backend)
     row = ResultRow(measurement, voltage_diff(sol, board, measurement))
     assert row.ok, (
         f"{ts_name} {measurement.p_ref}-{measurement.n_ref}: "

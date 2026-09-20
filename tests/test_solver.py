@@ -1500,13 +1500,13 @@ class TestSolverEndToEnd:
                                      "nested_schematic_twoinstances",
                                      "many_meshes",
                                      "many_meshes_many_vias"])
-    def test_all_test_projects_solve(self, project):
+    def test_all_test_projects_solve(self, project, solver_backend):
         """Test that solver.solve works on all test projects."""
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
 
         # Call the function under test
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None
         assert isinstance(solution, solver.Solution)
@@ -2487,3 +2487,29 @@ def test_solution_residual(project):
 
     assert solution.solver_info.residual_norm < 1e-9, \
         f"Residual too large: {solution.solver_info.residual_norm}"
+
+
+class TestPardisoBackend:
+
+    @pytest.mark.skipif(solver.SolverBackend.PARDISO not in solver.solver_backends(),
+                        reason="pardiso backend not available in this build")
+    def test_matches_scipy_on_nonsymmetric_system(self, kicad_test_projects):
+        """
+        The ldo project contains a VoltageRegulator, whose gain stamping makes
+        the system matrix nonsymmetric; both backends must agree on it.
+        """
+        prob = kicad.load_kicad_project(kicad_test_projects["ldo"].pro_path)
+        sol_scipy = solver.solve(prob, backend=solver.SolverBackend.SCIPY)
+        sol_pardiso = solver.solve(prob, backend=solver.SolverBackend.PARDISO)
+
+        assert sol_pardiso.solver_info.residual_norm < 1e-8
+        for ls_a, ls_b in zip(sol_scipy.layer_solutions, sol_pardiso.layer_solutions):
+            for pot_a, pot_b in zip(ls_a.potentials, ls_b.potentials):
+                np.testing.assert_allclose(pot_a.values, pot_b.values, atol=1e-9)
+
+    def test_explicit_pardiso_without_module_raises(self, monkeypatch):
+        monkeypatch.setattr(solver, "_pardiso", None)
+        assert solver.solver_backends() == [solver.SolverBackend.SCIPY]
+        with pytest.raises(ValueError):
+            solver.resolve_backend(solver.SolverBackend.PARDISO)
+        assert solver.resolve_backend(None) == solver.SolverBackend.SCIPY

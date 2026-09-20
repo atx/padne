@@ -56,6 +56,10 @@ test = [
 bench = [
     "asv>=0.6.0",
 ]
+pardiso = [
+    "mkl>=2024",
+    "mkl-include>=2024",
+]
 docs = [
     "sphinx>=7,<9",
     "furo>=2024.0",

@@ -7,6 +7,7 @@ import pytest
 import functools
 from pathlib import Path
 
+from padne import solver
 from padne.kicad import KiCadProject
 
 
@@ -110,3 +111,14 @@ def kicad_test_projects():
         dict: A dictionary where keys are project names and values are KiCadProject objects.
     """
     return _kicad_test_projects()
+
+
+@pytest.fixture(params=[
+    pytest.param(backend, id=backend.value, marks=pytest.mark.skipif(
+        backend not in solver.solver_backends(),
+        reason=f"{backend.value} backend not available in this build"))
+    for backend in solver.SolverBackend
+])
+def solver_backend(request):
+    """Every sparse direct solver backend, skipping the ones not built."""
+    return request.param

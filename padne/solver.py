@@ -1,9 +1,11 @@
 
 
 import collections
+import enum
 import itertools
 import logging
 import numpy as np
+import os
 import scipy.sparse
 import scipy.spatial
 import shapely
@@ -16,10 +18,38 @@ from typing import Optional
 from . import problem, mesh, context, parallel
 from .context import stage_timer
 
+try:
+    from . import _pardiso
+except ImportError:
+    _pardiso = None
+
 log = logging.getLogger(__name__)
 
 
 DTYPE = np.float64
+
+class SolverBackend(enum.Enum):
+    """Sparse direct solver used for the final linear system."""
+    SCIPY = "scipy"
+    PARDISO = "pardiso"
+
+
+def solver_backends() -> list[SolverBackend]:
+    """Backends usable in this build, fastest first."""
+    backends = [SolverBackend.SCIPY]
+    if _pardiso is not None:
+        backends.insert(0, SolverBackend.PARDISO)
+    return backends
+
+
+def resolve_backend(backend: Optional[SolverBackend]) -> SolverBackend:
+    """Validate an explicit backend choice, or pick the best available for None."""
+    available = solver_backends()
+    if backend is None:
+        return available[0]
+    if backend not in available:
+        raise ValueError(f"Solver backend {backend.value} is not available in this build")
+    return backend
 
 
 class SolverWarning(Warning):
@@ -762,14 +792,38 @@ def allocate_system(vindex: VertexIndexer,
     return L, r
 
 
+def _pardiso_thread_count() -> int:
+    # Running PARDISO on every core makes its OpenMP barriers stall behind
+    # the OS (measured 4x slowdowns on ~half the runs), while the serial
+    # reordering phase means nothing is gained beyond ~8 threads anyway.
+    return max(1, min(parallel.config().jobs, (os.cpu_count() or 2) // 2))
+
+
+def _solve_pardiso(L: scipy.sparse.csc_matrix, r: np.ndarray) -> np.ndarray:
+    L_csr = L.tocsr()
+    L_csr.sort_indices()
+    return _pardiso.solve(
+        L_csr.indptr.astype(np.int32),
+        L_csr.indices.astype(np.int32),
+        L_csr.data,
+        r,
+        _pardiso_thread_count(),
+    )
+
+
 @stage_timer
 def solve_system(L: scipy.sparse.spmatrix,
-                 r: np.ndarray) -> tuple[np.ndarray, SolverInfo]:
+                 r: np.ndarray,
+                 backend: Optional[SolverBackend] = None) -> tuple[np.ndarray, SolverInfo]:
     """
     Solve L * v = r and return the solution vector together with diagnostics.
     """
     L_csc = L.tocsc()
-    v = scipy.sparse.linalg.spsolve(L_csc, r)
+    match resolve_backend(backend):
+        case SolverBackend.SCIPY:
+            v = scipy.sparse.linalg.spsolve(L_csc, r)
+        case SolverBackend.PARDISO:
+            v = _solve_pardiso(L_csc, r)
 
     residual_norm = np.linalg.norm(L_csc @ v - r)
     solver_info = SolverInfo(
@@ -822,13 +876,16 @@ def assemble_system(prob: problem.Problem,
 
 
 @stage_timer
-def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = None) -> Solution:
+def solve(prob: problem.Problem,
+          mesher_config: Optional[mesh.Mesher.Config] = None,
+          backend: Optional[SolverBackend] = None) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
 
     Args:
         problem: The Problem object containing layers and lumped elements
         mesher_config: Configuration for mesh generation, uses defaults if None
+        backend: Sparse direct solver to use, None picks the best one available
 
     Returns:
         A Solution object with the computed results
@@ -885,8 +942,8 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
-    log.info("Solving the system of equations")
-    v, solver_info = solve_system(L, r)
+    log.info(f"Solving the system of equations using {resolve_backend(backend).value}")
+    v, solver_info = solve_system(L, r, backend=backend)
 
     if not np.isclose(solver_info.ground_node_current, 0):
         # This is a warning, but we still continue to produce the solution object
