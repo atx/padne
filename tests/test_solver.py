@@ -503,7 +503,7 @@ class TestProbeDirective:
 
 class TestSyntheticProblems:
 
-    def test_linear_rectangle(self):
+    def test_linear_rectangle(self, solver_backend):
         # In this test, synthesize a Problem instance that has a singular layer
         # which has a single rectangle with wide aspect ratio in it.
         # In addition, add three lumped voltage sources of 1V, that are connected
@@ -582,7 +582,7 @@ class TestSyntheticProblems:
         prob_synthetic = problem.Problem(layers=[layer], networks=networks)
 
         # 6. Solve the Problem
-        solution = solver.solve(prob_synthetic)
+        solution = solver.solve(prob_synthetic, backend=solver_backend)
 
         # 7. Verify the Solution
         assert solution is not None
@@ -639,7 +639,7 @@ class TestSyntheticProblems:
             assert actual_voltage == pytest.approx(expected_voltage, abs=0.05), \
                 f"Voltage at vertex {vertex.p} ({actual_voltage:.3f}) is not proportional to x ({expected_voltage:.3f})"
 
-    def test_coaxial_structure(self):
+    def test_coaxial_structure(self, solver_backend):
         """
         Test the solver against a coaxial (annular) structure with an analytical solution.
         Inner boundary fixed at 1V relative to outer boundary at 0V.
@@ -736,7 +736,7 @@ class TestSyntheticProblems:
         mesher_config = mesh.Mesher.Config(
             variable_size_maximum_factor=1.0  # Disable variable density
         )
-        solution = solver.solve(prob_coaxial, mesher_config=mesher_config)
+        solution = solver.solve(prob_coaxial, mesher_config=mesher_config, backend=solver_backend)
 
         # Verify the solution
         assert solution is not None
@@ -1373,7 +1373,7 @@ class TestComputePowerDensity:
         for face in test_mesh.faces:
             assert power_density[face] == pytest.approx(conductivity * 13.0, rel=1e-9)
 
-    def test_power_density_conserves_energy(self):
+    def test_power_density_conserves_energy(self, solver_backend):
         """
         Total dissipated power equals the power delivered by the source.
 
@@ -1409,7 +1409,7 @@ class TestComputePowerDensity:
         )
         prob_synthetic = problem.Problem(layers=[layer], networks=[network])
 
-        solution = solver.solve(prob_synthetic)
+        solution = solver.solve(prob_synthetic, backend=solver_backend)
 
         total_power = 0.0
         for layer_solution in solution.layer_solutions:
@@ -1426,7 +1426,7 @@ class TestComputePowerDensity:
         assert delivered_power > 0.0
         assert total_power == pytest.approx(delivered_power, rel=1e-6)
 
-    def test_power_density_integration_with_layer_solution(self):
+    def test_power_density_integration_with_layer_solution(self, solver_backend):
         """Test that power densities are correctly computed and stored in LayerSolution."""
         # Create a simple synthetic problem with a voltage source
         rect_width = 2.0
@@ -1467,7 +1467,7 @@ class TestComputePowerDensity:
         prob_synthetic = problem.Problem(layers=[layer], networks=[network])
 
         # Solve
-        solution = solver.solve(prob_synthetic)
+        solution = solver.solve(prob_synthetic, backend=solver_backend)
 
         # Verify LayerSolution has power densities
         assert len(solution.layer_solutions) == 1
@@ -1549,12 +1549,12 @@ class TestSolverEndToEnd:
                                      "many_meshes_many_vias",
                                      "probe_directive",
                                      "test_set_1"])
-    def test_voltage_sources_work(self, project):
+    def test_voltage_sources_work(self, project, solver_backend):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
 
         # Call the function under test
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None
         assert isinstance(solution, solver.Solution)
@@ -1592,11 +1592,11 @@ class TestSolverEndToEnd:
             pytest.fail(f"No networks containing only a VoltageSource found in project {project.name}. "
                        f"This project should be added to the exclude list for this test.")
 
-    def test_long_trace_current_source(self, kicad_test_projects):
+    def test_long_trace_current_source(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["long_trace_current"]
         # Load the problem and solve it
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         # Find the current source network and element
         current_source_element = None
@@ -1634,7 +1634,7 @@ class TestSolverEndToEnd:
     def test_long_trace_current_power_density(self,
                                               kicad_test_projects,
                                               max_mesh_size,
-                                              face_tolerance):
+                                              face_tolerance, solver_backend):
         """Test power density computation accuracy for a simple trace with current source."""
         project = kicad_test_projects["long_trace_current"]
 
@@ -1652,7 +1652,7 @@ class TestSolverEndToEnd:
 
         # Solve the problem
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob, mesher_config=mesher_config)
+        solution = solver.solve(prob, mesher_config=mesher_config, backend=solver_backend)
 
         # Get F.Cu layer solution (first layer)
         layer_solution = solution.layer_solutions[0]
@@ -1701,11 +1701,11 @@ class TestSolverEndToEnd:
             f"Power density: {avg_power_density:.6f} W/mm², " \
             f"expected {expected_power_density:.6f} W/mm² ±{tolerance:.6f}"
 
-    def test_long_trace_esr(self, kicad_test_projects):
+    def test_long_trace_esr(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["long_trace_esr"]
         # Load the problem and solve it
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert len(prob.networks) == 1, "Expected exactly one network in this test project"
         conn_a = prob.networks[0].connections[0]
@@ -1722,11 +1722,11 @@ class TestSolverEndToEnd:
         assert v_a - v_b == pytest.approx(0.5, abs=0.01), \
             "Voltage difference for ESR test does not match expected value"
 
-    def test_complicated_trace_current_source(self, kicad_test_projects):
+    def test_complicated_trace_current_source(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["complicated_trace_current"]
 
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         # This trace is composed from multiple segments with varying widths
         # Width at each 10mm point (21 points from 0mm to 200mm inclusive)
@@ -1827,7 +1827,7 @@ class TestSolverEndToEnd:
         # TODO: Also add a test for individual trace segments. This seems to not work
         # that well though...
 
-    def test_superposition_principle(self, kicad_test_projects):
+    def test_superposition_principle(self, kicad_test_projects, solver_backend):
         """Test that superposition principle holds for a circuit with voltage and current sources."""
         # Get the project with combined voltage and current sources
         project = kicad_test_projects["voltage_source_into_current_sink"]
@@ -1858,7 +1858,7 @@ class TestSolverEndToEnd:
         assert current_source_element is not None, "Expected exactly one current source"
 
         # --- Solve the full problem ---
-        full_solution = solver.solve(full_problem)
+        full_solution = solver.solve(full_problem, backend=solver_backend)
 
         # --- Create and solve problem with only voltage source active ---
         voltage_only_networks = []
@@ -1881,7 +1881,7 @@ class TestSolverEndToEnd:
             layers=full_problem.layers,
             networks=voltage_only_networks
         )
-        voltage_only_solution = solver.solve(voltage_only_problem)
+        voltage_only_solution = solver.solve(voltage_only_problem, backend=solver_backend)
 
         # --- Create and solve problem with only current source active ---
         current_only_networks = []
@@ -1904,7 +1904,7 @@ class TestSolverEndToEnd:
             layers=full_problem.layers,
             networks=current_only_networks
         )
-        current_only_solution = solver.solve(current_only_problem)
+        current_only_solution = solver.solve(current_only_problem, backend=solver_backend)
 
         # --- Choose test points (Connections of the sources) ---
         test_connections = []
@@ -1944,14 +1944,14 @@ class TestSolverEndToEnd:
         assert v_source_p - v_source_n == pytest.approx(voltage_source_element.voltage, abs=1e-4), \
             "Voltage source constraint not satisfied in full solution"
 
-    def test_disconnected_component_gets_dropped(self, kicad_test_projects):
+    def test_disconnected_component_gets_dropped(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["floating_copper"]
 
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
 
         # Call the function under test
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None
 
@@ -1968,7 +1968,7 @@ class TestSolverEndToEnd:
         assert len(layer_solution.meshes[0].vertices) > 0
         assert len(layer_solution.potentials[0].values) > 0
 
-    def test_unconnected_via_mesh_isolation(self, kicad_test_projects):
+    def test_unconnected_via_mesh_isolation(self, kicad_test_projects, solver_backend):
         """
         Test that meshes remain properly isolated and maintain correct voltage despite unconnected vias.
         This test will FAIL with the current implementation and PASS after the fix is applied.
@@ -1980,7 +1980,7 @@ class TestSolverEndToEnd:
         prob = kicad.load_kicad_project(project.pro_path)
 
         # Solve the problem
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         # Find the voltage source network and element
         voltage_source_element = None
@@ -2042,14 +2042,14 @@ class TestSolverEndToEnd:
                 f"Vertex at ({vertex.p.x:.2f}, {vertex.p.y:.2f}) has incorrect voltage: " \
                 f"{voltage_diff:.3f}V vs expected {expected_diff:.1f}V"
 
-    def test_two_big_planes_voltage_source(self, kicad_test_projects):
+    def test_two_big_planes_voltage_source(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["two_big_planes"]
         # This project has two large planes with a voltage source between them
         # The idea of this test is to verify that that the voltage difference
         # between the two planes (meshes) is approximately equal to the voltage
         # of the voltage source.
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None, "Solver failed to produce a solution"
 
@@ -2138,7 +2138,7 @@ class TestSolverEndToEnd:
         else:
             pytest.fail("Voltage source positive terminal does not match either plane's voltage")
 
-    def test_simple_consumer(self, kicad_test_projects):
+    def test_simple_consumer(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["simple_consumer"]
         # This project is designed to test the CONSUMER directive. The idea is that
         # We have the following test points:
@@ -2166,7 +2166,7 @@ class TestSolverEndToEnd:
         # TP1 and TP5
         # is 3*0.24 (since it is shared)
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None, "Solver failed to produce a solution"
 
@@ -2207,22 +2207,22 @@ class TestSolverEndToEnd:
         for i, ev_check in enumerate(voltage_checks):
             ev_check.validate(prob, solution, test_case_id=i)
 
-    def test_unterminated_current_loop_warning(self, kicad_test_projects):
+    def test_unterminated_current_loop_warning(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["unterminated_current_loop"]
         prob = kicad.load_kicad_project(project.pro_path)
         with pytest.warns(solver.SolverWarning, match="Ground node current is not zero"):
-            solution = solver.solve(prob)
+            solution = solver.solve(prob, backend=solver_backend)
         # TODO: Ideally, we would sanity check that the solution object is
         # at least reasonably structured
 
-    def test_ldo_regulator_voltages(self, kicad_test_projects):
+    def test_ldo_regulator_voltages(self, kicad_test_projects, solver_backend):
         """
         Tests the LDO regulator functionality by checking voltage differences
         at specific points in the 'ldo' test project.
         """
         project = kicad_test_projects["ldo"]
         prob = kicad.load_kicad_project(project.pro_path)
-        sol = solver.solve(prob)
+        sol = solver.solve(prob, backend=solver_backend)
 
         voltage_checks = [
             ExpectedVoltage(
@@ -2250,10 +2250,10 @@ class TestSolverEndToEnd:
         for i, ev_check in enumerate(voltage_checks):
             ev_check.validate(prob, sol, test_case_id=i)
 
-    def test_voltage_source_multipad_degeneration(self, kicad_test_projects):
+    def test_voltage_source_multipad_degeneration(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["voltage_source_multipad_degeneration"]
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None, "Solver failed to produce a solution"
 
@@ -2268,11 +2268,11 @@ class TestSolverEndToEnd:
 
         voltage_check.validate(prob, solution)
 
-    def test_multipad_coupling(self, kicad_test_projects):
+    def test_multipad_coupling(self, kicad_test_projects, solver_backend):
         """Test the multipad coupling functionality with custom coupling parameter."""
         project = kicad_test_projects["multipad_coupling"]
         prob = kicad.load_kicad_project(project.pro_path)
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None, "Solver failed to produce a solution"
 
@@ -2287,7 +2287,7 @@ class TestSolverEndToEnd:
 
         voltage_check.validate(prob, solution)
 
-    def test_floating_copper_on_different_layer_gets_discarded(self, kicad_test_projects):
+    def test_floating_copper_on_different_layer_gets_discarded(self, kicad_test_projects, solver_backend):
         """
         Test that floating copper on B.Cu layer is properly discarded by the solver.
         The main idea of this test is to verify that nothing crashes if there is a layer
@@ -2316,7 +2316,7 @@ class TestSolverEndToEnd:
             f"Expected 2 polygons in B.Cu geometry, got {len(b_cu_layer.geoms)}"
 
         # Solve the problem
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None, "Solver failed to produce a solution"
 
@@ -2330,7 +2330,7 @@ class TestSolverEndToEnd:
         assert len(b_cu_solution.potentials) == 0, \
             f"Expected 0 potential solutions for floating B.Cu layer, got {len(b_cu_solution.potentials)}"
 
-    def test_floating_copper_disconnected_regions_count(self, kicad_test_projects):
+    def test_floating_copper_disconnected_regions_count(self, kicad_test_projects, solver_backend):
         """
         Test that the floating_copper project correctly identifies 4 disconnected copper regions
         in the F.Cu layer that are not electrically connected to any networks.
@@ -2344,7 +2344,7 @@ class TestSolverEndToEnd:
         prob = kicad.load_kicad_project(project.pro_path)
 
         # Solve the problem
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
 
         assert solution is not None, "Solver failed to produce a solution"
 
@@ -2375,7 +2375,7 @@ class TestSolverEndToEnd:
             assert len(disconnected_mesh.faces) > 0, \
                 f"Disconnected mesh {i} should have faces"
 
-    def test_empty_via_works(self, kicad_test_projects):
+    def test_empty_via_works(self, kicad_test_projects, solver_backend):
         """
         Test that a via with no connections (floating via) does not cause solver failure.
         The via should be ignored in the electrical analysis.
@@ -2386,7 +2386,7 @@ class TestSolverEndToEnd:
         prob = kicad.load_kicad_project(project.pro_path)
 
         # Solve the problem
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
         # Did not crash, *yay*
 
         assert len(solution.layer_solutions) == 2
@@ -2395,7 +2395,7 @@ class TestSolverEndToEnd:
             assert len(layer_sol.meshes) == 0
             assert len(layer_sol.disconnected_meshes) == 1
 
-    def test_detached_via_works(self, kicad_test_projects):
+    def test_detached_via_works(self, kicad_test_projects, solver_backend):
         """
         Test that a via with connections to layers but not connected to any network
         does not cause solver failure. The via should be ignored in the electrical analysis.
@@ -2406,7 +2406,7 @@ class TestSolverEndToEnd:
         prob = kicad.load_kicad_project(project.pro_path)
 
         # Solve the problem
-        solution = solver.solve(prob)
+        solution = solver.solve(prob, backend=solver_backend)
         # Did not crash, *yay*
 
         assert len(solution.layer_solutions) == 2
@@ -2481,9 +2481,9 @@ class TestSolutionPickling:
 
 
 @for_all_kicad_projects(exclude=["unterminated_current_loop", "nested_schematic_twoinstances"])
-def test_solution_residual(project):
+def test_solution_residual(project, solver_backend):
     prob = kicad.load_kicad_project(project.pro_path)
-    solution = solver.solve(prob)
+    solution = solver.solve(prob, backend=solver_backend)
 
     assert solution.solver_info.residual_norm < 1e-9, \
         f"Residual too large: {solution.solver_info.residual_norm}"
