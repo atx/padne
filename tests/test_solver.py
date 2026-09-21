@@ -588,6 +588,8 @@ class TestSyntheticProblems:
         assert solution is not None
         assert isinstance(solution, solver.Solution)
         assert len(solution.layer_solutions) == 1
+        assert solution.solver_info.residual_norm < 1e-9, \
+            f"Residual too large: {solution.solver_info.residual_norm}"
 
         # Check each voltage source constraint by iterating through networks
         for network in networks:
@@ -741,6 +743,8 @@ class TestSyntheticProblems:
         # Verify the solution
         assert solution is not None
         assert len(solution.layer_solutions) == 1
+        assert solution.solver_info.residual_norm < 1e-9, \
+            f"Residual too large: {solution.solver_info.residual_norm}"
 
         # Analytical solution function for potential in a coaxial structure
         def analytical_solution(x, y):
@@ -1410,6 +1414,8 @@ class TestComputePowerDensity:
         prob_synthetic = problem.Problem(layers=[layer], networks=[network])
 
         solution = solver.solve(prob_synthetic, backend=solver_backend)
+        assert solution.solver_info.residual_norm < 1e-9, \
+            f"Residual too large: {solution.solver_info.residual_norm}"
 
         total_power = 0.0
         for layer_solution in solution.layer_solutions:
@@ -1468,6 +1474,8 @@ class TestComputePowerDensity:
 
         # Solve
         solution = solver.solve(prob_synthetic, backend=solver_backend)
+        assert solution.solver_info.residual_norm < 1e-9, \
+            f"Residual too large: {solution.solver_info.residual_norm}"
 
         # Verify LayerSolution has power densities
         assert len(solution.layer_solutions) == 1
@@ -1905,6 +1913,10 @@ class TestSolverEndToEnd:
             networks=current_only_networks
         )
         current_only_solution = solver.solve(current_only_problem, backend=solver_backend)
+
+        for solution in (full_solution, voltage_only_solution, current_only_solution):
+            assert solution.solver_info.residual_norm < 1e-9, \
+                f"Residual too large: {solution.solver_info.residual_norm}"
 
         # --- Choose test points (Connections of the sources) ---
         test_connections = []
