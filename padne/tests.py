@@ -7,3 +7,7 @@ def add_numbers(a: int, b: int) -> int:
 
 def wrong_return_type() -> str:
     return 42
+
+
+def wrong_return_type_of_arg(x: int) -> str:
+    return x

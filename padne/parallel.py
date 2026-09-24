@@ -12,8 +12,7 @@ order-preserving map primitives:
                             cheap to pickle.
 
 Both degrade to a plain serial loop in the caller's thread when jobs == 1,
-so `--jobs 1` gives clean tracebacks, a working pdb and full typeguard
-coverage.
+so `--jobs 1` gives clean tracebacks and a working pdb.
 
 Application code uses the module-level functions, which delegate to a
 process-wide singleton instance (the same pattern as random.Random vs the
@@ -23,6 +22,8 @@ also works as a context manager that shuts its pool down on exit.
 Worker processes are started with the "spawn" method; fork is not safe here
 since the parent typically has pcbnew (and in GUI mode Qt) loaded. The spawn
 pool is created lazily on first use and kept warm until shutdown().
+Spawned workers do not inherit import hooks, so any typeguard import hooks
+active in the parent (as under pytest) are reinstalled in each worker.
 
 Stage timings recorded via context.stage_timer inside process workers are
 shipped back and merged into the parent's active timing session, so
@@ -36,6 +37,7 @@ import functools
 import logging
 import multiprocessing
 import os
+import sys
 import threading
 
 from dataclasses import dataclass, field
@@ -67,10 +69,34 @@ class Config:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
 
 
-def _init_worker(log_level: int) -> None:
+def _typeguard_hooks() -> list[Optional[list[str]]]:
+    """Package lists of the typeguard import hooks installed in this process,
+    innermost first. None means the hook instruments all packages."""
+    # typeguard is only a test dependency; if it was never imported, no hook
+    # can be installed.
+    typeguard = sys.modules.get("typeguard")
+    if typeguard is None:
+        return []
+    return [
+        finder.packages
+        for finder in sys.meta_path
+        if isinstance(finder, typeguard.TypeguardFinder)
+    ]
+
+
+def _init_worker(log_level: int,
+                 typeguard_hooks: list[Optional[list[str]]]) -> None:
     # Spawned workers start with unconfigured logging; mirror the parent's
     # root level so worker-side log output is not lost.
     logging.basicConfig(level=log_level)
+
+    if not typeguard_hooks:
+        return
+    import typeguard
+    # install_import_hook prepends to sys.meta_path, so install in reverse
+    # to reproduce the parent's order.
+    for packages in reversed(typeguard_hooks):
+        typeguard.install_import_hook(packages)
 
 
 def _timed_call(fn: Callable[[T], R], item: T
@@ -130,7 +156,10 @@ class Parallel:
                     max_workers=self._config.jobs,
                     mp_context=multiprocessing.get_context("spawn"),
                     initializer=_init_worker,
-                    initargs=(logging.getLogger().getEffectiveLevel(),),
+                    initargs=(
+                        logging.getLogger().getEffectiveLevel(),
+                        _typeguard_hooks(),
+                    ),
                 )
                 # Registered per instance and only while a pool is live, so
                 # idle instances are not kept alive by the atexit registry

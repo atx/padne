@@ -1,13 +1,6 @@
-import warnings
-# This is to suppress pcbnew deprecation warning. Unfortunately the RPC API
-# is not yet cooked enough for us
-warnings.simplefilter("ignore", DeprecationWarning)
-
 import pytest
 import functools
 from pathlib import Path
-
-from padne.kicad import KiCadProject
 
 
 def _load_excluded_projects():
@@ -28,6 +21,11 @@ def _load_excluded_projects():
 
 
 def _kicad_test_projects():
+    # Imported lazily: conftest.py is loaded before the typeguard pytest plugin
+    # installs its import hook, so a module-level import would leave padne
+    # uninstrumented.
+    from padne.kicad import KiCadProject
+
     kicad_dir = Path(__file__).parent / "kicad"
     excluded_projects = _load_excluded_projects()
 

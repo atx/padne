@@ -77,6 +77,13 @@ padne = "padne.cli:main"
 
 [tool.pytest.ini_options]
 typeguard-packages = ["padne"]
+# Suppress the pcbnew deprecation warning. Unfortunately the RPC API
+# is not yet cooked enough for us
+filterwarnings = [
+    "ignore:The SWIG-based Python interface:DeprecationWarning",
+    # pygerber uses the pyparsing 2.x camelCase API
+    "ignore:'parseString' deprecated:DeprecationWarning",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
