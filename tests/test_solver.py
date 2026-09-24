@@ -641,10 +641,13 @@ class TestSyntheticProblems:
             assert actual_voltage == pytest.approx(expected_voltage, abs=0.05), \
                 f"Voltage at vertex {vertex.p} ({actual_voltage:.3f}) is not proportional to x ({expected_voltage:.3f})"
 
-    def test_coaxial_structure(self, solver_backend):
+    def test_coaxial_structure(self):
         """
         Test the solver against a coaxial (annular) structure with an analytical solution.
         Inner boundary fixed at 1V relative to outer boundary at 0V.
+
+        SciPy only: the closed rings of 0V sources make the system singular,
+        which PARDISO resolves with a CPU/thread dependent residual.
         """
         # Parameters for the coaxial structure
         inner_radius = 1.0
@@ -738,7 +741,7 @@ class TestSyntheticProblems:
         mesher_config = mesh.Mesher.Config(
             variable_size_maximum_factor=1.0  # Disable variable density
         )
-        solution = solver.solve(prob_coaxial, mesher_config=mesher_config, backend=solver_backend)
+        solution = solver.solve(prob_coaxial, mesher_config=mesher_config, backend=solver.SolverBackend.SCIPY)
 
         # Verify the solution
         assert solution is not None
