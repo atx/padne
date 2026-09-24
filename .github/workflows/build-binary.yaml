@@ -37,6 +37,8 @@ jobs:
         uses: ./.github/actions/setup-padne
         with:
           kicad-version: '10.0'
+          # libmkl_rt dlopens the rest of MKL at runtime, which PyInstaller cannot see
+          mkl: 'false'
 
       - name: Install PyInstaller
         run: |
