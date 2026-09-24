@@ -28,6 +28,9 @@ log = logging.getLogger(__name__)
 
 DTYPE = np.float64
 
+# Absolute ||L @ v - r|| above which the solution is considered unreliable
+RESIDUAL_WARNING_THRESHOLD = 1e-9
+
 class SolverBackend(enum.Enum):
     """Sparse direct solver used for the final linear system."""
     SCIPY = "scipy"
@@ -960,6 +963,14 @@ def solve(prob: problem.Problem,
             f"Ground node current is not zero ({solver_info.ground_node_current} A), this may indicate an issue with the problem being solved. "
             "Check for unterminated current loops or floating connected components. "
             "This may be harmless if the current is small, but it may indicate an ill-conditioned system.",
+            SolverWarning
+        )
+
+    if solver_info.residual_norm > RESIDUAL_WARNING_THRESHOLD:
+        warnings.warn(
+            f"Residual of the solved system is large ({solver_info.residual_norm}), "
+            "the solution is likely inaccurate. This usually indicates a singular "
+            "or ill-conditioned system.",
             SolverWarning
         )
 

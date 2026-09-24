@@ -2225,7 +2225,8 @@ class TestSolverEndToEnd:
     def test_unterminated_current_loop_warning(self, kicad_test_projects, solver_backend):
         project = kicad_test_projects["unterminated_current_loop"]
         prob = kicad.load_kicad_project(project.pro_path)
-        with pytest.warns(solver.SolverWarning, match="Ground node current is not zero"):
+        with pytest.warns(solver.SolverWarning, match="Ground node current is not zero"), \
+                pytest.warns(solver.SolverWarning, match="Residual of the solved system is large"):
             solution = solver.solve(prob, backend=solver_backend)
         # TODO: Ideally, we would sanity check that the solution object is
         # at least reasonably structured
