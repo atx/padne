@@ -31,7 +31,7 @@ def ensure_geometry_is_multipolygon(geometry: Union[shapely.geometry.Polygon, sh
 
 
 def render_with_shapely(gerber_data: pygerber.gerber.api.GerberFile
-                        ) -> shapely.geometry.MultiPolygon:
+                        ) -> shapely.geometry.base.BaseGeometry:
     # We have to call all of this manually, since we need to manually configure the
     # amount of segments in our arcs
     rvmc = gerber_data._get_rvmc()

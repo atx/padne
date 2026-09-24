@@ -549,11 +549,10 @@ class BaseLumpedSpec:
     def construct(self,
                   pad_index: PadIndex,
                   layer_dict: dict[str, problem.Layer]
-                  ) -> problem.BaseLumped:
+                  ) -> problem.Network:
         """
-        Constructs a problem.BaseLumped element from the current specification.
-        This method should be implemented in subclasses to create the specific
-        type of lumped element.
+        Constructs a problem.Network containing the lumped element from the
+        current specification, wired up to its pads.
         """
         # First, we construct the NodeID object that are connected to the endpoints
         # of the internal lumped element we are going to create
