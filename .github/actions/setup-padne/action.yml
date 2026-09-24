@@ -5,6 +5,10 @@ inputs:
     description: 'KiCad major.minor version to install (e.g. 9.0, 10.0). Ubuntu only, Debian uses the packaged KiCad.'
     required: false
     default: '9.0'
+  mkl:
+    description: 'Install Intel oneMKL so that the PARDISO solver backend gets built'
+    required: false
+    default: 'true'
 runs:
   using: 'composite'
   steps:
@@ -25,7 +29,21 @@ runs:
         fi
         sudo apt-get install -y --no-install-recommends kicad
 
+    - name: Install MKL
+      if: inputs.mkl == 'true'
+      shell: bash
+      run: |
+        pip3 install --break-system-packages --user mkl mkl-include
+        # The wheels land in the --user prefix, which CMake does not search by default
+        echo "MKLROOT=$HOME/.local" >> $GITHUB_ENV
+
     - name: Build C++ part of the repository, install the package
       shell: bash
       run: |
         pip3 install --break-system-packages --user -e .[test] -v
+
+    - name: Check that the PARDISO backend got built
+      if: inputs.mkl == 'true'
+      shell: bash
+      run: |
+        python3 -c "import padne._pardiso"

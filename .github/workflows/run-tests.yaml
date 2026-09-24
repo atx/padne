@@ -23,6 +23,10 @@ jobs:
           - name: "Ubuntu 26.04, KiCad 10.0"
             os: ubuntu-26.04
             kicad-version: '10.0'
+          - name: "Ubuntu 26.04, KiCad 10.0, no MKL"
+            os: ubuntu-26.04
+            kicad-version: '10.0'
+            mkl: 'false'
           - name: "Debian sid, KiCad 10.0"
             os: ubuntu-24.04
             container: 'debian:sid'
@@ -48,6 +52,7 @@ jobs:
       uses: ./.github/actions/setup-padne
       with:
         kicad-version: ${{ matrix.kicad-version }}
+        mkl: ${{ matrix.mkl || 'true' }}
 
     - name: Run tests with pytest and generate report
       run: |

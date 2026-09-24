@@ -118,6 +118,15 @@ def parse_args() -> argparse.Namespace:
         default=parallel.config().jobs,
         help="Number of parallel jobs"
     )
+    parser.add_argument(
+        "--solver",
+        type=padne.solver.SolverBackend,
+        choices=list(padne.solver.SolverBackend),
+        metavar="{" + ",".join(b.value for b in padne.solver.SolverBackend) + "}",
+        default=None,
+        help="Sparse direct solver backend, defaults to the best one available: "
+             + ", ".join(b.value for b in padne.solver.solver_backends())
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     parser_gui = subparsers.add_parser(
@@ -209,7 +218,7 @@ def do_gui(args: argparse.Namespace) -> int:
 
         # Capture warnings emitted during solving
         with collect_warnings() as warns:
-            solution = padne.solver.solve(prob, mesher_config=mesher_config)
+            solution = padne.solver.solve(prob, mesher_config=mesher_config, backend=args.solver)
 
         captured_warnings = [
             msg
@@ -229,7 +238,7 @@ def do_solve(args: argparse.Namespace) -> None:
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
         log.info("Solving problem...")
         mesher_config = mesher_config_from_args(args)
-        solution = padne.solver.solve(prob, mesher_config=mesher_config)
+        solution = padne.solver.solve(prob, mesher_config=mesher_config, backend=args.solver)
         with open(args.output_file, "wb") as f:
             pickle.dump(solution, f)
     log.info("Stage timings:\n%s", session.format_summary())
