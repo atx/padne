@@ -62,12 +62,21 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/_cgal.pyi DESTINATION padne)
 # Python prefix (where the pip `mkl`/`mkl-include` wheels land) and the
 # default system paths. Silently skipped when MKL is not found.
 set(_mkl_hints "$ENV{MKLROOT}" "${Python_EXECUTABLE}/../..")
+# NAMES_PER_DIR makes a hinted versioned library (pip wheels ship only
+# libmkl_rt.so.N) win over an unversioned one in the system paths.
 find_library(MKL_RT_LIBRARY
-    NAMES mkl_rt libmkl_rt.so.2 libmkl_rt.so.3
+    NAMES mkl_rt libmkl_rt.so.2 libmkl_rt.so.3 NAMES_PER_DIR
     HINTS ${_mkl_hints} PATH_SUFFIXES lib lib/intel64)
-find_path(MKL_INCLUDE_DIR
-    NAMES mkl_pardiso.h
-    HINTS ${_mkl_hints} PATH_SUFFIXES include)
+if(MKL_RT_LIBRARY)
+    # Headers must come from the same MKL install as the library, mixing
+    # versions builds fine but crashes at runtime.
+    get_filename_component(_mkl_libdir "${MKL_RT_LIBRARY}" DIRECTORY)
+    find_path(MKL_INCLUDE_DIR
+        NAMES mkl_pardiso.h
+        HINTS "${_mkl_libdir}/.." "${_mkl_libdir}/../.."
+        PATH_SUFFIXES include include/mkl
+        NO_DEFAULT_PATH)
+endif()
 
 if(MKL_RT_LIBRARY AND MKL_INCLUDE_DIR)
     message(STATUS "MKL found, building _pardiso: ${MKL_RT_LIBRARY}")
@@ -77,7 +86,6 @@ if(MKL_RT_LIBRARY AND MKL_INCLUDE_DIR)
     target_compile_features(_pardiso PRIVATE cxx_std_17)
     # Keep the MKL location baked in so the installed module finds it
     # without LD_LIBRARY_PATH.
-    get_filename_component(_mkl_libdir "${MKL_RT_LIBRARY}" DIRECTORY)
     set_target_properties(_pardiso PROPERTIES INSTALL_RPATH "${_mkl_libdir}")
     nanobind_add_stub(
         _pardiso_stub
