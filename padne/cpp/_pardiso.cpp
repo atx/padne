@@ -63,6 +63,8 @@ public:
         }
     }
 
+    MKL_INT perturbed_pivots() const { return iparm_[13]; }
+
 private:
     void *pt_[64];
     MKL_INT iparm_[64] = {};
@@ -93,6 +95,7 @@ NB_MODULE(_pardiso, m) {
               // PARDISO takes b as non-const, so hand it a copy.
               std::vector<double> rhs(b.data(), b.data() + n);
               auto *x = new std::vector<double>(n);
+              MKL_INT perturbed_pivots;
               nb::capsule owner(x, [](void *p) noexcept {
                   delete static_cast<std::vector<double> *>(p);
               });
@@ -103,9 +106,13 @@ NB_MODULE(_pardiso, m) {
                   // Phase 13: analysis, numerical factorization, solve.
                   h.run(13, data.data(), indptr.data(), indices.data(),
                         rhs.data(), x->data());
+                  perturbed_pivots = h.perturbed_pivots();
               }
-              return nb::ndarray<nb::numpy, double>(x->data(), {n}, owner);
+              return nb::make_tuple(
+                  nb::ndarray<nb::numpy, double>(x->data(), {n}, owner),
+                  perturbed_pivots);
           },
           "indptr"_a, "indices"_a, "data"_a, "b"_a, "num_threads"_a,
-          "Solve A x = b for a square real matrix A given in zero-based CSR form.");
+          "Solve A x = b for a square real matrix A given in zero-based CSR form.\n"
+          "Returns (x, number of pivots PARDISO had to perturb).");
 }

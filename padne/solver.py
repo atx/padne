@@ -802,13 +802,21 @@ def _pardiso_thread_count() -> int:
 def _solve_pardiso(L: scipy.sparse.csc_matrix, r: np.ndarray) -> np.ndarray:
     L_csr = L.tocsr()
     L_csr.sort_indices()
-    return _pardiso.solve(
+    v, perturbed_pivots = _pardiso.solve(
         L_csr.indptr.astype(np.int32),
         L_csr.indices.astype(np.int32),
         L_csr.data,
         r,
         _pardiso_thread_count(),
     )
+    if perturbed_pivots:
+        # Mirrors what scipy's spsolve emits for an exactly singular matrix
+        warnings.warn(
+            f"PARDISO perturbed {perturbed_pivots} pivots, the matrix may be singular or "
+            "ill-conditioned and the solution may be inaccurate or non-unique",
+            scipy.sparse.linalg.MatrixRankWarning
+        )
+    return v
 
 
 @stage_timer

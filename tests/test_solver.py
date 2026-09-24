@@ -2522,6 +2522,19 @@ class TestPardisoBackend:
             for pot_a, pot_b in zip(ls_a.potentials, ls_b.potentials):
                 np.testing.assert_allclose(pot_a.values, pot_b.values, atol=1e-9)
 
+    @pytest.mark.skipif(solver.SolverBackend.PARDISO not in solver.solver_backends(),
+                        reason="pardiso backend not available in this build")
+    def test_singular_matrix_warns(self):
+        # Two floating nodes coupled only to each other leave the system singular
+        L = scipy.sparse.csc_matrix(np.array([
+            [1.0, -1.0, 0.0],
+            [-1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]))
+        r = np.array([1.0, 0.0, 1.0])
+        with pytest.warns(scipy.sparse.linalg.MatrixRankWarning):
+            solver.solve_system(L, r, backend=solver.SolverBackend.PARDISO)
+
     def test_explicit_pardiso_without_module_raises(self, monkeypatch):
         monkeypatch.setattr(solver, "_pardiso", None)
         assert solver.solver_backends() == [solver.SolverBackend.SCIPY]
