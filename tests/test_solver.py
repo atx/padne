@@ -6,6 +6,7 @@ import numpy as np
 import scipy.sparse
 import warnings
 import pickle
+import dataclasses
 from dataclasses import dataclass
 from typing import Optional, Any
 
@@ -1536,6 +1537,7 @@ class TestSolverEndToEnd:
                                      "voltage_source_multipad_degeneration",
                                      "nested_schematic_twoinstances",
                                      "long_trace_current_custom_conductivity",
+                                     "long_trace_current_undercut",
                                      "castellated_vias",
                                      "castellated_vias_internal_cutout",
                                      "castellated_vias_internal_cutout_aux_origin",
@@ -1626,6 +1628,29 @@ class TestSolverEndToEnd:
         voltage_diff = abs(voltage_from - voltage_to)
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
             f"Voltage difference for {current_source_element} does not match expected value (diff={voltage_diff})"
+
+    def test_long_trace_undercut_scales_resistance(self, kicad_test_projects):
+        def current_source_voltage_drop(project_name):
+            prob = kicad.load_kicad_project(kicad_test_projects[project_name].pro_path)
+            solution = solver.solve(prob)
+            network = next(
+                n for n in prob.networks
+                if len(n.elements) == 1 and isinstance(n.elements[0], problem.CurrentSource)
+            )
+            source = network.elements[0]
+            f_conn = next(c for c in network.connections if c.node_id == source.f)
+            t_conn = next(c for c in network.connections if c.node_id == source.t)
+            return abs(find_vertex_value(solution, f_conn) - find_vertex_value(solution, t_conn))
+
+        # Same board and conductivity, the only difference is undercut=30u
+        nominal = current_source_voltage_drop("long_trace_current_custom_conductivity")
+        eroded = current_source_voltage_drop("long_trace_current_undercut")
+
+        trace_width = 0.2
+        undercut = 0.03
+        expected_ratio = trace_width / (trace_width - 2 * undercut)
+        # The 2mm test point pads at the trace ends barely erode, hence the slack
+        assert eroded / nominal == pytest.approx(expected_ratio, rel=0.005)
 
     @pytest.mark.parametrize("max_mesh_size, face_tolerance", [
         (0.6, 0.05),
@@ -2420,6 +2445,45 @@ class TestSolverEndToEnd:
                 assert len(lsol.disconnected_meshes) == 1
             else:
                 pytest.fail(f"Unexpected layer {layer.name}")
+
+    def test_lateral_via_conduction_lowers_resistance(self, kicad_test_projects):
+        """
+        Dropping the same-layer (lateral) barrel resistors of the vias must
+        raise the voltage across the current source, since they only add
+        conductance in parallel to the planes.
+        """
+        prob = kicad.load_kicad_project(kicad_test_projects["degenerate_hole_geometry"].pro_path)
+
+        def without_lateral_resistors(network):
+            conns = {c.node_id: c for c in network.connections}
+            elements = [
+                e for e in network.elements
+                if not (isinstance(e, problem.Resistor)
+                        and e.a in conns and e.b in conns
+                        and conns[e.a].layer is conns[e.b].layer)
+            ]
+            # Keep all connections so that both problems mesh identically
+            return problem.Network(connections=network.connections, elements=elements)
+
+        stock_prob = dataclasses.replace(
+            prob, networks=[without_lateral_resistors(n) for n in prob.networks]
+        )
+        assert sum(len(n.elements) for n in stock_prob.networks) < \
+            sum(len(n.elements) for n in prob.networks)
+
+        def current_source_voltage(prob):
+            solution = solver.solve(prob)
+            source, network = next(
+                (e, n) for n in prob.networks for e in n.elements
+                if isinstance(e, problem.CurrentSource)
+            )
+            conns = {c.node_id: c for c in network.connections}
+            return abs(find_vertex_value(solution, conns[source.f])
+                       - find_vertex_value(solution, conns[source.t]))
+
+        v_new = current_source_voltage(prob)
+        v_stock = current_source_voltage(stock_prob)
+        assert v_new < v_stock
 
 
 class TestSolutionPickling:

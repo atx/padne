@@ -6,18 +6,21 @@ A "test set" is a real PCB (under tests/kicad/) that has been built and probed
 on the bench. We store the bench readings inline below and check that the solver
 reproduces them. Two kinds of readings:
 
-  * CalTrace  - a rung of the resistance ladder (200/300/400um traces). The
-                fitted sheet conductance is applied to the copper before solving
-                (calibrate), and the rung reading is itself confirmed like any
-                other measurement.
+  * CalTrace  - a rung of the resistance ladder (200/300/400/500um traces). The
+                fitted sheet conductance and overetch are applied to the copper
+                through the COPPER directive (conductivity, per-edge undercut)
+                before solving (calibrate), and the rung reading is itself
+                confirmed like any other measurement.
   * Measurement - a plain point-to-point voltage reading between two pads.
+                Rows marked via_cal (the via chains) additionally set the via
+                plating thickness: it is root-found so that their mean relative
+                residual vanishes, which makes them a fit, not a validation.
 
-The module is importable (it exposes solve_test_set / max_abs_error for
-benchmarks/benchmarks.py), runnable under pytest, and executable for
-investigation:
+The module is importable (it exposes solve_test_set / evaluate), runnable
+under pytest, and executable for investigation:
 
-    python3 tests/test_sets.py calibrate test_set_1
-    python3 tests/test_sets.py report    test_set_1
+    python3 tests/test_sets.py calibrate test_set_1_eurocircuits
+    python3 tests/test_sets.py report    test_set_1_eurocircuits
 """
 
 import argparse
@@ -25,10 +28,12 @@ import functools
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pcbnew
 import pytest
+import scipy.optimize
 
 from typing import Optional
 
@@ -46,6 +51,7 @@ class Measurement:
     abs_tol: Optional[float] = None
     rel_tol: Optional[float] = 0.4  # Intentionally relaxed
     description: str = ""
+    via_cal: bool = False  # Via chain row that the via plating is fitted on
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,7 @@ class TestSet:
     cal_traces: list[CalTrace] = field(default_factory=list)
     measurements: list[Measurement] = field(default_factory=list)
     copper_thickness_mm: float = 0.035
+    fab_plating_spec: str = ""  # Manufacturer's via plating spec, for reference
 
     @property
     def pro_path(self) -> Path:
@@ -89,6 +96,13 @@ class CalibrationResult:
     overetch_delta_mm: float   # total width lost vs nominal (w_eff = w_nom - this)
     implied_thickness_mm: float  # sheet_conductance / pure-copper conductivity
     rung_residuals: list[tuple[CalTrace, float]]  # (rung, measured_R - predicted_R)
+
+
+@dataclass(frozen=True)
+class ViaCalibrationResult:
+    plating_mm: float
+    solves: int
+    residuals: list[tuple[Measurement, float]]  # signed relative, at the fit
 
 
 @dataclass(frozen=True)
@@ -126,12 +140,12 @@ TEST_SETS: dict[str, TestSet] = {
             CT(M("TP67", "TP66", measured_v=63.7e-3), nominal_width_mm=0.5, length_mm=70),
         ],
         measurements=[
-            M("TP34", "TP33", measured_v=49.6e-3),
-            M("TP36", "TP35", measured_v=85.3e-3),
+            M("TP34", "TP33", measured_v=49.6e-3, via_cal=True),
+            M("TP36", "TP35", measured_v=85.3e-3, via_cal=True),
             M("TP30", "TP29", measured_v=39.1e-3),
             M("TP32", "TP31", measured_v=77.6e-3),
-            M("TP26", "TP25", measured_v=32.4e-3),
-            M("TP28", "TP27", measured_v=57.3e-3),
+            M("TP26", "TP25", measured_v=32.4e-3, via_cal=True),
+            M("TP28", "TP27", measured_v=57.3e-3, via_cal=True),
             M("TP22", "TP21", measured_v=31.1e-3),
             M("TP24", "TP23", measured_v=58.9e-3),
             M("TP18", "TP17", measured_v=18.8e-3),
@@ -162,6 +176,7 @@ TEST_SETS: dict[str, TestSet] = {
             M("TP54", "TP55", measured_v=100e-3),
             M("TP56", "TP55", measured_v=69.0e-3),
         ],
+        fab_plating_spec="Aisler 25 um",
     ),
     "test_set_1_eurocircuits": TestSet(
         project="test_set_1",
@@ -172,12 +187,12 @@ TEST_SETS: dict[str, TestSet] = {
             CT(M("TP67", "TP66", measured_v=75.6e-3), nominal_width_mm=0.5, length_mm=70),
         ],
         measurements=[
-            M("TP34", "TP33", measured_v=55.6e-3),
-            M("TP36", "TP35", measured_v=107.8e-3),
+            M("TP34", "TP33", measured_v=55.6e-3, via_cal=True),
+            M("TP36", "TP35", measured_v=107.8e-3, via_cal=True),
             M("TP30", "TP29", measured_v=45.7e-3),
             M("TP32", "TP31", measured_v=98.9e-3),
-            M("TP26", "TP25", measured_v=38.7e-3),
-            M("TP28", "TP27", measured_v=73.2e-3),
+            M("TP26", "TP25", measured_v=38.7e-3, via_cal=True),
+            M("TP28", "TP27", measured_v=73.2e-3, via_cal=True),
             M("TP22", "TP21", measured_v=35.0e-3),
             M("TP24", "TP23", measured_v=71.9e-3),
             M("TP18", "TP17", measured_v=20.4e-3),
@@ -208,7 +223,8 @@ TEST_SETS: dict[str, TestSet] = {
             M("TP54", "TP55", measured_v=104.9e-3),
             M("TP56", "TP55", measured_v=71.5e-3),
         ],
-    )
+        fab_plating_spec="Eurocircuits >=25 um average",
+    ),
 }
 
 
@@ -271,33 +287,44 @@ def voltage_diff(sol: solver.Solution, board: pcbnew.BOARD, m: Measurement) -> f
     return probe_voltage(sol, board, m.p_ref) - probe_voltage(sol, board, m.n_ref)
 
 
-def _calibrated_problem(ts: TestSet) -> problem.Problem:
-    """
-    Load the KiCad project and, when the set has a ladder, override every copper
-    layer's conductance with the sheet conductance fitted from the bench rungs.
-    This closes the loop: the solver runs with the board's measured conductance
-    instead of the nominal value baked into the project.
-    """
-    prob = kicad.load_kicad_project(ts.pro_path)
-    if len(ts.cal_traces) < 2:
-        return prob
-    cal = extract_calibration(ts)
-    # Patch conductance in place. Connections reference these same Layer objects
-    # by identity (the solver does prob.layers.index(conn.layer)), so mutating
-    # them keeps everything wired. object.__setattr__ bypasses frozen, as the
-    # codebase itself does in Layer/Network __post_init__.
-    for layer in prob.layers:
-        object.__setattr__(layer, "conductance", cal.sheet_conductance)
-    return prob
+def _copper_spec(ts: TestSet, cal: CalibrationResult, plating_mm: float) -> kicad.CopperSpec:
+    """COPPER parameters from the ladder fit; the fit reports total width loss."""
+    return kicad.CopperSpec(
+        conductivity=cal.sheet_conductance / ts.copper_thickness_mm,
+        undercut=cal.overetch_delta_mm / 2,
+        plating=plating_mm,
+    )
+
+
+def _load_with(ts: TestSet, copper_spec: kicad.CopperSpec) -> problem.Problem:
+    """Load the project with the schematic's COPPER directive replaced."""
+    orig = kicad.process_directives
+
+    def patched(directives: list[kicad.Directive]) -> kicad.Directives:
+        d = orig(directives)
+        return kicad.Directives(lumped_specs=d.lumped_specs, copper_spec=copper_spec,
+                                probe_specs=d.probe_specs)
+
+    # TODO: This is a bit too hacky; maybe kicad.load_kicad_project
+    # should allow injecting custom directives. Also relates
+    # to the feature where we need to inject other types of directives...
+    with mock.patch.object(kicad, "process_directives", patched):
+        return kicad.load_kicad_project(ts.pro_path)
+
+
+def _load_board(ts: TestSet) -> pcbnew.BOARD:
+    return pcbnew.LoadBoard(str(KICAD_DIR / ts.project / f"{ts.project}.kicad_pcb"))
 
 
 def solve_test_set(ts: TestSet, mesher_config=None
                    ) -> tuple[solver.Solution, pcbnew.BOARD]:
-    """Load the (calibrated) project, solve it, and return solution plus board."""
-    prob = _calibrated_problem(ts)
-    board = pcbnew.LoadBoard(str(KICAD_DIR / ts.project / f"{ts.project}.kicad_pcb"))
+    """Load the project with fully calibrated copper (ladder and via plating
+    fits), solve it, and return solution plus board."""
+    cal = extract_calibration(ts)
+    via_cal = extract_via_calibration(ts, mesher_config=mesher_config)
+    prob = _load_with(ts, _copper_spec(ts, cal, via_cal.plating_mm))
     sol = solver.solve(prob, mesher_config=mesher_config)
-    return sol, board
+    return sol, _load_board(ts)
 
 
 def evaluate(ts: TestSet, sol: solver.Solution, board: pcbnew.BOARD) -> list[ResultRow]:
@@ -334,6 +361,36 @@ def extract_calibration(ts: TestSet) -> CalibrationResult:
         implied_thickness_mm=slope / kicad.COPPER_CONDUCTIVITY,
         rung_residuals=residuals,
     )
+
+
+def extract_via_calibration(ts: TestSet, mesher_config=None) -> ViaCalibrationResult:
+    """
+    Fit the via plating thickness to the via_cal rows (via chains).
+
+    The copper is calibrated from the ladder first, then the mean signed relative
+    residual of the chain rows is driven to zero by root finding over the plating,
+    with a full load and solve per evaluation. The residual falls monotonically
+    with plating (series barrel resistance). The result depends on the mesh, so
+    it has to be fitted with the same mesher_config the assertions use.
+    """
+    pairs = [m for m in ts.measurements if m.via_cal]
+    if not pairs:
+        raise ValueError("Need at least one via_cal measurement to fit via plating")
+
+    cal = extract_calibration(ts)
+    board = _load_board(ts)
+    log: list[tuple[float, list[float]]] = []
+
+    def mean_residual(plating_mm: float) -> float:
+        prob = _load_with(ts, _copper_spec(ts, cal, plating_mm))
+        sol = solver.solve(prob, mesher_config=mesher_config)
+        resid = [(voltage_diff(sol, board, m) - m.measured_v) / m.measured_v for m in pairs]
+        log.append((plating_mm, resid))
+        return sum(resid) / len(resid)
+
+    plating_mm = scipy.optimize.brentq(mean_residual, 0.008, 0.080, xtol=0.00025)
+    _, resid = min(log, key=lambda e: abs(e[0] - plating_mm))
+    return ViaCalibrationResult(plating_mm, len(log), list(zip(pairs, resid)))
 
 
 @functools.lru_cache(maxsize=None)
@@ -378,6 +435,16 @@ def _cmd_calibrate(ts: TestSet) -> None:
         ref = f"{ct.measurement.p_ref}-{ct.measurement.n_ref}"
         print(f"{ref:<14}{ct.nominal_width_mm:>10.3f}"
               f"{ct.measured_ohms:>14.6g}{resid:>14.3g}")
+
+    via_cal = extract_via_calibration(ts)
+    print()
+    print(f"via plating       : {via_cal.plating_mm * 1000:.2f} um "
+          f"(default mesh, {via_cal.solves} solves)")
+    print(f"fab spec          : {ts.fab_plating_spec}, IPC class 2 20 um")
+    print()
+    print(f"{'chain':<14}{'resid':>10}")
+    for m, resid in via_cal.residuals:
+        print(f"{m.p_ref + '-' + m.n_ref:<14}{resid:>10.2%}")
 
 
 def _cmd_report(ts: TestSet) -> None:
