@@ -1536,6 +1536,7 @@ class TestSolverEndToEnd:
                                      "voltage_source_multipad_degeneration",
                                      "nested_schematic_twoinstances",
                                      "long_trace_current_custom_conductivity",
+                                     "long_trace_current_undercut",
                                      "castellated_vias",
                                      "castellated_vias_internal_cutout",
                                      "castellated_vias_internal_cutout_aux_origin",
@@ -1626,6 +1627,29 @@ class TestSolverEndToEnd:
         voltage_diff = abs(voltage_from - voltage_to)
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
             f"Voltage difference for {current_source_element} does not match expected value (diff={voltage_diff})"
+
+    def test_long_trace_undercut_scales_resistance(self, kicad_test_projects):
+        def current_source_voltage_drop(project_name):
+            prob = kicad.load_kicad_project(kicad_test_projects[project_name].pro_path)
+            solution = solver.solve(prob)
+            network = next(
+                n for n in prob.networks
+                if len(n.elements) == 1 and isinstance(n.elements[0], problem.CurrentSource)
+            )
+            source = network.elements[0]
+            f_conn = next(c for c in network.connections if c.node_id == source.f)
+            t_conn = next(c for c in network.connections if c.node_id == source.t)
+            return abs(find_vertex_value(solution, f_conn) - find_vertex_value(solution, t_conn))
+
+        # Same board and conductivity, the only difference is undercut=30u
+        nominal = current_source_voltage_drop("long_trace_current_custom_conductivity")
+        eroded = current_source_voltage_drop("long_trace_current_undercut")
+
+        trace_width = 0.2
+        undercut = 0.03
+        expected_ratio = trace_width / (trace_width - 2 * undercut)
+        # The 2mm test point pads at the trace ends barely erode, hence the slack
+        assert eroded / nominal == pytest.approx(expected_ratio, rel=0.005)
 
     @pytest.mark.parametrize("max_mesh_size, face_tolerance", [
         (0.6, 0.05),

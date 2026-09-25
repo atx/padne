@@ -1090,13 +1090,25 @@ class TestCopperDirective:
         copper_spec = kicad.CopperSpec.from_directive(directive)
         assert copper_spec.conductivity == 29750.0
 
-    def test_copper_directive_missing_conductivity(self):
-        """Test error when conductivity parameter is missing."""
-        directive_text = "!padne COPPER"
-        directive = kicad.Directive.parse(directive_text)
+    def test_copper_directive_all_defaults(self):
+        directive = kicad.Directive.parse("!padne COPPER")
+        assert kicad.CopperSpec.from_directive(directive) == kicad.CopperSpec()
 
-        with pytest.raises(KeyError,
-                           match="The parameter `conductivity` not specified for the COPPER directive"):
+    def test_copper_directive_undercut_and_plating(self):
+        directive = kicad.Directive.parse("!padne COPPER undercut=30u plating=20e-6")
+        copper_spec = kicad.CopperSpec.from_directive(directive)
+        assert copper_spec.conductivity == kicad.COPPER_CONDUCTIVITY
+        assert copper_spec.undercut == pytest.approx(0.030)
+        assert copper_spec.plating == pytest.approx(0.020)
+
+    def test_copper_directive_negative_undercut(self):
+        directive = kicad.Directive.parse("!padne COPPER undercut=-1u")
+        with pytest.raises(ValueError, match="Undercut must be non-negative"):
+            kicad.CopperSpec.from_directive(directive)
+
+    def test_copper_directive_zero_plating(self):
+        directive = kicad.Directive.parse("!padne COPPER plating=0")
+        with pytest.raises(ValueError, match="Plating thickness must be positive"):
             kicad.CopperSpec.from_directive(directive)
 
     def test_copper_directive_negative_conductivity(self):
@@ -1247,3 +1259,41 @@ class TestClipLayerWithOutline:
             # Layer should have some non-empty geometry
             assert not layer.shape.is_empty, \
                 f"Layer {layer.name} should have non-empty geometry"
+
+
+class TestErodeLayersByUndercut:
+
+    def test_rectangle_erosion_keeps_drill_radius(self):
+        layer = kicad.PlottedGerberLayer(
+            name="F.Cu",
+            layer_id=pcbnew.F_Cu,
+            geometry=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 2)]),
+        )
+        undercut = 0.1
+
+        eroded = kicad.erode_layers_by_undercut([layer], undercut)
+
+        assert len(eroded) == 1
+        assert isinstance(eroded[0].geometry, shapely.geometry.MultiPolygon)
+        minx, miny, maxx, maxy = eroded[0].geometry.bounds
+        assert maxy - miny == pytest.approx(2 - 2 * undercut, abs=1e-9)
+        assert maxx - minx == pytest.approx(10 - 2 * undercut, abs=1e-9)
+
+        via = kicad.ViaSpec(point=shapely.geometry.Point(5, 1),
+                            drill_diameter=0.6,
+                            layer_names=["F.Cu"])
+        punched = kicad.punch_via_holes(eroded, [via])
+
+        (polygon,) = punched[0].geometry.geoms
+        (hole,) = polygon.interiors
+        hminx, hminy, hmaxx, hmaxy = hole.bounds
+        assert hmaxx - hminx == pytest.approx(0.6, abs=1e-9)
+        assert hmaxy - hminy == pytest.approx(0.6, abs=1e-9)
+
+    def test_zero_undercut_is_noop(self):
+        layer = kicad.PlottedGerberLayer(
+            name="F.Cu",
+            layer_id=pcbnew.F_Cu,
+            geometry=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 2)]),
+        )
+        assert kicad.erode_layers_by_undercut([layer], 0.0) == [layer]

@@ -76,6 +76,8 @@ pcbnew = find_pcbnew_module()
 
 # Copper conductivity in S/mm (not S/m!)
 COPPER_CONDUCTIVITY = 5.95e4
+# Default via barrel plating thickness in mm (typical fab spec is >=25um)
+VIA_PLATING_THICKNESS = 0.025
 
 
 def is_kicad_version_at_least(major: int, minor: int) -> bool:
@@ -758,33 +760,38 @@ class ProbeSpec:
 @dataclass(frozen=True)
 class CopperSpec:
     """
-    Specifies custom copper conductivity for the project.
+    Copper process parameters for the project. All lengths are in mm.
     """
-    conductivity: float  # S/mm
+    conductivity: float = COPPER_CONDUCTIVITY  # S/mm
+    undercut: float = 0.0  # Etch loss per copper edge
+    plating: float = VIA_PLATING_THICKNESS  # Via barrel wall thickness
 
     @classmethod
     def from_directive(cls, directive: Directive) -> 'CopperSpec':
         """
-        Parse a COPPER directive into a CopperSpec object.
-
-        Args:
-            directive: The directive to parse
-
-        Returns:
-            A CopperSpec object with parsed conductivity
+        Parse a COPPER directive. Directive values are in SI units (S/m, m) and
+        are converted to the internal S/mm and mm here.
 
         Raises:
-            ValueError: If conductivity parameter is missing or invalid
+            ValueError: If a parameter is out of range
         """
-        if "conductivity" not in directive.params:
-            raise KeyError("The parameter `conductivity` not specified for the COPPER directive")
-        # Convert from S/m to S/mm
-        conductivity = units.Value.parse(directive.params["conductivity"]).value * 1e-3
-
-        if conductivity <= 0:
-            raise ValueError(f"Conductivity must be positive, got {conductivity}")
-
-        return cls(conductivity=conductivity)
+        kwargs = {}
+        if "conductivity" in directive.params:
+            conductivity = units.Value.parse(directive.params["conductivity"]).value * 1e-3
+            if conductivity <= 0:
+                raise ValueError(f"Conductivity must be positive, got {conductivity}")
+            kwargs["conductivity"] = conductivity
+        if "undercut" in directive.params:
+            undercut = units.Value.parse(directive.params["undercut"]).value * 1e3
+            if undercut < 0:
+                raise ValueError(f"Undercut must be non-negative, got {undercut}")
+            kwargs["undercut"] = undercut
+        if "plating" in directive.params:
+            plating = units.Value.parse(directive.params["plating"]).value * 1e3
+            if plating <= 0:
+                raise ValueError(f"Plating thickness must be positive, got {plating}")
+            kwargs["plating"] = plating
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -1624,6 +1631,26 @@ def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
 
 
 @stage_timer
+def erode_layers_by_undercut(plotted_layers: list[PlottedGerberLayer],
+                             undercut: float) -> list[PlottedGerberLayer]:
+    """Shrink every copper edge by the etch undercut (in mm)."""
+    if undercut == 0:
+        return plotted_layers
+
+    eroded_layers = []
+    for plotted_layer in plotted_layers:
+        # Mitre joins add no arc vertices at concave corners, so large pours
+        # keep their vertex count; the corner shape error is O(undercut^2).
+        eroded_geometry = plotted_layer.geometry.buffer(-undercut, join_style="mitre")
+        eroded_layers.append(PlottedGerberLayer(
+            name=plotted_layer.name,
+            layer_id=plotted_layer.layer_id,
+            geometry=ensure_geometry_is_multipolygon(eroded_geometry)
+        ))
+    return eroded_layers
+
+
+@stage_timer
 def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
@@ -1655,14 +1682,16 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     schema_hierarchy = build_schema_hierarchy(project.sch_path)
     directives = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
 
-    copper_conductivity = COPPER_CONDUCTIVITY
-    # Extract custom copper conductivity if specified
-    if directives.copper_spec is not None:
-        copper_conductivity = directives.copper_spec.conductivity
-        log.info(f"Using custom copper conductivity of {copper_conductivity} S/mm")
+    copper_spec = directives.copper_spec
+    if copper_spec is None:
+        copper_spec = CopperSpec()
+    else:
+        log.info(f"Using COPPER directive: {copper_spec}")
 
-    # Create stackup with custom conductivity if provided
-    stackup = extract_stackup_from_kicad_pcb(board, copper_conductivity)
+    # Holes are drilled after etching, so erode before punching them
+    plotted_layers = erode_layers_by_undercut(plotted_layers, copper_spec.undercut)
+
+    stackup = extract_stackup_from_kicad_pcb(board, copper_spec.conductivity)
 
     if not verify_stackup_contains_all_layers(stackup, plotted_layers):
         raise ValueError("Stackup does not contain all plotted layers")
