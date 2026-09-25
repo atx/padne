@@ -16,13 +16,13 @@ jobs:
       sdist_name: ${{ steps.build.outputs.sdist_name }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
@@ -41,7 +41,7 @@ jobs:
           echo "Built sdist: ${SDIST_NAME}"
 
       - name: Upload sdist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.build.outputs.sdist_name }}
           path: dist/${{ steps.build.outputs.sdist_name }}
@@ -59,22 +59,22 @@ jobs:
     needs: [build_sdist, build_binary]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download sdist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_sdist.outputs.sdist_name }}
           path: ./artifacts/
 
       - name: Download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_binary.outputs.artifact_name }}
           path: ./artifacts/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "Release ${{ github.ref_name }}"
           generate_release_notes: true

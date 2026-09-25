@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
     - name: Check out repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         submodules: recursive
         # Polyversion enumerates refs from the local repo; needs full history + tags.
@@ -31,7 +31,7 @@ jobs:
         make -C docs polyversion
 
     - name: Upload documentation artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: padne-docs
         path: docs/_build/polyversion

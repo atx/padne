@@ -40,7 +40,7 @@ jobs:
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
     - name: Check out repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         submodules: recursive
 
@@ -54,7 +54,7 @@ jobs:
         python3 -m pytest --junitxml=pytest-results.xml
 
     - name: Publish Test Results
-      uses: dorny/test-reporter@v1
+      uses: dorny/test-reporter@v3
       if: always() # Always run this step to publish results, even if tests fail
       with:
         name: Pytest Results (${{ matrix.name }})
