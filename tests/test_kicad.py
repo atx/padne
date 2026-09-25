@@ -256,6 +256,12 @@ class TestViaSpecs:
         return length / (kicad.COPPER_CONDUCTIVITY * math.pi * ((radius + plating)**2 - radius**2))
 
     @staticmethod
+    def lateral_conductance(length, radius, plating):
+        """Total m=1 barrel conductance seen by one end of a via segment of the given length."""
+        dead_end_height = length / 2
+        return (math.pi / 2) * kicad.COPPER_CONDUCTIVITY * plating * math.tanh(dead_end_height / radius)
+
+    @staticmethod
     def classify_resistors(network):
         """
         Split the resistors of a via network into vertical (different layers)
@@ -265,6 +271,9 @@ class TestViaSpecs:
         vertical, lateral = [], []
         for element in network.elements:
             if not isinstance(element, problem.Resistor):
+                continue
+            # Lumped resistors from directives may hang on internal nodes
+            if element.a not in conns or element.b not in conns:
                 continue
             conn_a, conn_b = conns[element.a], conns[element.b]
             if conn_a.layer is conn_b.layer:
@@ -438,6 +447,54 @@ class TestViaSpecs:
                                           kicad.VIA_PLATING_THICKNESS)
         assert parallel_resistance == pytest.approx(expected)
 
+
+    def test_simple_via_has_lateral_antipodal_pairs(self, kicad_test_projects):
+        result = kicad.load_kicad_project(kicad_test_projects["simple_via"].pro_path)
+        radius = self.SIMPLE_VIA_DRILL_RADIUS
+
+        lateral_by_layer = {}
+        for network in result.networks:
+            for r, conn_a, conn_b in self.classify_resistors(network)[1]:
+                lateral_by_layer.setdefault(conn_a.layer.name, []).append((r, conn_a, conn_b))
+
+        assert set(lateral_by_layer) == {"F.Cu", "B.Cu"}
+        expected_pair_conductance = self.lateral_conductance(
+            self.SIMPLE_VIA_BARREL_LENGTH, radius, kicad.VIA_PLATING_THICKNESS
+        ) / 8
+        for layer_name, lateral in lateral_by_layer.items():
+            assert len(lateral) == 8, layer_name
+            rim_points = set()
+            for r, conn_a, conn_b in lateral:
+                assert conn_a.point.distance(conn_b.point) == pytest.approx(2 * radius)
+                assert r.resistance == pytest.approx(1 / expected_pair_conductance)
+                rim_points.update([(conn_a.point.x, conn_a.point.y), (conn_b.point.x, conn_b.point.y)])
+            # Every rim point belongs to exactly one pair
+            assert len(rim_points) == 16
+
+    def test_4layer_via_internal_layers_get_lateral_pairs_from_both_segments(self, kicad_test_projects):
+        result = kicad.load_kicad_project(kicad_test_projects["via_tht_4layer"].pro_path)
+        via_center = shapely.geometry.Point(118.8, 105.9)
+        radius = 0.15
+        plating = kicad.VIA_PLATING_THICKNESS
+
+        conductance_by_layer = {}
+        count_by_layer = {}
+        for network in result.networks:
+            for r, conn_a, _ in self.classify_resistors(network)[1]:
+                if via_center.distance(conn_a.point) > 2 * radius:
+                    continue
+                name = conn_a.layer.name
+                conductance_by_layer[name] = conductance_by_layer.get(name, 0) + 1 / r.resistance
+                count_by_layer[name] = count_by_layer.get(name, 0) + 1
+
+        # Outer segments span a 0.1mm dielectric, the core 1.24mm, each plus 35um copper
+        outer = self.lateral_conductance(0.1 + 0.035, radius, plating)
+        core = self.lateral_conductance(1.24 + 0.035, radius, plating)
+        assert count_by_layer == {"F.Cu": 8, "In1.Cu": 16, "In2.Cu": 16, "B.Cu": 8}
+        assert conductance_by_layer["F.Cu"] == pytest.approx(outer)
+        assert conductance_by_layer["In1.Cu"] == pytest.approx(outer + core)
+        assert conductance_by_layer["In2.Cu"] == pytest.approx(core + outer)
+        assert conductance_by_layer["B.Cu"] == pytest.approx(outer)
 
 class TestDirectiveParse:
 

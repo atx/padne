@@ -1449,8 +1449,16 @@ def process_via_spec(via_spec: ViaSpec,
     resistor_stack = []
 
     # Get boundary coordinates (excluding duplicate last point)
-    boundary_coords = list(via_spec.shape.exterior.coords)[:-1]
-    num_boundary_points = len(boundary_coords)
+    boundary_points = [
+        shapely.geometry.Point(x, y)
+        for x, y in list(via_spec.shape.exterior.coords)[:-1]
+    ]
+    num_boundary_points = len(boundary_points)
+    assert num_boundary_points % 2 == 0, \
+        f"Via boundary needs an even number of points, got {num_boundary_points}"
+    # Point i and point i + num_pairs are antipodal on the rim
+    num_pairs = num_boundary_points // 2
+    radius = via_spec.drill_diameter / 2
 
     involved_copper_layers = [
         stackup.items[stackup.index_by_name(layer_name)]
@@ -1486,30 +1494,54 @@ def process_via_spec(via_spec: ViaSpec,
         # Each resistor carries 1/N of the current, so needs N times the resistance
         distributed_resistance = total_resistance * num_boundary_points
 
-        # Create connections and resistors for each boundary point
-        connections = []
-        elements = []
+        # Lateral conduction of the barrel between antipodal rim points (m=1
+        # mode), see https://atx.name/electronics/padne-vias/ . The segment is
+        # driven from both ends, so each end sees a dead-end barrel of half length.
+        pair_conductance = (math.pi / (2 * num_pairs)) * conductivity * plating_thickness \
+            * math.tanh(segment_length / 2 / radius)
+        pair_resistance = 1 / pair_conductance
 
-        for x, y in boundary_coords:
-            point = shapely.geometry.Point(x, y)
+        # Validate that the points are within the layer shapes
+        # This is probably going to suck for buried or blind vias, but
+        # we do not support those anyway yet.
+        conns_a = {
+            k: problem.Connection(layer=layer_a, point=point)
+            for k, point in enumerate(boundary_points)
+            if layer_a.shape.intersects(point)
+        }
+        conns_b = {
+            k: problem.Connection(layer=layer_b, point=point)
+            for k, point in enumerate(boundary_points)
+            if layer_b.shape.intersects(point)
+        }
 
-            # Validate that the point is within the layer shapes
-            # This is probably going to suck for buried or blind vias, but
-            # we do not support those anyway yet.
-            if not layer_a.shape.intersects(point) or not layer_b.shape.intersects(point):
-                continue
-
-            conn_a = problem.Connection(layer=layer_a, point=point)
-            conn_b = problem.Connection(layer=layer_b, point=point)
-
-            via_resistor = problem.Resistor(
-                a=conn_a.node_id,
-                b=conn_b.node_id,
+        elements = [
+            problem.Resistor(
+                a=conns_a[k].node_id,
+                b=conns_b[k].node_id,
                 resistance=distributed_resistance
             )
+            for k in range(num_boundary_points)
+            if k in conns_a and k in conns_b
+        ]
 
-            connections.extend([conn_a, conn_b])
-            elements.append(via_resistor)
+        for conns in (conns_a, conns_b):
+            elements.extend(
+                problem.Resistor(
+                    a=conns[k].node_id,
+                    b=conns[k + num_pairs].node_id,
+                    resistance=pair_resistance
+                )
+                for k in range(num_pairs)
+                if k in conns and k + num_pairs in conns
+            )
+
+        # Connections not touched by any resistor would dangle in the network
+        used_node_ids = {t for element in elements for t in element.terminals}
+        connections = [
+            conn for conn in [*conns_a.values(), *conns_b.values()]
+            if conn.node_id in used_node_ids
+        ]
 
         network = problem.Network(
             connections=connections,
