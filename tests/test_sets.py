@@ -6,18 +6,18 @@ A "test set" is a real PCB (under tests/kicad/) that has been built and probed
 on the bench. We store the bench readings inline below and check that the solver
 reproduces them. Two kinds of readings:
 
-  * CalTrace  - a rung of the resistance ladder (200/300/400um traces). The
-                fitted sheet conductance is applied to the copper before solving
-                (calibrate), and the rung reading is itself confirmed like any
-                other measurement.
+  * CalTrace  - a rung of the resistance ladder (200/300/400/500um traces). The
+                fitted sheet conductance and overetch are applied to the copper
+                through the COPPER directive (conductivity, per-edge undercut)
+                before solving (calibrate), and the rung reading is itself
+                confirmed like any other measurement.
   * Measurement - a plain point-to-point voltage reading between two pads.
 
-The module is importable (it exposes solve_test_set / max_abs_error for
-benchmarks/benchmarks.py), runnable under pytest, and executable for
-investigation:
+The module is importable (it exposes solve_test_set / evaluate), runnable
+under pytest, and executable for investigation:
 
-    python3 tests/test_sets.py calibrate test_set_1
-    python3 tests/test_sets.py report    test_set_1
+    python3 tests/test_sets.py calibrate test_set_1_eurocircuits
+    python3 tests/test_sets.py report    test_set_1_eurocircuits
 """
 
 import argparse
@@ -25,6 +25,7 @@ import functools
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pcbnew
@@ -271,33 +272,43 @@ def voltage_diff(sol: solver.Solution, board: pcbnew.BOARD, m: Measurement) -> f
     return probe_voltage(sol, board, m.p_ref) - probe_voltage(sol, board, m.n_ref)
 
 
-def _calibrated_problem(ts: TestSet) -> problem.Problem:
-    """
-    Load the KiCad project and, when the set has a ladder, override every copper
-    layer's conductance with the sheet conductance fitted from the bench rungs.
-    This closes the loop: the solver runs with the board's measured conductance
-    instead of the nominal value baked into the project.
-    """
-    prob = kicad.load_kicad_project(ts.pro_path)
-    if len(ts.cal_traces) < 2:
-        return prob
-    cal = extract_calibration(ts)
-    # Patch conductance in place. Connections reference these same Layer objects
-    # by identity (the solver does prob.layers.index(conn.layer)), so mutating
-    # them keeps everything wired. object.__setattr__ bypasses frozen, as the
-    # codebase itself does in Layer/Network __post_init__.
-    for layer in prob.layers:
-        object.__setattr__(layer, "conductance", cal.sheet_conductance)
-    return prob
+def _copper_spec(ts: TestSet, cal: CalibrationResult, plating_mm: float) -> kicad.CopperSpec:
+    """COPPER parameters from the ladder fit; the fit reports total width loss."""
+    return kicad.CopperSpec(
+        conductivity=cal.sheet_conductance / ts.copper_thickness_mm,
+        undercut=cal.overetch_delta_mm / 2,
+        plating=plating_mm,
+    )
+
+
+def _load_with(ts: TestSet, copper_spec: kicad.CopperSpec) -> problem.Problem:
+    """Load the project with the schematic's COPPER directive replaced."""
+    orig = kicad.process_directives
+
+    def patched(directives: list[kicad.Directive]) -> kicad.Directives:
+        d = orig(directives)
+        return kicad.Directives(lumped_specs=d.lumped_specs, copper_spec=copper_spec,
+                                probe_specs=d.probe_specs)
+
+    # TODO: This is a bit too hacky; maybe kicad.load_kicad_project
+    # should allow injecting custom directives. Also relates
+    # to the feature where we need to inject other types of directives...
+    with mock.patch.object(kicad, "process_directives", patched):
+        return kicad.load_kicad_project(ts.pro_path)
+
+
+def _load_board(ts: TestSet) -> pcbnew.BOARD:
+    return pcbnew.LoadBoard(str(KICAD_DIR / ts.project / f"{ts.project}.kicad_pcb"))
 
 
 def solve_test_set(ts: TestSet, mesher_config=None
                    ) -> tuple[solver.Solution, pcbnew.BOARD]:
-    """Load the (calibrated) project, solve it, and return solution plus board."""
-    prob = _calibrated_problem(ts)
-    board = pcbnew.LoadBoard(str(KICAD_DIR / ts.project / f"{ts.project}.kicad_pcb"))
+    """Load the project with the ladder-calibrated copper, solve it, and return
+    solution plus board."""
+    cal = extract_calibration(ts)
+    prob = _load_with(ts, _copper_spec(ts, cal, kicad.VIA_PLATING_THICKNESS))
     sol = solver.solve(prob, mesher_config=mesher_config)
-    return sol, board
+    return sol, _load_board(ts)
 
 
 def evaluate(ts: TestSet, sol: solver.Solution, board: pcbnew.BOARD) -> list[ResultRow]:
