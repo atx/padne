@@ -1436,7 +1436,8 @@ def extract_board_outline(board: pcbnew.BOARD) -> Optional[shapely.geometry.Mult
 
 def process_via_spec(via_spec: ViaSpec,
                      layer_dict: dict[str, problem.Layer],
-                     stackup: Stackup) -> list[problem.Network]:
+                     stackup: Stackup,
+                     plating_thickness: float) -> list[problem.Network]:
     # In theory, they should already be in physical order, but we reorder
     # them based on the Stackup just in case this ever changes
 
@@ -1451,15 +1452,10 @@ def process_via_spec(via_spec: ViaSpec,
     boundary_coords = list(via_spec.shape.exterior.coords)[:-1]
     num_boundary_points = len(boundary_coords)
 
-    # Find maximum plating thickness from all copper layers in the via spec
     involved_copper_layers = [
         stackup.items[stackup.index_by_name(layer_name)]
         for layer_name in via_spec.layer_names
     ]
-    plating_thickness = max(
-        layer.thickness for layer in involved_copper_layers
-        if layer.conductivity is not None
-    )
 
     # Use conductivity from copper layers (should be same for all copper)
     conductivity = next(
@@ -1714,7 +1710,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Note that we have to create the layer dict _after_ punching the holes,
     # since otherwise it would contain the original objects!
     for via_spec in via_specs:
-        networks.extend(process_via_spec(via_spec, layer_dict, stackup))
+        networks.extend(process_via_spec(via_spec, layer_dict, stackup, copper_spec.plating))
 
     log.info("Creating networks from specifications")
     for lumped_spec in directives.lumped_specs:

@@ -1,3 +1,4 @@
+import math
 import warnings
 # This is to suppress pcbnew deprecation warning. Unfortunately the RPC API
 # is not yet cooked enough for us
@@ -246,6 +247,40 @@ class TestPadFinder:
 
 class TestViaSpecs:
 
+    SIMPLE_VIA_DRILL_RADIUS = 0.15
+    # F.Cu to B.Cu: 1.51mm dielectric plus the 35um B.Cu layer
+    SIMPLE_VIA_BARREL_LENGTH = 1.51 + 0.035
+
+    @staticmethod
+    def barrel_resistance(length, radius, plating):
+        return length / (kicad.COPPER_CONDUCTIVITY * math.pi * ((radius + plating)**2 - radius**2))
+
+    @staticmethod
+    def classify_resistors(network):
+        """
+        Split the resistors of a via network into vertical (different layers)
+        and lateral (same layer) ones, returned as (resistor, conn_a, conn_b).
+        """
+        conns = {c.node_id: c for c in network.connections}
+        vertical, lateral = [], []
+        for element in network.elements:
+            if not isinstance(element, problem.Resistor):
+                continue
+            conn_a, conn_b = conns[element.a], conns[element.b]
+            if conn_a.layer is conn_b.layer:
+                lateral.append((element, conn_a, conn_b))
+            else:
+                vertical.append((element, conn_a, conn_b))
+        return vertical, lateral
+
+    @staticmethod
+    def load_simple_via(kicad_test_projects):
+        board = pcbnew.LoadBoard(str(kicad_test_projects["simple_via"].pcb_path))
+        layer_dict, _ = Utils.setup_layer_dict_and_pad_index(board)
+        stackup = kicad.extract_stackup_from_kicad_pcb(board)
+        via_spec, = kicad.extract_via_specs_from_pcb(board)
+        return via_spec, layer_dict, stackup
+
     def test_extract_tht_component_pad_specs(self, kicad_test_projects):
         project = kicad_test_projects["tht_component"]
 
@@ -374,6 +409,34 @@ class TestViaSpecs:
         ]
         for pair in expected_pairs:
             assert pair in found_layers, f"Missing resistor between layers {pair} at via {via_center}"
+
+    @pytest.mark.parametrize("plating", [0.025, 0.010])
+    def test_via_barrel_resistance_uses_plating_thickness(self, kicad_test_projects, plating):
+        via_spec, layer_dict, stackup = self.load_simple_via(kicad_test_projects)
+
+        network, = kicad.process_via_spec(via_spec, layer_dict, stackup, plating)
+        vertical, _ = self.classify_resistors(network)
+
+        assert len(vertical) == 16
+        parallel_resistance = 1 / sum(1 / r.resistance for r, _, _ in vertical)
+        expected = self.barrel_resistance(self.SIMPLE_VIA_BARREL_LENGTH,
+                                          self.SIMPLE_VIA_DRILL_RADIUS, plating)
+        assert parallel_resistance == pytest.approx(expected)
+
+    def test_via_barrel_uses_default_plating_when_loading_project(self, kicad_test_projects):
+        result = kicad.load_kicad_project(kicad_test_projects["simple_via"].pro_path)
+
+        vertical = [
+            r
+            for network in result.networks
+            for r, _, _ in self.classify_resistors(network)[0]
+        ]
+        assert len(vertical) == 16
+        parallel_resistance = 1 / sum(1 / r.resistance for r in vertical)
+        expected = self.barrel_resistance(self.SIMPLE_VIA_BARREL_LENGTH,
+                                          self.SIMPLE_VIA_DRILL_RADIUS,
+                                          kicad.VIA_PLATING_THICKNESS)
+        assert parallel_resistance == pytest.approx(expected)
 
 
 class TestDirectiveParse:
