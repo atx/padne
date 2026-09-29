@@ -56,7 +56,7 @@ struct Mesh {
         return uint32_t((boundary ? boundary_edge : face_edge).size());
     }
 
-    // Cotangent weight of edge `h`: sums |cot(opposite angle)| / 2 over the
+    // Cotangent weight of edge `h`: sums cot(opposite angle) / 2 over the
     // two adjacent triangles, skipping any side that is a boundary face.
     // Shared by HalfEdge.cotan and the bulk laplacian loop.
     double cotan_weight(uint32_t h) const {
@@ -77,7 +77,7 @@ struct Mesh {
             double dkx = xk - xo, dky = yk - yo;
             double dot = dix * dkx + diy * dky;
             double cross = dix * dky - diy * dkx;
-            ratio += std::fabs(dot / cross) / 2.0;
+            ratio += dot / std::fabs(cross) / 2.0;
         }
         return ratio;
     }

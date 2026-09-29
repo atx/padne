@@ -632,12 +632,59 @@ class TestSyntheticProblems:
             expected_voltage = avg_v_left + vertex.p.x * expected_slope
             actual_voltage = all_values[vertex]
 
-            # Use pytest.approx with a reasonable absolute tolerance
-            # The tolerance might need adjustment based on mesh density and solver accuracy
-            # TODO: The tolerance here is minimal possible with the current solver
-            # and mesher. I feel like it should be _way_ more accurate...
-            assert actual_voltage == pytest.approx(expected_voltage, abs=0.05), \
+            # The residual comes from the point connections: the boundary
+            # between them is not held at a fixed potential.
+            assert actual_voltage == pytest.approx(expected_voltage, abs=0.005), \
                 f"Voltage at vertex {vertex.p} ({actual_voltage:.3f}) is not proportional to x ({expected_voltage:.3f})"
+
+    def test_sheet_resistance(self):
+        """
+        Sheet resistance of a rectangle driven between its short edges.
+
+        Each short edge is pinned to one potential by chaining 0 V sources
+        between closely spaced connections, so the solution is close to the
+        linear analytic one and the voltage across the sheet is
+        I * width / (height * conductance). Wrong cotangent weights on the
+        obtuse triangles the mesher produces show up here as a ~6% error,
+        the residual of the point-wise pinning is ~0.03%.
+        """
+        width, height = 20.0, 10.0
+        conductance, current = 1.0, 1.0
+        ys = np.linspace(0, height, 43)[1:-1]
+        points_left = [(0.0, y) for y in ys]
+        points_right = [(width, y) for y in ys]
+
+        # Connection points must be polygon vertices to end up in the mesh.
+        boundary_coords = (
+            [(0, 0)] + points_left + [(0, height), (width, height)]
+            + points_right[::-1] + [(width, 0)]
+        )
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.Polygon(boundary_coords)]),
+            name="Sheet",
+            conductance=conductance,
+        )
+
+        def pin_edge(points):
+            connections = [problem.Connection(layer=layer, point=shapely.geometry.Point(p))
+                           for p in points]
+            shorts = [problem.VoltageSource(p=a.node_id, n=b.node_id, voltage=0.0)
+                      for a, b in zip(connections, connections[1:])]
+            return connections, shorts
+
+        conns_left, shorts_left = pin_edge(points_left)
+        conns_right, shorts_right = pin_edge(points_right)
+        csource = problem.CurrentSource(
+            f=conns_left[0].node_id, t=conns_right[0].node_id, current=current)
+        network = problem.Network(
+            connections=conns_left + conns_right,
+            elements=shorts_left + shorts_right + [csource],
+        )
+        solution = solver.solve(problem.Problem(layers=[layer], networks=[network]))
+
+        voltage = find_vertex_value(solution, conns_right[0]) - find_vertex_value(solution, conns_left[0])
+        expected = current * width / (height * conductance)
+        assert voltage == pytest.approx(expected, rel=5e-3)
 
     def test_coaxial_structure(self):
         """
@@ -772,10 +819,9 @@ class TestSyntheticProblems:
             assert pot == pytest.approx(reference_potential + 1.0, abs=0.001), \
                 f"Inner boundary potential inconsistency: {pot} vs reference {reference_potential + 1.0}"
 
-        # TODO: I suspect that there is systematic bias here somewhere. In reality,
-        # we should be getting better than 0.03V accuracy, but I don't know why we are not.
-        # It seems that shifting the outer_radius and inner_radius in the
-        # analytical_solution function definition does help and allow us to match the actual result exactly
+        # The residual comes from the polygonal approximation of the circles
+        # and from mesher-added boundary vertices between the connections,
+        # which are not held at the boundary potential.
 
         for mesh_idx, (msh, values) in enumerate(zip(layer_solution.meshes, layer_solution.potentials)):
             for vertex in msh.vertices:
@@ -791,7 +837,7 @@ class TestSyntheticProblems:
 
                 analytical_value = analytical_solution(x, y)
                 # Check each point against analytical solution with reasonable tolerance
-                assert numerical_value == pytest.approx(analytical_value, abs=0.03), \
+                assert numerical_value == pytest.approx(analytical_value, abs=0.015), \
                     f"Error too large at point ({x:.2f}, {y:.2f}), r={r:.2f}: " \
                     f"numerical={numerical_value:.4f}, analytical={analytical_value:.4f}"
 

@@ -346,7 +346,7 @@ class TestMeshStructure:
         assert {edge.twin.origin.i for edge in orbit} == {1, 3, 4}
 
     def test_halfedge_cotan_interior_edge(self):
-        """cotan of an interior edge sums |cot|/2 over both opposite angles."""
+        """cotan of an interior edge sums cot/2 over both opposite angles."""
         mesh = make_square_with_center_mesh()
         center = mesh.vertices.to_object(4)
         corner = mesh.vertices.to_object(0)
@@ -379,6 +379,20 @@ class TestMeshStructure:
         # so cotan = 0.75 / 2.
         hedge = mesh.connect_vertices(v0, v1)
         assert hedge.cotan() == pytest.approx(0.375)
+
+    def test_halfedge_cotan_obtuse_angle_is_negative(self):
+        """An obtuse opposite angle must contribute a negative cotangent."""
+        points = [Point(0.0, 0.0), Point(4.0, 0.0), Point(2.0, 0.5), Point(2.0, -3.0)]
+        mesh = Mesh.from_triangle_soup(points, [(0, 1, 2), (1, 0, 3)])
+        v0 = mesh.vertices.to_object(0)
+        v1 = mesh.vertices.to_object(1)
+
+        # At (2, 0.5): vectors (-2, -0.5) and (2, -0.5), cot = -3.75 / 2.
+        # At (2, -3): vectors (-2, 3) and (2, 3), cot = 5 / 12.
+        expected = (-3.75 / 2 + 5 / 12) / 2
+        hedge = mesh.connect_vertices(v0, v1)
+        assert hedge.cotan() == pytest.approx(expected)
+        assert hedge.twin.cotan() == pytest.approx(expected)
 
     def test_vertex_hashability(self):
         # Create vertices

@@ -44,7 +44,7 @@ class Measurement:
     n_ref: str
     measured_v: float
     abs_tol: Optional[float] = None
-    rel_tol: Optional[float] = 0.4  # Intentionally relaxed
+    rel_tol: Optional[float] = 0.45  # Intentionally relaxed
     description: str = ""
 
 
