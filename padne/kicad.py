@@ -761,6 +761,7 @@ class CopperSpec:
     Specifies custom copper conductivity for the project.
     """
     conductivity: float  # S/mm
+    plating: Optional[float] = None  # mm, via barrel plating thickness
 
     @classmethod
     def from_directive(cls, directive: Directive) -> 'CopperSpec':
@@ -784,7 +785,14 @@ class CopperSpec:
         if conductivity <= 0:
             raise ValueError(f"Conductivity must be positive, got {conductivity}")
 
-        return cls(conductivity=conductivity)
+        plating = None
+        if "plating" in directive.params:
+            # Value in m (e.g. 20u) -> mm
+            plating = units.Value.parse(directive.params["plating"]).value * 1e3
+            if plating <= 0:
+                raise ValueError(f"Plating must be positive, got {plating}")
+
+        return cls(conductivity=conductivity, plating=plating)
 
 
 @dataclass(frozen=True)
@@ -1429,7 +1437,8 @@ def extract_board_outline(board: pcbnew.BOARD) -> Optional[shapely.geometry.Mult
 
 def process_via_spec(via_spec: ViaSpec,
                      layer_dict: dict[str, problem.Layer],
-                     stackup: Stackup) -> list[problem.Network]:
+                     stackup: Stackup,
+                     plating_override: Optional[float] = None) -> list[problem.Network]:
     # In theory, they should already be in physical order, but we reorder
     # them based on the Stackup just in case this ever changes
 
@@ -1449,10 +1458,13 @@ def process_via_spec(via_spec: ViaSpec,
         stackup.items[stackup.index_by_name(layer_name)]
         for layer_name in via_spec.layer_names
     ]
-    plating_thickness = max(
-        layer.thickness for layer in involved_copper_layers
-        if layer.conductivity is not None
-    )
+    if plating_override is not None:
+        plating_thickness = plating_override
+    else:
+        plating_thickness = max(
+            layer.thickness for layer in involved_copper_layers
+            if layer.conductivity is not None
+        )
 
     # Use conductivity from copper layers (should be same for all copper)
     conductivity = next(
@@ -1685,7 +1697,10 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     # Note that we have to create the layer dict _after_ punching the holes,
     # since otherwise it would contain the original objects!
     for via_spec in via_specs:
-        networks.extend(process_via_spec(via_spec, layer_dict, stackup))
+        networks.extend(process_via_spec(
+            via_spec, layer_dict, stackup,
+            plating_override=(directives.copper_spec.plating
+                              if directives.copper_spec is not None else None)))
 
     log.info("Creating networks from specifications")
     for lumped_spec in directives.lumped_specs:
