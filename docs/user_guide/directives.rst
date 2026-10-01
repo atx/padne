@@ -163,18 +163,22 @@ parameters instead.
 COPPER
 ^^^^^^
 
-Specifies a custom copper conductivity for all copper layers in the
-project, overriding the default.
+Specifies the copper process parameters for the whole project. Every
+parameter is optional and overrides the built-in default.
 
 **Parameters:**
 
-* ``conductivity=VALUE`` — Copper conductivity in S/m
+* ``conductivity=VALUE`` — Copper conductivity in S/m (default 5.95e7)
+* ``undercut=VALUE`` — Etch loss per copper edge in m (default 0). A trace
+  drawn ``w`` wide is simulated ``w - 2*undercut`` wide; features narrower
+  than ``2*undercut`` disappear. Drill holes keep their nominal size.
+* ``plating=VALUE`` — Via barrel wall (plating) thickness in m (default 25u)
 
 Example:
 
 .. code-block:: text
 
-   !padne COPPER conductivity=5.97e7
+   !padne COPPER conductivity=5.97e7 undercut=30u plating=25u
 
 .. note::
 
