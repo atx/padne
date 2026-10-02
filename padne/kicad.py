@@ -1529,38 +1529,34 @@ def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
         for layer_name in via_spec.layer_names:
             holes_by_layer[layer_name].append(via_spec.shape)
 
-    union_holes_by_layer = {
-        layer_name: shapely.union_all(holes)
-        for layer_name, holes in holes_by_layer.items()
-    }
-
-    punched_layers = []
-    for plotted_layer in plotted_layers:
-        if plotted_layer.name in union_holes_by_layer:
-            # Punch holes in the layer geometry
-            punched_geometry = plotted_layer.geometry.difference(
-                union_holes_by_layer[plotted_layer.name]
-            )
-            punched_geometry = ensure_geometry_is_multipolygon(punched_geometry)
-            # There are cases where the difference may result in
-            # a GeometryCollection or empty geometry.
-            # I think we are careful enough that it should not happen,
-            # but check just in case
-            assert punched_geometry.geom_type == "MultiPolygon", \
-                f"Expected MultiPolygon after punching holes, got {punched_geometry.geom_type}"
-        else:
+    def punch_layer(plotted_layer: PlottedGerberLayer) -> PlottedGerberLayer:
+        holes = holes_by_layer.get(plotted_layer.name)
+        if holes is None:
             # No vias present, keep the original geometry
-            punched_geometry = plotted_layer.geometry
+            return plotted_layer
+
+        # Punch holes in the layer geometry
+        punched_geometry = plotted_layer.geometry.difference(
+            shapely.union_all(holes)
+        )
+        punched_geometry = ensure_geometry_is_multipolygon(punched_geometry)
+        # There are cases where the difference may result in
+        # a GeometryCollection or empty geometry.
+        # I think we are careful enough that it should not happen,
+        # but check just in case
+        assert punched_geometry.geom_type == "MultiPolygon", \
+            f"Expected MultiPolygon after punching holes, got {punched_geometry.geom_type}"
 
         # Create a new PlottedGerberLayer with the punched geometry
-        punched_layer = PlottedGerberLayer(
+        return PlottedGerberLayer(
             name=plotted_layer.name,
             layer_id=plotted_layer.layer_id,
             geometry=punched_geometry
         )
-        punched_layers.append(punched_layer)
 
-    return punched_layers
+    # The hole union and the difference are GEOS calls that release the GIL,
+    # so the layers punch concurrently.
+    return parallel.thread_map(punch_layer, plotted_layers)
 
 
 def verify_stackup_contains_all_layers(stackup: Stackup,

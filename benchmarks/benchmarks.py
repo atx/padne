@@ -490,16 +490,14 @@ class ConnectivitySuite:
         problems = _load_problems(project_names)
         connectivity_graphs = {}
         for name, prob in problems.items():
-            _, connectivity_graphs[name], _ = solver.compute_connectivity(prob)
+            connectivity_graphs[name], _ = solver.compute_connectivity(prob)
 
         return {'problems': problems, 'connectivity_graphs': connectivity_graphs}
 
     def time_connectivity_graph_construction(self, cache, project_name):
         """Time construction of connectivity graph from layer geometry."""
         problem = cache['problems'][project_name]
-        # Construct STRtrees and connectivity graph
-        strtrees = solver.construct_strtrees_from_layers(problem.layers)
-        solver.ConnectivityGraph.create_from_problem(problem, strtrees)
+        solver.ConnectivityGraph.create_from_problem(problem)
 
     time_connectivity_graph_construction.params = ['simple_geometry', 'disconnected_components', 'via_tht_4layer', 'many_meshes', 'many_meshes_many_vias']
     time_connectivity_graph_construction.param_names = ['project']
@@ -521,26 +519,23 @@ class MeshGenerationSuite:
         project_names = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
 
         problems = _load_problems(project_names)
-        strtrees = {}
         connected_pairs = {}
         for name, prob in problems.items():
-            strtrees[name], _, connected_pairs[name] = solver.compute_connectivity(prob)
+            _, connected_pairs[name] = solver.compute_connectivity(prob)
 
         return {
             'problems': problems,
-            'strtrees': strtrees,
             'connected_layer_mesh_pairs': connected_pairs,
         }
 
     def time_generate_meshes_for_problem(self, cache, project_name):
         """Time mesh generation for different KiCad projects."""
         problem = cache['problems'][project_name]
-        strtrees = cache['strtrees'][project_name]
         connected_pairs = cache['connected_layer_mesh_pairs'][project_name]
 
         # Create fresh Mesher instance with default config for each run
         mesher = Mesher()
-        solver.generate_meshes_for_problem(problem, mesher, connected_pairs, strtrees)
+        solver.generate_meshes_for_problem(problem, mesher, connected_pairs)
 
     time_generate_meshes_for_problem.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
     time_generate_meshes_for_problem.param_names = ['project']
@@ -548,11 +543,10 @@ class MeshGenerationSuite:
     def track_mesh_count(self, cache, project_name):
         """Track the number of meshes generated for different projects."""
         problem = cache['problems'][project_name]
-        strtrees = cache['strtrees'][project_name]
         connected_pairs = cache['connected_layer_mesh_pairs'][project_name]
 
         mesher = Mesher()
-        meshes, _ = solver.generate_meshes_for_problem(problem, mesher, connected_pairs, strtrees)
+        meshes, _ = solver.generate_meshes_for_problem(problem, mesher, connected_pairs)
         return len(meshes)
 
     track_mesh_count.params = ['many_meshes', 'via_tht_4layer', 'simple_geometry', 'many_meshes_many_vias']
@@ -575,13 +569,13 @@ class SystemAssemblySuite:
     def setup_cache(self):
         cache = {}
         for name, prob in _load_problems(self.PARAMS).items():
-            strtrees, _, connected_pairs = solver.compute_connectivity(prob)
+            _, connected_pairs = solver.compute_connectivity(prob)
             mesher = Mesher(_pinned_default_mesher_config())
             meshes, m2l = solver.generate_meshes_for_problem(
-                prob, mesher, connected_pairs, strtrees
+                prob, mesher, connected_pairs
             )
             vindex = solver.VertexIndexer.create(meshes)
-            filtered_networks = solver.filter_dead_networks(prob, strtrees, connected_pairs)
+            filtered_networks = solver.filter_dead_networks(prob, connected_pairs)
             node_indexer = solver.NodeIndexer.create(
                 prob, meshes, m2l, vindex, filtered_networks
             )
@@ -594,7 +588,6 @@ class SystemAssemblySuite:
                 'meshes': meshes,
                 'mesh_index_to_layer_index': m2l,
                 'vindex': vindex,
-                'strtrees': strtrees,
                 'connected_pairs': connected_pairs,
                 'filtered_networks': filtered_networks,
                 'node_indexer': node_indexer,
@@ -609,7 +602,7 @@ class SystemAssemblySuite:
     def time_network_filtering(self, cache, project_name):
         """Time `solver.filter_dead_networks` over all networks of a project."""
         st = cache[project_name]
-        solver.filter_dead_networks(st['problem'], st['strtrees'], st['connected_pairs'])
+        solver.filter_dead_networks(st['problem'], st['connected_pairs'])
 
     time_network_filtering.params = PARAMS
     time_network_filtering.param_names = ['project']
