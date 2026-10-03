@@ -243,6 +243,84 @@ class TestPadFinder:
         assert abs(layer_point.point.x - 129) < 1e-3, "Pad X coordinate should be 129"
         assert abs(layer_point.point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
 
+    def test_smd_pad_polygon_extraction(self, kicad_test_projects):
+        """Exact SMD pad outlines are extracted into PadIndex.shapes."""
+        project = kicad_test_projects["simple_geometry"]
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+        _, pad_index = Utils.setup_layer_dict_and_pad_index(board)
+
+        endpoint = kicad.Endpoint(designator="R3", pad="1")
+        shapes = pad_index.find_shapes_by_endpoint(endpoint)
+        assert len(shapes) == 1, "Expected exactly one pad outline for R3.1"
+        layer_name, polygon = shapes[0]
+        assert layer_name == "F.Cu"
+        assert not polygon.is_empty
+
+        # The extracted outline must match KiCad's own pad bounding box.
+        pad_obj = next(
+            pad
+            for fp in board.GetFootprints() if fp.GetReference() == "R3"
+            for pad in fp.Pads() if pad.GetName() == "1"
+        )
+        bbox = pad_obj.GetBoundingBox()
+        expected = (
+            pcbnew.ToMM(bbox.GetX()),
+            pcbnew.ToMM(bbox.GetY()),
+            pcbnew.ToMM(bbox.GetX() + bbox.GetWidth()),
+            pcbnew.ToMM(bbox.GetY() + bbox.GetHeight()),
+        )
+        assert polygon.bounds == pytest.approx(expected, abs=0.02)
+
+        # The pad centre must lie inside the outline.
+        position = pad_obj.GetPosition()
+        centre = shapely.geometry.Point(pcbnew.ToMM(position.x), pcbnew.ToMM(position.y))
+        assert polygon.intersects(centre)
+
+    def test_shape_poly_set_to_shapely_with_hole(self):
+        ps = pcbnew.SHAPE_POLY_SET()
+        ps.NewOutline()
+        for x, y in [(0, 0), (10, 0), (10, 10), (0, 10)]:
+            ps.Append(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)), 0, -1)
+        ps.NewHole(0)
+        for x, y in [(4, 4), (6, 4), (6, 6), (4, 6)]:
+            ps.Append(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)), 0, 0)
+
+        result = kicad.shape_poly_set_to_shapely(ps)
+        assert result.geom_type == "MultiPolygon"
+        assert len(result.geoms) == 1
+        polygon = result.geoms[0]
+        assert len(polygon.interiors) == 1
+        assert polygon.area == pytest.approx(100.0 - 4.0)
+
+    def test_flipped_pad_polygon_extraction(self, kicad_test_projects):
+        """Flipped-footprint SMD outlines are extracted on the flipped layer."""
+        project = kicad_test_projects["via_tht_4layer"]
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+        _, pad_index = Utils.setup_layer_dict_and_pad_index(board)
+
+        checked = 0
+        for footprint in board.GetFootprints():
+            if not footprint.IsFlipped():
+                continue
+            for pad in footprint.Pads():
+                if pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+                    continue
+                endpoint = kicad.Endpoint(footprint.GetReference(), pad.GetName())
+                shapes = pad_index.find_shapes_by_endpoint(endpoint)
+                assert len(shapes) == 1
+                layer_name, polygon = shapes[0]
+                assert layer_name == "B.Cu"
+                bbox = pad.GetBoundingBox()
+                expected = (
+                    pcbnew.ToMM(bbox.GetX()),
+                    pcbnew.ToMM(bbox.GetY()),
+                    pcbnew.ToMM(bbox.GetX() + bbox.GetWidth()),
+                    pcbnew.ToMM(bbox.GetY() + bbox.GetHeight()),
+                )
+                assert polygon.bounds == pytest.approx(expected, abs=0.02)
+                checked += 1
+        assert checked > 0, "expected flipped SMD pads in via_tht_4layer"
+
 
 class TestViaSpecs:
 
@@ -731,6 +809,21 @@ class TestLoadKicadProject:
         assert f_cu_layer is not None
         assert isinstance(f_cu_layer.shape, shapely.geometry.MultiPolygon)
         assert not f_cu_layer.shape.is_empty
+
+    def test_refinement_regions_from_referenced_smd_pads(self, kicad_test_projects):
+        """Only SMD pads referenced by directives become refinement regions."""
+        project = kicad_test_projects["simple_geometry"]
+        result = kicad.load_kicad_project(project.pro_path)
+
+        assert result.refinement_regions, "Expected refinement regions for R2/R3"
+        assert all(name == "F.Cu" for name, _ in result.refinement_regions)
+        # R2 and R3 each have two pads, all referenced by the directives.
+        assert len(result.refinement_regions) == 4
+
+        # The foil thickness is carried through for the current-density display.
+        f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
+        assert f_cu_layer.thickness is not None
+        assert f_cu_layer.thickness > 0
 
     def test_conductance_vaguely_makes_sense(self, kicad_test_projects, monkeypatch):
         """Test that custom resistivity is applied correctly."""

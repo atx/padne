@@ -182,3 +182,8 @@ class Problem:
     layers: list[Layer]
     networks: list[Network]
     project_name: str | None = None
+
+    # (layer name, polygon) pairs that should be locally refined by the mesher,
+    # e.g. SMD pad footprints. The target size lives in Mesher.Config.
+    refinement_regions: list[tuple[str, shapely.geometry.MultiPolygon]] = \
+        field(default_factory=list)

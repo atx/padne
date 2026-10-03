@@ -89,6 +89,36 @@ def nm_to_mm(f: float) -> float:
     return f / 1000000
 
 
+def shape_poly_set_to_shapely(poly_set: "pcbnew.SHAPE_POLY_SET") -> shapely.geometry.MultiPolygon:
+    """
+    Convert a KiCad SHAPE_POLY_SET (board coordinates, internal units) into a
+    shapely MultiPolygon in millimetres.
+    """
+    def chain_to_coords(chain) -> list[tuple[float, float]]:
+        return [
+            (nm_to_mm(chain.CPoint(i).x), nm_to_mm(chain.CPoint(i).y))
+            for i in range(chain.PointCount())
+        ]
+
+    polygons: list[shapely.geometry.Polygon] = []
+    for outline_index in range(poly_set.OutlineCount()):
+        exterior = chain_to_coords(poly_set.Outline(outline_index))
+        holes = [
+            chain_to_coords(poly_set.Hole(outline_index, hole_index))
+            for hole_index in range(poly_set.HoleCount(outline_index))
+        ]
+        polygon = shapely.geometry.Polygon(exterior, holes)
+        if not polygon.is_valid:
+            # Self-intersecting outlines can appear for exotic pads; heal them.
+            polygon = polygon.buffer(0)
+        if polygon.geom_type == "Polygon":
+            polygons.append(polygon)
+        elif polygon.geom_type == "MultiPolygon":
+            polygons.extend(polygon.geoms)
+
+    return shapely.geometry.MultiPolygon(polygons)
+
+
 @dataclass
 class StackupItem:
 
@@ -292,6 +322,11 @@ class PadIndex:
     """
     mapping: dict[Endpoint, list[LayerPoint]] = field(default_factory=dict)
 
+    # Exact pad outlines in board coordinates (mm), keyed by endpoint. A single
+    # pad may span several copper layers, hence the list of (layer, polygon).
+    shapes: dict[Endpoint, list[tuple[str, shapely.geometry.MultiPolygon]]] = \
+        field(default_factory=dict)
+
     def find_by_endpoint(self, ep: Endpoint) -> list[LayerPoint]:
         # Note that we return an empty list if the endpoint does not exist
         # This can totally happen if it gets eliminated due to falling outside
@@ -300,6 +335,11 @@ class PadIndex:
         # for a given terminal, but this is unlikely to happen in well-formed
         # simulations.
         return self.mapping.get(ep, [])
+
+    def find_shapes_by_endpoint(self, ep: Endpoint
+                                ) -> list[tuple[str, shapely.geometry.MultiPolygon]]:
+        """Return the exact pad outlines for an endpoint as (layer, polygon)."""
+        return self.shapes.get(ep, [])
 
     def load_smd_pads(self, board: pcbnew.BOARD, layer_dict: dict[str, problem.Layer]) -> None:
         """
@@ -363,6 +403,22 @@ class PadIndex:
                     continue
 
                 layer_point = LayerPoint(layer=layer_name, point=point)
+
+                # Record the exact pad outline on this layer. Used by the
+                # distributed area-contact model and by pad-aware refinement.
+                # Extraction is best-effort: a pad whose outline cannot be
+                # obtained is simply not refined / not area-contacted.
+                try:
+                    effective_polygon = pad_obj.GetEffectivePolygon(layer_id)
+                    pad_shape = shape_poly_set_to_shapely(effective_polygon)
+                except Exception as exc:
+                    log.warning(
+                        "Could not extract the outline of SMD pad %s on layer %s (%s); "
+                        "it will not be refined or used as an area contact.",
+                        endpoint, layer_name, exc)
+                else:
+                    if not pad_shape.is_empty:
+                        self.shapes.setdefault(endpoint, []).append((layer_name, pad_shape))
 
                 # Add to mapping (initialize list if endpoint doesn't exist)
                 if endpoint not in self.mapping:
@@ -1696,6 +1752,21 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     for probe_spec in directives.probe_specs:
         networks.extend(probe_spec.construct(pad_index, layer_dict))
 
+    # Collect the SMD pads referenced by directives. These become explicit mesh
+    # refinement regions (and, later, distributed area contacts).
+    referenced_endpoints = set()
+    for lumped_spec in directives.lumped_specs:
+        for endpoints_list in lumped_spec.endpoints.values():
+            referenced_endpoints.update(endpoints_list)
+    for probe_spec in directives.probe_specs:
+        referenced_endpoints.update(probe_spec.endpoints)
+
+    refinement_regions = [
+        (layer_name, polygon)
+        for endpoint in referenced_endpoints
+        for layer_name, polygon in pad_index.find_shapes_by_endpoint(endpoint)
+    ]
+
     # Get all layers as a list
     layer_names_in_order = list(layer_dict.keys())
     layer_names_in_order.sort(key=lambda name: stackup.index_by_name(name))
@@ -1703,4 +1774,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     layers = [layer_dict[name] for name in layer_names_in_order]
 
     # Return the Problem object
-    return problem.Problem(layers=layers, networks=networks, project_name=project.name)
+    return problem.Problem(
+        layers=layers, networks=networks, project_name=project.name,
+        refinement_regions=refinement_regions,
+    )

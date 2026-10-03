@@ -86,6 +86,18 @@ def add_mesher_args(parser: argparse.ArgumentParser) -> None:
         default=default_config.distance_map_quantization,
         help="Quantization step for distance map"
     )
+    parser.add_argument(
+        "--pad-refine-size",
+        type=float,
+        default=default_config.pad_refine_size,
+        help="Target mesh edge length (mm) inside SMD pad regions (0 disables)"
+    )
+    parser.add_argument(
+        "--pad-refine-transition",
+        type=float,
+        default=default_config.pad_refine_transition,
+        help="Distance (mm) over which pad refinement relaxes into the pad interior"
+    )
 
 
 def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Config:
@@ -96,7 +108,9 @@ def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Confi
         variable_density_min_distance=args.variable_density_min_distance,
         variable_density_max_distance=args.variable_density_max_distance,
         variable_size_maximum_factor=args.variable_size_maximum_factor,
-        distance_map_quantization=args.distance_map_quantization
+        distance_map_quantization=args.distance_map_quantization,
+        pad_refine_size=args.pad_refine_size,
+        pad_refine_transition=args.pad_refine_transition,
     )
 
 

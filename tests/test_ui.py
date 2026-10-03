@@ -4,7 +4,7 @@ import shapely.geometry
 
 from padne import mesh, problem, solver
 from padne.ui import (
-    VertexSpatialIndex, FaceSpatialIndex, MeshViewer,
+    VertexSpatialIndex, FaceSpatialIndex, collect_contact_coverage, MeshViewer,
     color_scale_uses_log, color_scale_bounds, color_scale_value_at,
     color_scale_fraction_of, prepare_ui_data,
 )
@@ -306,3 +306,8 @@ class TestPrepareUiData:
             assert mode.solution is solution
             assert "F.Cu" in mode.spatial_indices
             assert mode.max_value >= mode.min_value
+
+    def test_no_regions_means_no_coverage(self):
+        prob, layer_solutions, _ = self._make_problem_and_solution(has_source=True)
+        no_regions = problem.Problem(layers=prob.layers, networks=prob.networks)
+        assert collect_contact_coverage(no_regions, layer_solutions) == {}

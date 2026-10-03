@@ -258,7 +258,8 @@ def generate_meshes_for_problem(prob: problem.Problem,
     # concurrently. poly_to_mesh's heavy work -- the distance-map
     # rasterization, the Delaunay refinement and the half-edge build --
     # releases the GIL (see _cgal and _mesh), so threads parallelize it.
-    mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point]]] = []
+    mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point],
+                          list[tuple[shapely.geometry.Polygon, float]]]] = []
     mesh_index_to_layer_index: list[int] = []
 
     for layer_i, layer in enumerate(prob.layers):
@@ -301,13 +302,35 @@ def generate_meshes_for_problem(prob: problem.Problem,
             # TODO: Add a warning here if we detect the case above
             seed_points_in_geom = geom_to_seed_points[geom_i]
 
-            mesh_jobs.append((layer.geoms[geom_i], seed_points_in_geom))
+            # Collect explicit refinement regions that fall on this geometry
+            # (currently SMD pad footprints) and clip them to the copper.
+            regions_for_geom: list[tuple[shapely.geometry.Polygon, float]] = []
+            if mesher.config.pad_refine_size > 0:
+                for region_layer, region_shape in prob.refinement_regions:
+                    if region_layer != layer.name:
+                        continue
+                    clipped = region_shape.intersection(layer.geoms[geom_i])
+                    if clipped.is_empty:
+                        continue
+                    if clipped.geom_type == "Polygon":
+                        polygons = [clipped]
+                    elif clipped.geom_type == "MultiPolygon":
+                        polygons = list(clipped.geoms)
+                    else:
+                        polygons = [
+                            geom for geom in getattr(clipped, "geoms", [])
+                            if geom.geom_type == "Polygon"
+                        ]
+                    for region_polygon in polygons:
+                        regions_for_geom.append((region_polygon, mesher.config.pad_refine_size))
+
+            mesh_jobs.append((layer.geoms[geom_i], seed_points_in_geom, regions_for_geom))
             mesh_index_to_layer_index.append(layer_i)
 
     # Mesh the regions concurrently. thread_map runs serially in-thread when
     # jobs == 1, so single-job runs keep clean tracebacks and full coverage.
     meshes = parallel.thread_map(
-        lambda job: mesher.poly_to_mesh(job[0], job[1]),
+        lambda job: mesher.poly_to_mesh(job[0], job[1], job[2]),
         mesh_jobs,
     )
 
