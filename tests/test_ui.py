@@ -2,7 +2,7 @@ import pytest
 import shapely.geometry
 
 from padne import mesh, problem, solver
-from padne.ui import VertexSpatialIndex, FaceSpatialIndex
+from padne.ui import VertexSpatialIndex, FaceSpatialIndex, prepare_ui_data
 
 
 class TestSpatialIndex:
@@ -160,3 +160,39 @@ class TestSpatialIndex:
         value_corner = index.query_nearest(1.0, 1.0)
         assert value_corner is not None
         assert value_corner == pytest.approx(1.0, abs=2.0)
+
+
+class TestPrepareUiData:
+    """The GL-free UI preparation builds modes/indices without Qt or OpenGL."""
+
+    def test_builds_modes_and_spatial_indices(self):
+        # A hand-built mesh keeps this independent of the CGAL mesher.
+        points = [mesh.Point(0, 0), mesh.Point(1, 0), mesh.Point(0.5, 1)]
+        msh = mesh.Mesh.from_triangle_soup(points, [(0, 1, 2)])
+
+        zero_form = mesh.ZeroForm(msh)
+        for i, vertex in enumerate(msh.vertices):
+            zero_form[vertex] = float(i + 1)
+        two_form = mesh.TwoForm(msh)
+        for face in msh.faces:
+            two_form[face] = 1.0
+
+        layer_solution = solver.LayerSolution(
+            meshes=[msh], potentials=[zero_form], power_densities=[two_form],
+            disconnected_meshes=[])
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([
+                shapely.geometry.Polygon([(0, 0), (1, 0), (0.5, 1)])]),
+            name="F.Cu", conductance=1.0)
+        solution = solver.Solution(
+            problem=problem.Problem(layers=[layer], networks=[]),
+            layer_solutions=[layer_solution],
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0))
+
+        prepared = prepare_ui_data(solution)
+
+        assert prepared.modes
+        for mode in prepared.modes:
+            assert mode.solution is solution
+            assert "F.Cu" in mode.spatial_indices
+            assert mode.max_value >= mode.min_value
