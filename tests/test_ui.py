@@ -5,7 +5,11 @@ import threading
 from dataclasses import fields
 
 from padne import mesh, problem, solver, parallel, ui
-from padne.ui import VertexSpatialIndex, FaceSpatialIndex, RenderedMesh, prepare_ui_data
+from padne.ui import (
+    VertexSpatialIndex, FaceSpatialIndex, RenderedMesh, MeshViewer,
+    color_scale_uses_log, color_scale_bounds, color_scale_value_at,
+    color_scale_fraction_of, prepare_ui_data,
+)
 
 
 class TestSpatialIndex:
@@ -163,6 +167,113 @@ class TestSpatialIndex:
         value_corner = index.query_nearest(1.0, 1.0)
         assert value_corner is not None
         assert value_corner == pytest.approx(1.0, abs=2.0)
+
+
+class TestCurrentDensityUnit:
+    """The current-density mode's unit must match the quantity it shows."""
+
+    def _unit_for(self, thickness):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 1, 1)]),
+            name="F.Cu", conductance=2082.0, thickness=thickness)
+        layer_solution = solver.LayerSolution(
+            meshes=[], potentials=[], power_densities=[], disconnected_meshes=[])
+        solution = solver.Solution(
+            problem=problem.Problem(layers=[layer], networks=[]),
+            layer_solutions=[layer_solution],
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0,
+                                          relative_residual=0.0),
+        )
+        mode = MeshViewer.CurrentDensityRenderingMode()
+        mode.set_solution(solution)
+        return mode.unit
+
+    def test_unit_a_per_mm2_with_thickness(self):
+        assert self._unit_for(0.035) == "A/mm²"
+
+    def test_unit_a_per_mm_without_thickness(self):
+        assert self._unit_for(None) == "A/mm"
+
+
+class TestColorScaleMapping:
+    """The log/linear slider mapping and the percentile cap."""
+
+    def test_non_negative_data_uses_log(self):
+        assert color_scale_uses_log(0.0, 10.0)
+        assert not color_scale_uses_log(-1.0, 10.0)
+        assert not color_scale_uses_log(0.0, 0.0)
+
+    def test_log_bounds_span_the_configured_decades(self):
+        lo, hi = color_scale_bounds(0.0, 10.0)
+        assert hi == 10.0
+        assert lo == pytest.approx(10.0 * 10.0 ** -4.0)
+
+    def test_log_bounds_respect_a_positive_data_min(self):
+        lo, hi = color_scale_bounds(1.0, 10.0)
+        assert lo == pytest.approx(1.0)
+
+    def test_log_value_and_fraction_round_trip(self):
+        for fraction in (0.0, 0.25, 0.5, 1.0):
+            value = color_scale_value_at(fraction, 0.0, 10.0)
+            assert color_scale_fraction_of(value, 0.0, 10.0) == pytest.approx(fraction)
+        # Constant ratio per unit fraction (the point of a log scale).
+        assert (color_scale_value_at(0.5, 0.0, 10.0)
+                == pytest.approx(np.sqrt(color_scale_value_at(0.0, 0.0, 10.0)
+                                         * color_scale_value_at(1.0, 0.0, 10.0))))
+
+    def test_signed_data_falls_back_to_linear(self):
+        assert color_scale_value_at(0.0, -1.0, 1.0) == pytest.approx(-1.0)
+        assert color_scale_value_at(0.5, -1.0, 1.0) == pytest.approx(0.0)
+        assert color_scale_value_at(1.0, -1.0, 1.0) == pytest.approx(1.0)
+        assert color_scale_fraction_of(0.0, -1.0, 1.0) == pytest.approx(0.5)
+
+    def test_degenerate_range_does_not_crash(self):
+        assert color_scale_value_at(0.5, 5.0, 5.0) == pytest.approx(5.0)
+        assert color_scale_fraction_of(5.0, 5.0, 5.0) == 0.0
+
+
+class TestPercentileCap:
+    """The 'cap to current layer percentile' rendering-mode helper."""
+
+    class _Index:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=float)
+
+    def test_caps_max_to_the_layer_percentile(self):
+        mode = MeshViewer.PowerDensityRenderingMode()
+        mode.min_value, mode.max_value = 0.0, 1000.0
+        mode.data_min_value, mode.data_max_value = 0.0, 1000.0
+        mode.spatial_indices = {"F.Cu": self._Index(list(range(1, 1001)))}
+
+        assert mode.cap_max_to_percentile("F.Cu", 99.9) is True
+        expected = float(np.percentile(range(1, 1001), 99.9))
+        assert mode.max_value == pytest.approx(expected)
+        assert mode.data_max_value == pytest.approx(expected)
+
+    def test_no_values_means_no_cap(self):
+        mode = MeshViewer.PowerDensityRenderingMode()
+        mode.spatial_indices = {}
+        assert mode.cap_max_to_percentile("F.Cu", 99.9) is False
+
+
+class TestRenderingModeDataRange:
+    """Each mode tracks its autoscaled data range separately from the edit range."""
+
+    def test_autoscale_sets_the_data_range(self):
+        mode = MeshViewer.PowerDensityRenderingMode()
+        mode.spatial_indices = {"F.Cu": TestPercentileCap._Index([0.0, 2.0, 4.0])}
+        solution = solver.Solution(
+            problem=problem.Problem(layers=[], networks=[]),
+            layer_solutions=[],
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0,
+                                          relative_residual=0.0),
+        )
+        mode.autoscale_values(solution)
+        assert (mode.data_min_value, mode.data_max_value) == (0.0, 4.0)
+        assert (mode.min_value, mode.max_value) == (0.0, 4.0)
+        # Editing the current range must not move the data range.
+        mode.min_value, mode.max_value = 1.0, 3.0
+        assert (mode.data_min_value, mode.data_max_value) == (0.0, 4.0)
 
 
 class TestPrepareUiData:
@@ -334,7 +445,7 @@ def test_parallel_ui_matches_serial_and_shares_geometry(monkeypatch):
     monkeypatch.setattr(parallel, "thread_map", observed_map)
     monkeypatch.setattr(parallel, "_default", parallel.Parallel(parallel.Config(jobs=4)))
     threaded = prepare_ui_data(sol)
-    assert len(calls) == 3  # Geometry plus vertex and face spatial indexes.
+    assert len(calls) == 4  # Geometry plus vertex, power and current density indexes.
     assert all(ids and threading.get_ident() not in ids for ids in calls)
     for a, b in zip(serial.modes, threaded.modes):
         assert (a.min_value, a.max_value) == (b.min_value, b.max_value)
@@ -349,13 +460,14 @@ def test_parallel_ui_matches_serial_and_shares_geometry(monkeypatch):
             for attr in ["_prepared_rendered_meshes", "_prepared_disconnected_rendered_meshes"]:
                 for expected, actual in zip(getattr(a, attr)[name], getattr(b, attr)[name]):
                     _assert_render_equal(actual, expected)
-    voltage, power = threaded.modes
-    assert voltage._prepared_disconnected_rendered_meshes is power._prepared_disconnected_rendered_meshes
-    for a, b in zip(voltage._prepared_rendered_meshes["F.Cu"],
-                    power._prepared_rendered_meshes["F.Cu"]):
-        for name in ["triangle_vertices", "edge_vertices", "edge_colors",
-                     "boundary_vertices", "boundary_colors"]:
-            assert getattr(a, name) is getattr(b, name)
-            assert not getattr(a, name).flags.writeable
-    assert voltage.spatial_indices["empty"].tree is None
-    assert power.spatial_indices["empty"].tree is None
+    voltage, power, current = threaded.modes
+    for other in [power, current]:
+        assert voltage._prepared_disconnected_rendered_meshes is other._prepared_disconnected_rendered_meshes
+        for a, b in zip(voltage._prepared_rendered_meshes["F.Cu"],
+                        other._prepared_rendered_meshes["F.Cu"]):
+            for name in ["triangle_vertices", "edge_vertices", "edge_colors",
+                         "boundary_vertices", "boundary_colors"]:
+                assert getattr(a, name) is getattr(b, name)
+                assert not getattr(a, name).flags.writeable
+    for mode in threaded.modes:
+        assert mode.spatial_indices["empty"].tree is None
