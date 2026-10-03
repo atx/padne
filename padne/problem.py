@@ -24,6 +24,11 @@ class Layer:
     # conductivity [S/mm] * thickness [mm]
     conductance: float
 
+    # Copper foil thickness in mm. Optional because synthetic Problems may not
+    # carry it; the UI uses it to turn sheet current into volumetric current
+    # density (A/mm^2).
+    thickness: float | None = None
+
     # Cached tuple of individual polygons, extracted from shape
     geoms: tuple[shapely.geometry.Polygon, ...] = field(init=False, repr=False)
 

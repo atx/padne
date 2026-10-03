@@ -1600,7 +1600,8 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
         layer = problem.Layer(
             shape=plotted_layer.geometry,
             name=plotted_layer.name,
-            conductance=stackup_layer.conductance
+            conductance=stackup_layer.conductance,
+            thickness=stackup_layer.thickness,
         )
         layer_dict[plotted_layer.name] = layer
     return layer_dict
