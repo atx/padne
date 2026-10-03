@@ -212,6 +212,11 @@ class Problem:
     project_name: str | None = None
 
     # (layer name, polygon) pairs that should be locally refined by the mesher,
-    # e.g. SMD pad footprints. The target size lives in Mesher.Config.
+    # e.g. SMD pad footprints. The target size lives in Mesher.Config, with
+    # `pad_refine_size` here as the project default when the config does not
+    # override it.
     refinement_regions: list[tuple[str, shapely.geometry.MultiPolygon]] = \
         field(default_factory=list)
+
+    # Auto mesh-refinement target for contact regions (mm). Zero disables.
+    pad_refine_size: float = 0.0

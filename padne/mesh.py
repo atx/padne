@@ -501,6 +501,11 @@ class Mesher:
         # size at the boundary to the background size in the interior
         # (0 = uniform refinement over the whole region).
         pad_refine_transition: float = 0.5
+        # Floor (mm) for the *auto* pad refinement size, so a very good joint
+        # (small lambda = sqrt(s_sheet/g)) cannot drive the target edge length
+        # toward zero and refine without bound. 0 disables the floor. An
+        # explicit `pad_refine_size` is never clamped by this.
+        pad_refine_min_size: float = 0.05
 
         # Static relaxed configuration for disconnected copper triangulation
         RELAXED = None  # Will be initialized after class definition
@@ -535,6 +540,9 @@ class Mesher:
 
             if self.pad_refine_transition < 0:
                 raise ValueError(f"pad_refine_transition must be non-negative, got {self.pad_refine_transition}")
+
+            if self.pad_refine_min_size < 0:
+                raise ValueError(f"pad_refine_min_size must be non-negative, got {self.pad_refine_min_size}")
 
     def __init__(self, config: Optional['Mesher.Config'] = None):
         self.config = config if config is not None else Mesher.Config()
@@ -597,7 +605,7 @@ class Mesher:
             seed_points: Additional seed points to include
             refinement_regions: (polygon, target edge length) pairs that force
                 local mesh refinement, e.g. SMD pads. These are always applied;
-                `pad_refine_size` is NOT consulted here — the caller gates.
+                `pad_refine_size` is NOT consulted here; the caller gates.
                 Non-positive sizes are dropped with a warning.
 
         Returns:

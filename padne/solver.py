@@ -35,7 +35,10 @@ class SolverWarning(Warning):
 class SolverInfo:
     """Diagnostic information from the solver."""
     ground_node_current: float  # Should be ~0 for well-posed problems
-    residual_norm: float        # ||L @ v - r||, should be ~0 for solved systems
+    residual_norm: float        # ||L @ v - r|| (absolute), ~0 for solved systems
+    # ||L @ v - r|| / (||L @ v|| + ||r||); scale-independent, so it is the
+    # meaningful solve-quality monitor across problems of very different size.
+    residual_relative: float = 0.0
 
 
 @dataclass
@@ -181,6 +184,34 @@ def laplace_operator(mesh: mesh.Mesh) -> scipy.sparse.coo_matrix:
     return scipy.sparse.coo_matrix((values, (rows, cols)), shape=(N, N), dtype=DTYPE)
 
 
+def layer_cut_current(solution: Solution,
+                      layer_index: int,
+                      region: shapely.geometry.base.BaseGeometry) -> float:
+    """
+    Net in-plane current (A) into `region`, i.e. the vertical current it
+    extracts; positive when the region draws current out of the copper (a net
+    sink). Exact for the assembled system as `Σ(L V)_i` over the vertices
+    inside `region`.
+
+    Enclose the pad comfortably: the contact spreads onto rim triangles just
+    outside the pad polygon. The result also includes any point-coupled network
+    terminal inside the contour, not just contacts.
+    """
+    layer_solution = solution.layer_solutions[layer_index]
+    conductance = solution.problem.layers[layer_index].conductance
+    total = 0.0
+    for msh, potential in zip(layer_solution.meshes, layer_solution.potentials):
+        positions = msh.positions()
+        if len(positions) == 0:
+            continue
+        inside = shapely.contains_xy(region, positions[:, 0], positions[:, 1])
+        if not inside.any():
+            continue
+        residual = conductance * (laplace_operator(msh).tocsr() @ potential.values)
+        total += float(residual[inside].sum())
+    return total
+
+
 @dataclass
 class VertexIndexer:
     """
@@ -248,6 +279,23 @@ def compute_connectivity(prob: problem.Problem
     return strtrees, cg, find_connected_layer_geom_indices(cg)
 
 
+def effective_pad_refine_size(config: mesh.Mesher.Config,
+                              prob: problem.Problem) -> float:
+    """
+    Target mesh edge length (mm) for contact-pad refinement.
+
+    An explicit `config.pad_refine_size` override is used verbatim (never
+    clamped). Otherwise the Problem's auto size applies, floored by
+    `config.pad_refine_min_size`; a Problem size of 0 stays disabled.
+    """
+    if config.pad_refine_size > 0:
+        return config.pad_refine_size
+    auto = prob.pad_refine_size
+    if auto <= 0:
+        return 0.0
+    return max(config.pad_refine_min_size, auto)
+
+
 @stage_timer
 def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
@@ -261,6 +309,11 @@ def generate_meshes_for_problem(prob: problem.Problem,
     mesh_jobs: list[tuple[shapely.geometry.Polygon, list[mesh.Point],
                           list[tuple[shapely.geometry.Polygon, float]]]] = []
     mesh_index_to_layer_index: list[int] = []
+
+    # The CLI/config override wins; otherwise the Problem's screening default
+    # (computed from the contact conductance) applies, floored by the
+    # configured minimum so a very good joint cannot refine without bound.
+    effective_refine_size = effective_pad_refine_size(mesher.config, prob)
 
     for layer_i, layer in enumerate(prob.layers):
         seed_points_in_layer = collect_seed_points(prob, layer)
@@ -305,7 +358,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
             # Collect explicit refinement regions that fall on this geometry
             # (currently SMD pad footprints) and clip them to the copper.
             regions_for_geom: list[tuple[shapely.geometry.Polygon, float]] = []
-            if mesher.config.pad_refine_size > 0:
+            if effective_refine_size > 0:
                 for region_layer, region_shape in prob.refinement_regions:
                     if region_layer != layer.name:
                         continue
@@ -322,7 +375,7 @@ def generate_meshes_for_problem(prob: problem.Problem,
                             if geom.geom_type == "Polygon"
                         ]
                     for region_polygon in polygons:
-                        regions_for_geom.append((region_polygon, mesher.config.pad_refine_size))
+                        regions_for_geom.append((region_polygon, effective_refine_size))
 
             mesh_jobs.append((layer.geoms[geom_i], seed_points_in_geom, regions_for_geom))
             mesh_index_to_layer_index.append(layer_i)
@@ -534,21 +587,11 @@ def _barycentric_coordinates(px: float, py: float, p0, p1, p2) -> tuple[float, f
 @dataclass
 class ContactIndexer:
     """
-    Resolves AreaContact elements against the mesh.
-
-    For each contact it stores the list of (global vertex index, A_i) pairs,
-    where A_i is the integral of the P1 hat basis over the part of the contact
-    region covered by that vertex's triangles:
-
-        A_i = integral_{pad} phi_i dA
-
-    Because phi_i is affine on each triangle, the integral over a triangle
-    clipped to the contact region is `area(clip) * phi_i(centroid(clip))` —
-    exact for polygonal clipping and correct on partially covered rim
-    triangles, unlike a `(1/3) * area` row-sum.
-
-    Keyed by `id(element)` (the element objects are frozen and may contain
-    unhashable geometry).
+    Resolves `AreaContact` elements against the mesh into (global vertex, A_i)
+    pairs, where `A_i` is the exact integral of the hat basis `phi_i` over the
+    clipped pad. `phi_i` is affine, so on each clipped triangle this is
+    `area * phi_i(centroid)`, unlike a `(1/3) * area` row-sum which biases
+    partially covered rim triangles. Keyed by `id(element)`.
     """
     element_to_vertices: dict[int, list[tuple[int, float]]] = field(default_factory=dict)
 
@@ -971,10 +1014,14 @@ def solve_system(L: scipy.sparse.spmatrix,
     L_csc = L.tocsc()
     v = scipy.sparse.linalg.spsolve(L_csc, r)
 
-    residual_norm = np.linalg.norm(L_csc @ v - r)
+    residual = L_csc @ v - r
+    residual_norm = np.linalg.norm(residual)
+    scale = np.linalg.norm(L_csc @ v) + np.linalg.norm(r)
+    residual_relative = residual_norm / scale if scale > 0 else 0.0
     solver_info = SolverInfo(
         ground_node_current=float(v[-1]),  # Force a float for deterministic pickling reasons
         residual_norm=float(residual_norm),
+        residual_relative=float(residual_relative),
     )
     return v, solver_info
 

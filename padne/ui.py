@@ -934,6 +934,99 @@ class RenderedPoints:
             gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
 
 
+def collect_contact_coverage(problem: solver.problem.Problem,
+                             layer_solutions: list[solver.LayerSolution]
+                             ) -> dict[str, list[tuple[tuple[float, float],
+                                                       tuple[float, float, float]]]]:
+    """
+    Compute per-layer point coverage for SMT contacts.
+
+    Prefers the actual `AreaContact` elements (coloured by their owning network:
+    red if the network has a source, gray otherwise). Falls back to the
+    `refinement_regions` preview when no contacts exist yet. Mirrors how THT pads
+    are marked by their rim connection points.
+    """
+    AreaContact = solver.problem.AreaContact
+
+    # (layer_name, shape, colour) entries, preferring real contacts.
+    entries: list[tuple[str, object, tuple[float, float, float]]] = []
+    for network in problem.networks:
+        color = (1.0, 0.0, 0.0) if network.has_source else (0.5, 0.5, 0.5)
+        for element in network.elements:
+            if isinstance(element, AreaContact):
+                entries.append((element.layer.name, element.shape, color))
+
+    if not entries:
+        # Preview fallback: refinement regions, coloured by a connection inside.
+        regions_by_layer: dict[str, list] = {}
+        for layer_name, region_shape in problem.refinement_regions:
+            regions_by_layer.setdefault(layer_name, []).append(region_shape)
+        if not regions_by_layer:
+            return {}
+        region_colors: dict[str, list] = {
+            layer_name: [None] * len(shapes)
+            for layer_name, shapes in regions_by_layer.items()
+        }
+        for network in problem.networks:
+            color = (1.0, 0.0, 0.0) if network.has_source else (0.5, 0.5, 0.5)
+            for connection in network.connections:
+                shapes = regions_by_layer.get(connection.layer.name)
+                if not shapes:
+                    continue
+                for index, region_shape in enumerate(shapes):
+                    if region_shape.contains(connection.point):
+                        if region_colors[connection.layer.name][index] is None or color[0] == 1.0:
+                            region_colors[connection.layer.name][index] = color
+        for layer_name, shapes in regions_by_layer.items():
+            for index, region_shape in enumerate(shapes):
+                entries.append((layer_name, region_shape,
+                                region_colors[layer_name][index] or (0.5, 0.5, 0.5)))
+
+    entries_by_layer: dict[str, list] = {}
+    for layer_name, shape, color in entries:
+        entries_by_layer.setdefault(layer_name, []).append((shape, color))
+
+    coverage: dict[str, list] = {}
+    for layer, layer_solution in zip(problem.layers, layer_solutions):
+        shapes = entries_by_layer.get(layer.name)
+        if not shapes:
+            continue
+
+        coords = [
+            (vertex.p.x, vertex.p.y)
+            for msh in layer_solution.meshes
+            for vertex in msh.vertices
+        ]
+        if not coords:
+            continue
+        points = np.asarray(coords)
+
+        # Deduplicate by coordinate with red-priority when regions overlap.
+        assigned: dict[tuple[float, float], tuple[float, float, float]] = {}
+        for shape, color in shapes:
+            min_x, min_y, max_x, max_y = shape.bounds
+            box_mask = (
+                (points[:, 0] >= min_x) & (points[:, 0] <= max_x) &
+                (points[:, 1] >= min_y) & (points[:, 1] <= max_y)
+            )
+            if not box_mask.any():
+                continue
+            candidates = points[box_mask]
+            inside = shapely.contains_xy(shape, candidates[:, 0], candidates[:, 1])
+            for x, y in candidates[inside]:
+                key = (float(x), float(y))
+                existing = assigned.get(key)
+                if existing is None or color[0] == 1.0:
+                    assigned[key] = color
+
+        if assigned:
+            coverage[layer.name] = [
+                (coordinate, color) for coordinate, color in assigned.items()
+            ]
+
+    return coverage
+
+
 class MeshViewer(QOpenGLWidget):
 
     @dataclass
@@ -1292,6 +1385,8 @@ class MeshViewer(QOpenGLWidget):
         self._prepared = prepared
         self.modes = prepared.modes if prepared is not None else self.default_modes()
         self.current_mode_index = 0  # Start with voltage mode
+        # SMT contact coverage precomputed by prepare_ui_data (GL-free).
+        self._contact_coverage = None
 
         # When set, the colour maximum is capped to COLOR_SCALE_PERCENTILE of
         # the values on the current layer (rather than the global autoscale).
@@ -1469,6 +1564,7 @@ class MeshViewer(QOpenGLWidget):
             else prepare_ui_data(solution)
         self._prepared = None
         self.modes = prepared.modes
+        self._contact_coverage = prepared.contact_coverage
         self.solution = solution
 
         # Initialize the list of layers from the solution
@@ -1531,6 +1627,16 @@ class MeshViewer(QOpenGLWidget):
 
                 # Append a tuple of (coordinates, color)
                 points_by_layer[layer_name].append((point_coords, color))
+
+        # Expand SMT contact regions into per-vertex coverage so SMD pads are
+        # marked like THT rim connections. Prefer the coverage precomputed in
+        # prepare_ui_data; fall back to computing it here (direct ui.main use).
+        coverage = self._contact_coverage
+        if coverage is None:
+            coverage = collect_contact_coverage(
+                self.solution.problem, self.solution.layer_solutions)
+        for layer_name, coverage_points in coverage.items():
+            points_by_layer.setdefault(layer_name, []).extend(coverage_points)
 
         for layer_name, collected_points_data in points_by_layer.items():
             if not collected_points_data:
@@ -2408,13 +2514,14 @@ class PreparedUI:
     """GL-free UI preparation for a solution (see `prepare_ui_data`)."""
 
     modes: list
+    contact_coverage: dict = field(default_factory=dict)
 
 
 @stage_timer
 def prepare_ui_data(solution: solver.Solution) -> PreparedUI:
     """
-    Build the GL-free UI data for `solution`: per-mode spatial indices and the
-    prepared render arrays.
+    Build the GL-free UI data for `solution`: per-mode spatial indices, the
+    prepared render arrays, and the SMT contact coverage.
 
     Pure Python/numpy -- it never touches Qt or the OpenGL context, so it can
     run before the window exists. The GL side (VAO upload, shader compilation)
@@ -2424,7 +2531,8 @@ def prepare_ui_data(solution: solver.Solution) -> PreparedUI:
     for mode in modes:
         mode.set_solution(solution)
         mode.autoscale_values(solution)
-    return PreparedUI(modes=modes)
+    coverage = collect_contact_coverage(solution.problem, solution.layer_solutions)
+    return PreparedUI(modes=modes, contact_coverage=coverage)
 
 
 class MainWindow(QMainWindow):

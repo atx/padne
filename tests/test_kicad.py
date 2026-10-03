@@ -3,6 +3,7 @@ import warnings
 # is not yet cooked enough for us
 warnings.simplefilter("ignore", DeprecationWarning)
 
+import math
 import pytest
 import pcbnew
 import shapely.geometry
@@ -844,43 +845,42 @@ class TestLoadKicadProject:
         voltage_source_element, voltage_source_network = Utils.find_first_network_with_element_type(result, problem.VoltageSource)
         resistor_element, resistor_network = Utils.find_first_network_with_element_type(result, problem.Resistor)
 
-        voltage_source_connections = voltage_source_network.connections
-        resistor_connections = resistor_network.connections
-
         # Check voltage source properties
         assert voltage_source_element.voltage == 1.0
-        # Check that it's connected to component R2, pads 1 and 2
         board = pcbnew.LoadBoard(str(project.pcb_path))
-
-        # Set up layer dictionary and pad index using utility function
         layer_dict, pad_index = Utils.setup_layer_dict_and_pad_index(board)
 
         r2_1_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "1"))[0].point
         r2_2_point = pad_index.find_by_endpoint(kicad.Endpoint("R2", "2"))[0].point
 
-        # Find the connections corresponding to the voltage source terminals
-        conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
-        conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
+        # SMD pads are coupled through AreaContacts by default, so the source
+        # terminals are contact nodes, not Connection nodes.
+        def contact_for(network, node):
+            return next(e for e in network.elements
+                        if isinstance(e, problem.AreaContact) and e.node == node)
 
-        assert (conn_p.point.x == r2_1_point.x and
-                conn_p.point.y == r2_1_point.y)
-        assert (conn_n.point.x == r2_2_point.x and
-                conn_n.point.y == r2_2_point.y)
+        def assert_marker_at(network, point):
+            assert any(abs(c.point.x - point.x) < 1e-6 and abs(c.point.y - point.y) < 1e-6
+                       for c in network.connections)
+
+        p_contact = contact_for(voltage_source_network, voltage_source_element.p)
+        n_contact = contact_for(voltage_source_network, voltage_source_element.n)
+        assert p_contact.shape.contains(shapely.geometry.Point(r2_1_point.x, r2_1_point.y))
+        assert n_contact.shape.contains(shapely.geometry.Point(r2_2_point.x, r2_2_point.y))
+        assert_marker_at(voltage_source_network, r2_1_point)
+        assert_marker_at(voltage_source_network, r2_2_point)
 
         # Check resistor properties
         assert resistor_element.resistance == 0.01
-        # Check that it's connected to component R3, pads 1 and 2
         r3_1_point = pad_index.find_by_endpoint(kicad.Endpoint("R3", "1"))[0].point
         r3_2_point = pad_index.find_by_endpoint(kicad.Endpoint("R3", "2"))[0].point
 
-        # Find the connections corresponding to the resistor terminals
-        conn_a = next(c for c in resistor_connections if c.node_id == resistor_element.a)
-        conn_b = next(c for c in resistor_connections if c.node_id == resistor_element.b)
-
-        assert (conn_a.point.x == r3_1_point.x and
-                conn_a.point.y == r3_1_point.y)
-        assert (conn_b.point.x == r3_2_point.x and
-                conn_b.point.y == r3_2_point.y)
+        a_contact = contact_for(resistor_network, resistor_element.a)
+        b_contact = contact_for(resistor_network, resistor_element.b)
+        assert a_contact.shape.contains(shapely.geometry.Point(r3_1_point.x, r3_1_point.y))
+        assert b_contact.shape.contains(shapely.geometry.Point(r3_2_point.x, r3_2_point.y))
+        assert_marker_at(resistor_network, r3_1_point)
+        assert_marker_at(resistor_network, r3_2_point)
 
     @for_all_kicad_projects(exclude=["nested_schematic_twoinstances",
                                      "many_meshes_many_vias"])
@@ -970,12 +970,12 @@ class TestLoadKicadProject:
 
         # Find the voltage source lumped element by searching networks
         voltage_source_element = None
-        voltage_source_connections = []
+        voltage_source_network = None
         for network in result.networks:
             for element in network.elements:
                 if isinstance(element, problem.VoltageSource):
                     voltage_source_element = element
-                    voltage_source_connections = network.connections
+                    voltage_source_network = network
                     break
             if voltage_source_element:
                 break
@@ -983,9 +983,12 @@ class TestLoadKicadProject:
         # Check that we found a voltage source
         assert voltage_source_element is not None, "No voltage source found in the simple_via project"
 
-        # Find the connections corresponding to the voltage source terminals
-        conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
-        conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
+        # SMD pads are modelled as area contacts, so the source terminals are
+        # contact nodes; use the contact shape centroids as the pad centres.
+        contacts = [e for e in voltage_source_network.elements
+                    if isinstance(e, problem.AreaContact)]
+        conn_p = next(c for c in contacts if c.node == voltage_source_element.p)
+        conn_n = next(c for c in contacts if c.node == voltage_source_element.n)
 
         # Check that one endpoint is on F.Cu at position (122, 100)
         # and the other is on B.Cu at (142, 100)
@@ -996,10 +999,10 @@ class TestLoadKicadProject:
             f_cu_conn = conn_n
             b_cu_conn = conn_p
         else:
-            pytest.fail("Neither connection point p nor n was on F.Cu")
+            pytest.fail("Neither contact p nor n was on F.Cu")
 
-        f_cu_point = f_cu_conn.point
-        b_cu_point = b_cu_conn.point
+        f_cu_point = f_cu_conn.shape.centroid
+        b_cu_point = b_cu_conn.shape.centroid
         f_cu_layer = f_cu_conn.layer
         b_cu_layer = b_cu_conn.layer
 
@@ -1207,6 +1210,73 @@ class TestCopperDirective:
 
         with pytest.raises(ValueError, match="Conductivity must be positive"):
             kicad.CopperSpec.from_directive(directive)
+
+
+class TestContactDirective:
+    """Tests for CONTACT directive parsing and the default contact model."""
+
+    def test_default_conductance_matches_physical_chain(self):
+        spec = kicad.ContactSpec.default()
+        # ~9.3e4 S/mm^2 for SAC305, 75um, 3um IMC/side, 10% voids.
+        assert spec.conductance_per_area == pytest.approx(9.3e4, rel=0.05)
+        assert spec.mode == "robin"
+        assert spec.enabled
+
+    def test_explicit_g_override(self):
+        directive = kicad.Directive.parse("!padne CONTACT g=1.0e5")
+        spec = kicad.ContactSpec.from_directive(directive)
+        assert spec.conductance_per_area == pytest.approx(1.0e5)
+
+    def test_physical_parameters(self):
+        directive = kicad.Directive.parse(
+            "!padne CONTACT solder_thickness=100u void=0.2")
+        spec = kicad.ContactSpec.from_directive(directive)
+        assert 0.0 < spec.conductance_per_area < kicad.ContactSpec.default().conductance_per_area
+
+    def test_mode_point_disables(self):
+        directive = kicad.Directive.parse("!padne CONTACT mode=point")
+        spec = kicad.ContactSpec.from_directive(directive)
+        assert not spec.enabled
+
+    def test_invalid_mode_rejected(self):
+        directive = kicad.Directive.parse("!padne CONTACT mode=bogus")
+        with pytest.raises(ValueError, match="mode"):
+            kicad.ContactSpec.from_directive(directive)
+
+    def test_unknown_parameters_warn_and_are_ignored(self, caplog):
+        # `thickness=`/`solder=` are not real CONTACT parameters; they must
+        # warn rather than silently falling back to the defaults.
+        directive = kicad.Directive.parse(
+            "!padne CONTACT thickness=75u solder=SAC305")
+        with caplog.at_level("WARNING"):
+            spec = kicad.ContactSpec.from_directive(directive)
+        assert spec.conductance_per_area == pytest.approx(
+            kicad.ContactSpec.default().conductance_per_area)
+        assert "thickness" in caplog.text
+        assert "solder" in caplog.text
+
+    def test_contacts_default_on_for_referenced_smd_pads(self, kicad_test_projects):
+        project = kicad_test_projects["simple_geometry"]
+        result = kicad.load_kicad_project(project.pro_path)
+        contacts = [e for n in result.networks for e in n.elements
+                    if isinstance(e, problem.AreaContact)]
+        assert contacts, "expected area contacts on by default"
+        assert all(c.mode == "robin" for c in contacts)
+        assert result.pad_refine_size > 0
+        # The auto size is CONTACT_REFINE_LAMBDA_FACTOR extraction decay lengths.
+        sheet_conductance = max(layer.conductance for layer in result.layers)
+        decay_length = math.sqrt(
+            sheet_conductance / kicad.ContactSpec.default().conductance_per_area)
+        assert result.pad_refine_size == pytest.approx(
+            kicad.CONTACT_REFINE_LAMBDA_FACTOR * decay_length)
+
+    def test_contacts_can_be_disabled(self, kicad_test_projects):
+        project = kicad_test_projects["simple_geometry"]
+        result = kicad.load_kicad_project(
+            project.pro_path, contact_override=kicad.ContactSpec.disabled())
+        assert not any(isinstance(e, problem.AreaContact)
+                       for n in result.networks for e in n.elements)
+        assert result.pad_refine_size == 0.0
 
 
 class TestExtractBoardOutline:

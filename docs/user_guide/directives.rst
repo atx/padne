@@ -181,3 +181,81 @@ Example:
    The surface conductivity is computed inside padne by extracting the
    stackup (copper layer thickness in particular) info from your PCB
    file. See *File → Board Setup → Physical Stackup* inside pcbnew.
+
+
+.. _directive-contact:
+
+CONTACT
+^^^^^^^
+
+Controls how SMD pads couple to their lumped terminal. By default every
+SMD pad referenced by a lumped-element directive (``RESISTANCE``,
+``CURRENT``, ``VOLTAGE``, ``REGULATOR``) becomes a **distributed area
+contact**: current enters or leaves the copper across the whole pad
+footprint through a vertical (Robin) contact conductance, instead of
+being injected at the pad centre. This removes the artificial
+current-density singularity a single injected point creates inside the
+pad (padne issue #77).
+
+The joint conductance per unit area is
+
+.. code-block:: text
+
+   g = (1 - void) / ( t_sn/sigma_sn + 2 * t_imc/sigma_imc )   [S/mm^2]
+
+With the default SAC305 joint (75 um solder, 3 um IMC per side, 10 %
+voids) this gives ``g ~ 9.3e4 S/mm^2`` and an extraction decay length
+``lambda = sqrt(s_sheet / g) ~ 0.15 mm``.
+
+**Parameters:**
+
+* ``mode=robin|point``: ``robin`` (default) uses the distributed
+  contact; ``point`` restores the legacy point coupling and disables the
+  contact.
+* ``g=VALUE``: contact conductance per unit area in S/mm², overriding
+  the physical chain below.
+* ``solder_conductivity=VALUE``: solder bulk conductivity, default
+  ``8.5e6`` S/m.
+* ``solder_thickness=VALUE``: solder standoff height, default ``75u``.
+* ``imc_conductivity=VALUE``: intermetallic (IMC) conductivity, default
+  ``7e6`` S/m.
+* ``imc_thickness=VALUE``: IMC thickness *per side*, default ``3u``.
+* ``void=VALUE``: void fraction in ``[0, 1)``, default ``0.1``.
+
+Unknown parameters are ignored with a warning.
+
+Example:
+
+.. code-block:: text
+
+   !padne CONTACT g=9e4
+   !padne CONTACT void=0.1 solder_thickness=75u imc_thickness=3u
+
+.. note::
+
+   * Only SMD pads that a lumped-element directive references become
+     contacts; probe points stay point-coupled.
+   * The automatic mesh refinement over contact pads is a **screening**
+     size (``2 * lambda``). It captures the perimeter localisation but
+     does not meet the 5 % pad-power convergence gate; use
+     ``--pad-refine-size`` of roughly ``lambda/2`` for a converged
+     result. See ``examples/area_contact_convergence.py``. There is no
+     CLI switch to disable pad refinement while contacts are enabled;
+     use ``--contact-mode point`` or a very large ``--pad-refine-size``.
+   * The contact conducts exactly the pad's through-current. This can be
+     checked independently with ``solver.layer_cut_current``
+     (sink-positive: a pad that draws current out of the copper reads
+     positive).
+
+**Command-line overrides.** These flags override the ``CONTACT``
+directive and the computed defaults, for both ``padne gui`` and
+``padne solve``:
+
+* ``--contact-mode robin|point``
+* ``--contact-g VALUE``: contact conductance per unit area (S/mm²)
+* ``--pad-refine-size VALUE``: target mesh edge length (mm) over
+  contact pads; ``0`` uses the computed default
+* ``--pad-refine-transition VALUE``: grading distance (mm) from the pad
+  rim inward
+* ``--pad-refine-min-size VALUE``: floor (mm) for the *auto* refine
+  size, default ``0.05``; ``0`` disables it

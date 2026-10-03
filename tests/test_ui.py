@@ -167,6 +167,55 @@ class TestSpatialIndex:
         assert value_corner == pytest.approx(1.0, abs=2.0)
 
 
+class TestContactCoverage:
+    """Tests for the SMT contact coverage overlay helper."""
+
+    def _make_problem_and_solution(self, has_source: bool):
+        rect = shapely.geometry.box(0, 0, 10, 10)
+        layer = problem.Layer(shape=shapely.geometry.MultiPolygon([rect]),
+                              name="F.Cu", conductance=1.0, thickness=0.035)
+
+        # A real mesh so there are vertices to cover.
+        msh = mesh.Mesher().poly_to_mesh(rect)
+        layer_solution = solver.LayerSolution(
+            meshes=[msh], potentials=[], power_densities=[], disconnected_meshes=[])
+
+        centre = problem.Connection(layer=layer, point=shapely.geometry.Point(5, 5))
+        other = problem.Connection(layer=layer, point=shapely.geometry.Point(1, 1))
+        if has_source:
+            element = problem.CurrentSource(f=centre.node_id, t=other.node_id, current=1.0)
+        else:
+            element = problem.Resistor(a=centre.node_id, b=other.node_id, resistance=1.0)
+        network = problem.Network(connections=[centre, other], elements=[element])
+
+        region = shapely.geometry.MultiPolygon([shapely.geometry.box(4, 4, 6, 6)])
+        prob = problem.Problem(layers=[layer], networks=[network],
+                               refinement_regions=[("F.Cu", region)])
+        return prob, [layer_solution], region
+
+    def test_coverage_covers_region_and_is_red_for_sources(self):
+        prob, layer_solutions, region = self._make_problem_and_solution(has_source=True)
+        coverage = collect_contact_coverage(prob, layer_solutions)
+
+        assert "F.Cu" in coverage
+        points = coverage["F.Cu"]
+        assert points, "Expected coverage points inside the pad region"
+        for (x, y), color in points:
+            assert region.contains(shapely.geometry.Point(x, y))
+            assert color == (1.0, 0.0, 0.0)
+
+    def test_coverage_is_gray_for_passive_networks(self):
+        prob, layer_solutions, _ = self._make_problem_and_solution(has_source=False)
+        coverage = collect_contact_coverage(prob, layer_solutions)
+        assert coverage["F.Cu"]
+        assert all(color == (0.5, 0.5, 0.5) for _, color in coverage["F.Cu"])
+
+    def test_no_regions_means_no_coverage(self):
+        prob, layer_solutions, _ = self._make_problem_and_solution(has_source=True)
+        no_regions = problem.Problem(layers=prob.layers, networks=prob.networks)
+        assert collect_contact_coverage(no_regions, layer_solutions) == {}
+
+
 class TestCurrentDensityUnit:
     """The current-density mode's unit must match the quantity it shows."""
 
@@ -307,7 +356,14 @@ class TestPrepareUiData:
             assert "F.Cu" in mode.spatial_indices
             assert mode.max_value >= mode.min_value
 
-    def test_no_regions_means_no_coverage(self):
-        prob, layer_solutions, _ = self._make_problem_and_solution(has_source=True)
-        no_regions = problem.Problem(layers=prob.layers, networks=prob.networks)
-        assert collect_contact_coverage(no_regions, layer_solutions) == {}
+    def test_prepare_populates_contact_coverage(self):
+        # Guards against the coverage overlay being computed but never wired in.
+        prob, layer_solutions, region = (
+            TestContactCoverage()._make_problem_and_solution(has_source=True))
+        solution = solver.Solution(
+            problem=prob, layer_solutions=layer_solutions,
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0))
+
+        prepared = prepare_ui_data(solution)
+
+        assert prepared.contact_coverage.get("F.Cu"), "coverage not populated"

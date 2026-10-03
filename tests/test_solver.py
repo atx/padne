@@ -639,6 +639,118 @@ class TestAreaContactModel:
         # Far below the order-1 W the sign bug produced at fine meshes.
         assert values[-1] < 1e-3
 
+    def test_cut_current_equals_through_current(self):
+        """The in-plane current crossing a contour around the pad equals the
+        1 A through-current, independently of the contact stamp; nested
+        contours accumulate monotonically (magnitudes; the sign convention is
+        covered by test_cut_current_is_sink_positive)."""
+        solution = self._solve_synthetic(9e4, mesh.Mesher.Config(
+            maximum_size=0.5, pad_refine_size=0.1, pad_refine_transition=0.0))
+
+        def cut(distance):
+            return solver.layer_cut_current(solution, 0,
+                                            self._PAD.buffer(distance))
+
+        # Interior contours carry only the extraction inside them; growing
+        # toward the pad edge accumulates more, reaching the full through-
+        # current at and beyond the pad boundary. For a contact-limited joint
+        # (g ~ 9e4) most of the current is extracted in the rim, so an inset
+        # contour sees only a small fraction.
+        interior = [abs(cut(-0.6)), abs(cut(-0.4)), abs(cut(-0.2))]
+        assert interior[0] <= interior[1] <= interior[2]
+        assert 0.0 < interior[-1] < 0.5
+        # A contour comfortably enclosing the pad (and the one-element rim its
+        # contact spreads onto) carries the whole through-current, and does so
+        # exactly: this is the discrete divergence identity, independent of the
+        # contact stamp.
+        assert abs(cut(+0.5)) == pytest.approx(1.0, abs=1e-9)
+        assert abs(cut(+1.0)) == pytest.approx(1.0, abs=1e-9)
+
+    def test_cut_current_is_sink_positive(self):
+        """A region that draws current out of the copper reads positive."""
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 1)]),
+            name="F.Cu", conductance=2082.0, thickness=0.035)
+        p = problem.Connection(layer=layer, point=shapely.geometry.Point(1.0, 0.5))
+        n = problem.Connection(layer=layer, point=shapely.geometry.Point(9.0, 0.5))
+        network = problem.Network(connections=[p, n], elements=[
+            problem.VoltageSource(p=p.node_id, n=n.node_id, voltage=1.0)])
+        prob = problem.Problem(layers=[layer], networks=[network])
+        solution = solver.solve(prob, mesh.Mesher.Config(maximum_size=0.2))
+
+        source_region = shapely.geometry.box(0.5, 0.1, 1.5, 0.9)
+        sink_region = shapely.geometry.box(8.5, 0.1, 9.5, 0.9)
+        assert solver.layer_cut_current(solution, 0, source_region) < 0
+        assert solver.layer_cut_current(solution, 0, sink_region) > 0
+
+
+class TestEffectivePadRefineSize:
+    """The auto/override/minimum-size contract for contact-pad refinement."""
+
+    def _prob(self, pad_refine_size):
+        return problem.Problem(layers=[], networks=[],
+                               pad_refine_size=pad_refine_size)
+
+    def test_explicit_override_is_never_clamped(self):
+        config = mesh.Mesher.Config(pad_refine_size=0.01, pad_refine_min_size=0.05)
+        assert solver.effective_pad_refine_size(config, self._prob(0.3)) == 0.01
+
+    def test_auto_size_is_floored_by_the_minimum(self):
+        config = mesh.Mesher.Config(pad_refine_min_size=0.05)
+        assert solver.effective_pad_refine_size(config, self._prob(0.02)) == 0.05
+
+    def test_auto_size_above_the_floor_is_untouched(self):
+        config = mesh.Mesher.Config(pad_refine_min_size=0.05)
+        assert solver.effective_pad_refine_size(config, self._prob(0.3)) == 0.3
+
+    def test_zero_auto_size_stays_disabled(self):
+        config = mesh.Mesher.Config(pad_refine_min_size=0.05)
+        assert solver.effective_pad_refine_size(config, self._prob(0.0)) == 0.0
+
+    def test_negative_minimum_size_is_rejected(self):
+        with pytest.raises(ValueError, match="pad_refine_min_size"):
+            mesh.Mesher.Config(pad_refine_min_size=-1.0)
+
+
+class TestAreaContactIntegration:
+    """End-to-end: KiCad extraction -> wiring -> contacts -> solve -> 11b."""
+
+    def test_simple_geometry_contacts_carry_the_loop_current(self,
+                                                             kicad_test_projects):
+        project = kicad_test_projects["simple_geometry"]
+        prob = kicad.load_kicad_project(project.pro_path)
+        assert prob.pad_refine_size > 0
+        solution = solver.solve(prob)
+        # Scale-independent solve-quality monitor (the absolute residual grows
+        # with the contact conductances).
+        assert solution.solver_info.residual_relative < 1e-9
+
+        element_currents = []
+        for network in prob.networks:
+            contacts = [e for e in network.elements
+                        if isinstance(e, problem.AreaContact)]
+            if len(contacts) < 2:
+                continue
+            # A tight contour around each pad: the in-plane cut current is the
+            # current that pad conducts (sink-positive).
+            pad_currents = [
+                solver.layer_cut_current(
+                    solution, prob.layers.index(c.layer), c.shape.buffer(0.4))
+                for c in contacts
+            ]
+            # Two-terminal element: one pad is a sink (positive) and one a
+            # source (negative), equal in magnitude. This also confirms the
+            # connectivity marker carries no current.
+            assert sum(pad_currents) == pytest.approx(0.0, abs=1e-6)
+            assert pad_currents[0] == pytest.approx(-pad_currents[1], rel=1e-6)
+            assert abs(pad_currents[0]) > 0.0
+            element_currents.append(abs(pad_currents[0]))
+
+        # simple_geometry is one series loop (a 1 V source and a 10 mOhm
+        # resistor), so both elements carry the same current magnitude.
+        assert len(element_currents) == 2
+        assert element_currents[0] == pytest.approx(element_currents[1], rel=1e-6)
+
 
 class TestSyntheticProblems:
 
@@ -1735,8 +1847,11 @@ class TestSolverEndToEnd:
                                      "probe_directive",
                                      "test_set_1"])
     def test_voltage_sources_work(self, project):
-        # Load the problem from the KiCad project
-        prob = kicad.load_kicad_project(project.pro_path)
+        # Load the problem from the KiCad project (legacy point coupling, so
+        # this test isolates voltage-source behaviour from the area-contact
+        # model; the contact model is covered by TestAreaContactModel).
+        prob = kicad.load_kicad_project(
+            project.pro_path, contact_override=kicad.ContactSpec.disabled())
 
         # Call the function under test
         solution = solver.solve(prob)
@@ -1779,8 +1894,9 @@ class TestSolverEndToEnd:
 
     def test_long_trace_current_source(self, kicad_test_projects):
         project = kicad_test_projects["long_trace_current"]
-        # Load the problem and solve it
-        prob = kicad.load_kicad_project(project.pro_path)
+        # Load the problem and solve it (legacy point coupling)
+        prob = kicad.load_kicad_project(
+            project.pro_path, contact_override=kicad.ContactSpec.disabled())
         solution = solver.solve(prob)
 
         # Find the current source network and element
@@ -1910,7 +2026,8 @@ class TestSolverEndToEnd:
     def test_complicated_trace_current_source(self, kicad_test_projects):
         project = kicad_test_projects["complicated_trace_current"]
 
-        prob = kicad.load_kicad_project(project.pro_path)
+        prob = kicad.load_kicad_project(
+            project.pro_path, contact_override=kicad.ContactSpec.disabled())
         solution = solver.solve(prob)
 
         # This trace is composed from multiple segments with varying widths
@@ -2017,8 +2134,9 @@ class TestSolverEndToEnd:
         # Get the project with combined voltage and current sources
         project = kicad_test_projects["voltage_source_into_current_sink"]
 
-        # Load the original problem with both sources
-        full_problem = kicad.load_kicad_project(project.pro_path)
+        # Load the original problem with both sources (legacy point coupling)
+        full_problem = kicad.load_kicad_project(
+            project.pro_path, contact_override=kicad.ContactSpec.disabled())
 
         # --- Identify the voltage source, current source, and their networks ---
         voltage_source_element = None
@@ -2161,8 +2279,9 @@ class TestSolverEndToEnd:
         # Get the unconnected_via project
         project = kicad_test_projects["unconnected_via"]
 
-        # Load the problem from the KiCad project
-        prob = kicad.load_kicad_project(project.pro_path)
+        # Load the problem from the KiCad project (legacy point coupling)
+        prob = kicad.load_kicad_project(
+            project.pro_path, contact_override=kicad.ContactSpec.disabled())
 
         # Solve the problem
         solution = solver.solve(prob)
@@ -2233,7 +2352,8 @@ class TestSolverEndToEnd:
         # The idea of this test is to verify that that the voltage difference
         # between the two planes (meshes) is approximately equal to the voltage
         # of the voltage source.
-        prob = kicad.load_kicad_project(project.pro_path)
+        prob = kicad.load_kicad_project(
+            project.pro_path, contact_override=kicad.ContactSpec.disabled())
         solution = solver.solve(prob)
 
         assert solution is not None, "Solver failed to produce a solution"
@@ -2670,5 +2790,7 @@ def test_solution_residual(project):
     prob = kicad.load_kicad_project(project.pro_path)
     solution = solver.solve(prob)
 
-    assert solution.solver_info.residual_norm < 1e-9, \
-        f"Residual too large: {solution.solver_info.residual_norm}"
+    # Scale-independent residual (contact conductances g*A ~ 1e5 S make the
+    # absolute residual large but the relative one stays at solver precision).
+    assert solution.solver_info.residual_relative < 1e-9, \
+        f"Relative residual too large: {solution.solver_info.residual_relative}"
