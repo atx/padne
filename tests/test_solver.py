@@ -501,6 +501,145 @@ class TestProbeDirective:
             assert nearest < 1e-6, f"{name}: nearest vertex is {nearest} mm away"
 
 
+class TestAreaContactIndexer:
+
+    def _resolve(self, pad):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 10)]),
+            name="F.Cu", conductance=1.0, thickness=0.035)
+        contact = problem.AreaContact(
+            layer=layer, shape=shapely.geometry.MultiPolygon([pad]),
+            node=problem.NodeID(), conductance_per_area=9e4)
+        network = problem.Network(connections=[], elements=[contact])
+        msh = mesh.Mesher(mesh.Mesher.Config(maximum_size=0.4)).poly_to_mesh(
+            shapely.geometry.box(0, 0, 10, 10))
+        vindex = solver.VertexIndexer.create([msh])
+        indexer = solver.ContactIndexer.create(
+            problem.Problem(layers=[layer], networks=[network]),
+            [msh], [0], vindex, [network])
+        return contact, indexer.element_to_vertices[id(contact)]
+
+    def test_hat_integrals_partition_the_pad(self):
+        # Deliberately not aligned to the mesh: clipping must still partition.
+        pad = shapely.geometry.box(3.7, 4.2, 6.3, 5.9)
+        _, resolved = self._resolve(pad)
+        assert resolved
+        assert all(area > 0 for _, area in resolved)
+        assert sum(area for _, area in resolved) == pytest.approx(pad.area, rel=1e-6)
+
+    def test_empty_region_resolves_to_nothing(self):
+        _, resolved = self._resolve(shapely.geometry.box(20, 20, 21, 21))
+        assert resolved == []
+
+
+class TestAreaContactModel:
+
+    def _contact_on_mesh(self, conductance_per_area=9e4):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 5)]),
+            name="F.Cu", conductance=2082.0, thickness=0.035)
+        contact = problem.AreaContact(
+            layer=layer, shape=shapely.geometry.MultiPolygon([shapely.geometry.box(3, 1, 5, 4)]),
+            node=problem.NodeID(), conductance_per_area=conductance_per_area)
+        network = problem.Network(connections=[], elements=[contact])
+        msh = mesh.Mesher(mesh.Mesher.Config(maximum_size=0.4)).poly_to_mesh(
+            shapely.geometry.box(0, 0, 10, 5))
+        vindex = solver.VertexIndexer.create([msh])
+        indexer = solver.ContactIndexer.create(
+            problem.Problem(layers=[layer], networks=[network]),
+            [msh], [0], vindex, [network])
+        return contact, network, indexer, vindex, msh
+
+    def test_contact_conductance_is_distributed(self):
+        contact, _, indexer, _, msh = self._contact_on_mesh()
+        resolved = indexer.element_to_vertices[id(contact)]
+        total = sum(area for _, area in resolved)
+        assert total == pytest.approx(contact.shape.area, rel=1e-6)
+        # No single vertex may carry a large share: this is not a point contact.
+        assert max(area for _, area in resolved) < 0.5 * total
+
+    def test_robin_stamp_equals_resistor_star(self):
+        contact, network, indexer, vindex, msh = self._contact_on_mesh()
+        resolved = indexer.element_to_vertices[id(contact)]
+        n_vertices = len(msh.vertices)
+        term = contact.node
+        node_indexer = solver.NodeIndexer(
+            node_to_global_index={term: n_vertices},
+            extra_source_to_global_index={},
+            internal_node_count=1)
+        size = n_vertices + 1
+
+        L_robin = scipy.sparse.lil_matrix((size, size), dtype=solver.DTYPE)
+        solver.stamp_contacts_into_system([network], node_indexer, indexer, L_robin)
+
+        L_star = scipy.sparse.lil_matrix((size, size), dtype=solver.DTYPE)
+        i_terminal = node_indexer.node_to_global_index[term]
+        for vertex_index, area in resolved:
+            r = 1.0 / (contact.conductance_per_area * area)
+            # Resistor convention: negative diagonal, positive off-diagonal.
+            L_star[vertex_index, vertex_index] -= 1 / r
+            L_star[vertex_index, i_terminal] += 1 / r
+            L_star[i_terminal, vertex_index] += 1 / r
+            L_star[i_terminal, i_terminal] -= 1 / r
+
+        assert np.allclose(L_robin.toarray(), L_star.toarray())
+
+    _PLANE = (0, 0, 10, 5)
+    _PAD = shapely.geometry.box(6, 1.5, 8, 3.5)
+
+    def _solve_synthetic(self, conductance_per_area, config):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(*self._PLANE)]),
+            name="F.Cu", conductance=2082.0, thickness=0.035)
+        source = problem.Connection(layer=layer, point=shapely.geometry.Point(0.25, 2.5))
+        terminal = problem.NodeID()
+        network = problem.Network(connections=[source], elements=[
+            problem.CurrentSource(f=source.node_id, t=terminal, current=1.0),
+            problem.AreaContact(layer=layer, shape=shapely.geometry.MultiPolygon([self._PAD]),
+                                node=terminal, conductance_per_area=conductance_per_area)])
+        prob = problem.Problem(
+            layers=[layer], networks=[network],
+            refinement_regions=[("F.Cu", shapely.geometry.MultiPolygon([self._PAD]))])
+        return solver.solve(prob, config)
+
+    def _pad_power(self, solution):
+        power = 0.0
+        layer_solution = solution.layer_solutions[0]
+        for msh, density in zip(layer_solution.meshes, layer_solution.power_densities):
+            for face in msh.faces:
+                centroid = face.centroid
+                if not self._PAD.contains(shapely.geometry.Point(centroid.x, centroid.y)):
+                    continue
+                points = [edge.origin.p for edge in face.edges]
+                area = abs((points[1].x - points[0].x) * (points[2].y - points[0].y)
+                           - (points[1].y - points[0].y) * (points[2].x - points[0].x)) / 2
+                power += density[face] * area
+        return power
+
+    def test_pad_power_is_stable_in_the_contact_limited_regime(self):
+        """With a moderate contact conductance the in-plane pad power converges."""
+        def solve(target):
+            return self._solve_synthetic(500.0, mesh.Mesher.Config(
+                maximum_size=1.0, pad_refine_size=target, pad_refine_transition=0.0))
+
+        assert self._pad_power(solve(0.15)) == pytest.approx(
+            self._pad_power(solve(0.2)), rel=0.05)
+
+    def test_near_short_contact_power_converges(self):
+        """The near-short joint (g ~ 9e4) must converge, not blow up."""
+        def power(h):
+            # Global uniform refinement, no region-boundary artefacts.
+            return self._pad_power(self._solve_synthetic(
+                9e4, mesh.Mesher.Config(maximum_size=h)))
+
+        values = [power(h) for h in (0.4, 0.2, 0.1, 0.05)]
+        assert all(value > 0 for value in values)
+        # Refinement must not explode: the last two levels agree within 5%.
+        assert values[-1] == pytest.approx(values[-2], rel=0.05)
+        # Far below the order-1 W the sign bug produced at fine meshes.
+        assert values[-1] < 1e-3
+
+
 class TestSyntheticProblems:
 
     def test_linear_rectangle(self):

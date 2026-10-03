@@ -489,6 +489,12 @@ class BaseLumpedSpec:
 
     coupling: float = 0.001
 
+    # Optional distributed area-contact conductance per unit area (S/mm^2).
+    # None keeps the legacy point coupling (no behaviour change until the
+    # CONTACT directive / default enables it).
+    contact_conductance_per_area: Optional[float] = None
+    contact_mode: str = "robin"
+
     # To be overridden by subclasses
     endpoint_names: ClassVar[dict[str, str]] = {}
     value_names: ClassVar[dict[str, str]] = {}
@@ -561,45 +567,63 @@ class BaseLumpedSpec:
                 raise ValueError(f"No endpoints specified for {directive_param_name} in {self.__class__.__name__}")
 
             internal_arg_name = self.endpoint_names[directive_param_name]
+            target_node = internal_nodes[internal_arg_name]
 
-            layerpoints = [
-                lp
-                for ep in endpoints_list
-                for lp in pad_index.find_by_endpoint(ep)
-            ]
+            # Resolve each endpoint to (layerpoint, pad outline) pairs. SMD pads
+            # carry an outline; THT rim points and vias do not.
+            pads: list[tuple[LayerPoint, Optional[shapely.geometry.MultiPolygon]]] = []
+            for ep in endpoints_list:
+                shapes_by_layer = dict(pad_index.find_shapes_by_endpoint(ep))
+                for lp in pad_index.find_by_endpoint(ep):
+                    pads.append((lp, shapes_by_layer.get(lp.layer)))
 
-            if len(layerpoints) == 1:
+            area_contacts_enabled = self.contact_conductance_per_area is not None
+
+            def emit(layer_point: LayerPoint, pad_shape, node: problem.NodeID) -> None:
+                # A Connection is always emitted so that connectivity analysis
+                # and mesh seeding keep working. For an area contact it carries
+                # a fresh, unused node: the marker must NOT be the contact
+                # terminal, otherwise the pad is point-coupled and Robin-coupled
+                # at the same time and the point singularity is not removed.
+                layer = layer_dict[layer_point.layer]
+                if area_contacts_enabled and pad_shape is not None:
+                    elements.append(problem.AreaContact(
+                        layer=layer,
+                        shape=pad_shape,
+                        node=node,
+                        conductance_per_area=self.contact_conductance_per_area,
+                        mode=self.contact_mode,
+                    ))
+                    connections.append(problem.Connection(
+                        layer=layer,
+                        point=layer_point.point,
+                        node_id=problem.NodeID(),
+                    ))
+                else:
+                    connections.append(problem.Connection(
+                        layer=layer,
+                        point=layer_point.point,
+                        node_id=node,
+                    ))
+
+            if len(pads) == 1:
                 # Optimize by wiring directly to the internal node
-                lp = layerpoints[0]
-                layer = layer_dict[lp.layer]
-                conn = problem.Connection(
-                    layer=layer,
-                    point=lp.point,
-                    node_id=internal_nodes[internal_arg_name]
-                )
-                connections.append(conn)
+                emit(pads[0][0], pads[0][1], target_node)
             else:
-                # If there are multiple endpoints, we create a "star"
-                # shaped resistor network leading from the endpoints to the
-                # internal node
+                # If there are multiple pads, we create a "star" shaped resistor
+                # network leading from the pads to the internal node
                 # Note: using a V=0 voltage sources instead of resistors
                 # may work, but I have observed weird numerical stability
                 # issues, so we do this by default and optimize in subclasses
                 # if needed
-                for lp in layerpoints:
-                    layer = layer_dict[lp.layer]
-                    resistor = problem.Resistor(
-                        a=problem.NodeID(),
-                        b=internal_nodes[internal_arg_name],
+                for layer_point, pad_shape in pads:
+                    branch = problem.NodeID()
+                    elements.append(problem.Resistor(
+                        a=branch,
+                        b=target_node,
                         resistance=self.coupling,
-                    )
-                    conn = problem.Connection(
-                        layer=layer,
-                        point=lp.point,
-                        node_id=resistor.a,
-                    )
-                    elements.append(resistor)
-                    connections.append(conn)
+                    ))
+                    emit(layer_point, pad_shape, branch)
         return connections, elements
 
     def construct(self,

@@ -501,6 +501,178 @@ class NodeIndexer:
         )
 
 
+def _iter_polygons(geometry):
+    """Yield the Polygon pieces of an arbitrary shapely geometry."""
+    if geometry.geom_type == "Polygon":
+        yield geometry
+    elif geometry.geom_type == "MultiPolygon":
+        yield from geometry.geoms
+    elif geometry.geom_type == "GeometryCollection":
+        for part in geometry.geoms:
+            yield from _iter_polygons(part)
+
+
+def _barycentric_coordinates(px: float, py: float, p0, p1, p2) -> tuple[float, float, float]:
+    """Barycentric coordinates (for p0, p1, p2) of the point (px, py)."""
+    v0 = p1 - p0
+    v1 = p2 - p0
+    v2 = np.array([px, py], dtype=np.float64) - p0
+    d00 = float(v0 @ v0)
+    d01 = float(v0 @ v1)
+    d11 = float(v1 @ v1)
+    d20 = float(v2 @ v0)
+    d21 = float(v2 @ v1)
+    denom = d00 * d11 - d01 * d01
+    if denom == 0.0:
+        return 0.0, 0.0, 0.0
+    beta = (d11 * d20 - d01 * d21) / denom
+    gamma = (d00 * d21 - d01 * d20) / denom
+    alpha = 1.0 - beta - gamma
+    return alpha, beta, gamma
+
+
+@dataclass
+class ContactIndexer:
+    """
+    Resolves AreaContact elements against the mesh.
+
+    For each contact it stores the list of (global vertex index, A_i) pairs,
+    where A_i is the integral of the P1 hat basis over the part of the contact
+    region covered by that vertex's triangles:
+
+        A_i = integral_{pad} phi_i dA
+
+    Because phi_i is affine on each triangle, the integral over a triangle
+    clipped to the contact region is `area(clip) * phi_i(centroid(clip))` —
+    exact for polygonal clipping and correct on partially covered rim
+    triangles, unlike a `(1/3) * area` row-sum.
+
+    Keyed by `id(element)` (the element objects are frozen and may contain
+    unhashable geometry).
+    """
+    element_to_vertices: dict[int, list[tuple[int, float]]] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls,
+               prob: problem.Problem,
+               meshes: list[mesh.Mesh],
+               mesh_index_to_layer_index: list[int],
+               vindex: VertexIndexer,
+               filtered_networks: list[problem.Network],
+               relative_tolerance: float = 1e-3,
+               ) -> "ContactIndexer":
+        contacts_by_layer = collections.defaultdict(list)
+        for network in filtered_networks:
+            for element in network.elements:
+                if isinstance(element, problem.AreaContact):
+                    contacts_by_layer[prob.layers.index(element.layer)].append(element)
+
+        indexer = cls()
+        if not contacts_by_layer:
+            return indexer
+
+        for layer_i, contacts in contacts_by_layer.items():
+            layer = prob.layers[layer_i]
+
+            # Precompute triangle polygons and a spatial index per mesh.
+            prepared = []
+            for mesh_i, msh in enumerate(meshes):
+                if mesh_index_to_layer_index[mesh_i] != layer_i:
+                    continue
+                positions = msh.positions()
+                triangles = msh.triangles()
+                polygons = []
+                valid_vertices = []
+                for triangle in triangles:
+                    i0, i1, i2 = int(triangle[0]), int(triangle[1]), int(triangle[2])
+                    polygon = shapely.geometry.Polygon([positions[i0], positions[i1], positions[i2]])
+                    if polygon.area <= 0.0:
+                        continue
+                    polygons.append(polygon)
+                    valid_vertices.append((i0, i1, i2))
+                tree = shapely.strtree.STRtree(polygons) if polygons else None
+                prepared.append((mesh_i, positions, polygons, valid_vertices, tree))
+
+            for contact in contacts:
+                areas: dict[tuple[int, int], float] = collections.defaultdict(float)
+                for mesh_i, positions, polygons, valid_vertices, tree in prepared:
+                    if tree is None:
+                        continue
+                    for triangle_index in tree.query(contact.shape, predicate="intersects"):
+                        piece = contact.shape.intersection(polygons[triangle_index])
+                        if piece.is_empty:
+                            continue
+                        i0, i1, i2 = valid_vertices[triangle_index]
+                        p0, p1, p2 = positions[i0], positions[i1], positions[i2]
+                        for polygon_piece in _iter_polygons(piece):
+                            area = polygon_piece.area
+                            if area <= 0.0:
+                                continue
+                            centroid = polygon_piece.centroid
+                            alpha, beta, gamma = _barycentric_coordinates(
+                                centroid.x, centroid.y, p0, p1, p2)
+                            areas[(mesh_i, i0)] += area * alpha
+                            areas[(mesh_i, i1)] += area * beta
+                            areas[(mesh_i, i2)] += area * gamma
+
+                resolved = [
+                    (vindex.mesh_vertex_index_to_global_index[key], area)
+                    for key, area in areas.items()
+                    if area > 0.0
+                ]
+                resolved.sort(key=lambda item: item[0])
+
+                total = sum(area for _, area in resolved)
+                expected = contact.shape.intersection(layer.shape).area
+                if total <= 0.0:
+                    log.warning(
+                        "AreaContact on layer %s resolved to no mesh vertices; "
+                        "it will carry no current.", layer.name)
+                elif expected > 0.0 and abs(total - expected) > relative_tolerance * expected:
+                    log.warning(
+                        "AreaContact area mismatch on layer %s: resolved %.6g mm^2 "
+                        "vs expected %.6g mm^2", layer.name, total, expected)
+
+                indexer.element_to_vertices[id(contact)] = resolved
+
+        return indexer
+
+
+def stamp_contacts_into_system(filtered_networks: list[problem.Network],
+                               node_indexer: NodeIndexer,
+                               contact_indexer: ContactIndexer,
+                               L: scipy.sparse.spmatrix) -> None:
+    """Stamp the distributed area contacts (Robin) into the system matrix."""
+    for network in filtered_networks:
+        for element in network.elements:
+            if not isinstance(element, problem.AreaContact):
+                continue
+            if element.mode == "neumann":
+                raise NotImplementedError(
+                    "Neumann (prescribed-flux) area contacts are not implemented yet")
+            if element.mode != "robin":
+                raise NotImplementedError(f"Unsupported area-contact mode {element.mode!r}")
+
+            resolved = contact_indexer.element_to_vertices.get(id(element))
+            if not resolved:
+                continue
+
+            i_terminal = node_indexer.node_to_global_index[element.node]
+            conductance = element.conductance_per_area
+            total = 0.0
+            for vertex_index, area in resolved:
+                term = conductance * area
+                # Same sign convention as the Resistor stamp: negative on the
+                # diagonal, positive off-diagonal (the Laplacian diagonal is
+                # negative). A positive diagonal here would be a negative
+                # conductance and destabilise near-short contacts.
+                L[vertex_index, vertex_index] -= term
+                L[vertex_index, i_terminal] += term
+                L[i_terminal, vertex_index] += term
+                total += term
+            L[i_terminal, i_terminal] -= total
+
+
 def stamp_network_into_system(network: problem.Network,
                               node_indexer: NodeIndexer,
                               L: scipy.sparse.spmatrix,
@@ -571,6 +743,11 @@ def stamp_network_into_system(network: problem.Network,
                 # (i_s_f, i_s_t) pair.
                 L[i_s_f, i_v] += gain
                 L[i_s_t, i_v] += -gain
+
+            case problem.AreaContact():
+                # Stamped separately by stamp_contacts_into_system, which has
+                # access to the resolved mesh vertices (this function does not).
+                pass
 
             case _:
                 raise NotImplementedError(f"Unsupported node type {element}")
@@ -808,7 +985,8 @@ def assemble_system(prob: problem.Problem,
                     mesh_index_to_layer_index: list[int],
                     vindex: VertexIndexer,
                     filtered_networks: list[problem.Network],
-                    node_indexer: NodeIndexer
+                    node_indexer: NodeIndexer,
+                    contact_indexer: ContactIndexer
                     ) -> tuple[scipy.sparse.csc_matrix, np.ndarray]:
     """
     Allocate (L, r) and stamp the mesh Laplacians, all networks, and the
@@ -832,6 +1010,9 @@ def assemble_system(prob: problem.Problem,
     # to handling nodes that have Connections and nodes that do not.
     for network in filtered_networks:
         stamp_network_into_system(network, node_indexer, L_net, r)
+    # Distributed area contacts are stamped as lumped Robin conductances
+    # (diagonal) and never touch the extra-variable / ground rows.
+    stamp_contacts_into_system(filtered_networks, node_indexer, contact_indexer, L_net)
     # TODO: Implement a better way to pick the ground node.
     setup_ground_node(find_best_ground_node_index(prob, node_indexer), L_net, r)
     # Summing the two parts is safe even though the network stamping uses
@@ -896,6 +1077,13 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
             prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
         )
 
+    # Resolve distributed area contacts against the mesh.
+    log.info("Resolving area contacts")
+    with context.stage_timer("contact_indexing"):
+        contact_indexer = ContactIndexer.create(
+            prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
+        )
+
     # We are solving the equation L * v = r
     # where L is the "laplace operator",
     # v is the voltage vector and
@@ -903,7 +1091,7 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
     log.info("Assembling the global system")
     L, r = assemble_system(
         prob, meshes, mesh_index_to_layer_index, vindex,
-        filtered_networks, node_indexer,
+        filtered_networks, node_indexer, contact_indexer,
     )
 
     # Now we need to solve the system of equations

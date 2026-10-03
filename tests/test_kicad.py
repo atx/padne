@@ -11,7 +11,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
-from padne import kicad, problem
+from padne import kicad, problem, solver
 
 from conftest import for_all_kicad_projects
 
@@ -1340,3 +1340,67 @@ class TestClipLayerWithOutline:
             # Layer should have some non-empty geometry
             assert not layer.shape.is_empty, \
                 f"Layer {layer.name} should have non-empty geometry"
+
+
+class TestAreaContactWiring:
+    """The lumped-element wiring path for the distributed SMD area contact."""
+
+    def _make_spec(self, contact_conductance):
+        spec = kicad.ResistorSpec()
+        spec.endpoints["a"] = [kicad.Endpoint("R3", "1")]
+        spec.endpoints["b"] = [kicad.Endpoint("R3", "2")]
+        spec.values["r"] = 1.0
+        spec.contact_conductance_per_area = contact_conductance
+        return spec
+
+    def _construct(self, kicad_test_projects, contact_conductance):
+        project = kicad_test_projects["simple_geometry"]
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+        layer_dict, pad_index = Utils.setup_layer_dict_and_pad_index(board)
+        return self._make_spec(contact_conductance).construct(pad_index, layer_dict)
+
+    def test_smd_pads_become_area_contacts(self, kicad_test_projects):
+        network = self._construct(kicad_test_projects, contact_conductance=9e4)
+
+        contacts = [e for e in network.elements if isinstance(e, problem.AreaContact)]
+        assert len(contacts) == 2
+
+        # The lumped resistor must bind to the contact nodes...
+        resistor = next(e for e in network.elements if isinstance(e, problem.Resistor))
+        assert {c.node for c in contacts} == {resistor.a, resistor.b}
+
+        # ...while the marker Connections carry fresh, unused nodes so the pad
+        # is not point-coupled as well.
+        marker_nodes = {c.node_id for c in network.connections}
+        assert len(marker_nodes) == 2
+        assert not (marker_nodes & {resistor.a, resistor.b})
+
+    def test_point_coupling_when_disabled(self, kicad_test_projects):
+        network = self._construct(kicad_test_projects, contact_conductance=None)
+
+        assert not any(isinstance(e, problem.AreaContact) for e in network.elements)
+        resistor = next(e for e in network.elements if isinstance(e, problem.Resistor))
+        assert {c.node_id for c in network.connections} == {resistor.a, resistor.b}
+
+    def test_marker_keeps_seeding_and_connectivity(self, kicad_test_projects):
+        project = kicad_test_projects["simple_geometry"]
+        board = pcbnew.LoadBoard(str(project.pcb_path))
+        layer_dict, pad_index = Utils.setup_layer_dict_and_pad_index(board)
+
+        spec = kicad.CurrentSourceSpec()
+        spec.endpoints["f"] = [kicad.Endpoint("R3", "1")]
+        spec.endpoints["t"] = [kicad.Endpoint("R3", "2")]
+        spec.values["i"] = 1.0
+        spec.contact_conductance_per_area = 9e4
+        network = spec.construct(pad_index, layer_dict)
+        prob = problem.Problem(layers=list(layer_dict.values()), networks=[network])
+
+        # The pad centre must still be a mesh seed...
+        seeds = [point for layer in prob.layers
+                 for point in solver.collect_seed_points(prob, layer)]
+        assert any(abs(point.x - 129) < 1e-3 and abs(point.y - 101.375) < 1e-3
+                   for point in seeds), "R3.1 pad centre should be seeded"
+
+        # ...and the driven network must still mark its copper as connected.
+        _, _, connected = solver.compute_connectivity(prob)
+        assert connected
