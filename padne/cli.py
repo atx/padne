@@ -222,7 +222,7 @@ def do_gui(args: argparse.Namespace) -> int:
         prepared = padne.ui.prepare_ui_data(solution)
     log.info("Stage timings:\n%s", session.format_summary())
 
-    return padne.ui.main(solution, captured_warnings, prepared=prepared)
+    return padne.ui.main(prepared, captured_warnings)
 
 
 @handle_errors
@@ -248,7 +248,7 @@ def do_show(args: argparse.Namespace) -> int:
     with context.timing_session() as session:
         prepared = padne.ui.prepare_ui_data(solution)
     log.info("Stage timings:\n%s", session.format_summary())
-    return padne.ui.main(solution, prepared=prepared)
+    return padne.ui.main(prepared)
 
 
 @handle_errors

@@ -1176,7 +1176,7 @@ class MeshViewer(QOpenGLWidget):
             cls.PowerDensityRenderingMode(),
         ]
 
-    def __init__(self, parent=None, prepared=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.solution: None | solver.Solution = None
         # Layer name -> RenderedMesh
@@ -1184,11 +1184,8 @@ class MeshViewer(QOpenGLWidget):
         self.rendered_connection_points: dict[str, RenderedPoints] = {}
         self.connection_points_visible: bool = True
 
-        # Rendering modes and current mode tracking. When `prepared` is given,
-        # its modes already carry the GL-free prepared data (spatial indices +
-        # render arrays), so we reuse them instead of rebuilding.
-        self._prepared = prepared
-        self.modes = prepared.modes if prepared is not None else self.default_modes()
+        # Rendering modes and current mode tracking
+        self.modes = self.default_modes()
         self.current_mode_index = 0  # Start with voltage mode
 
         self.scale = 1.0
@@ -1331,19 +1328,13 @@ class MeshViewer(QOpenGLWidget):
         # Refresh the display
         self.update()
 
-    @Slot(solver.Solution)
-    def setSolution(self, solution: solver.Solution):
-        """Install a solution whose GL-free preparation is already done."""
-        # Reuse the modes prepared by `prepare_ui_data` when available;
-        # otherwise (direct `ui.main` callers, tests) prepare here.
-        prepared = self._prepared if self._prepared is not None \
-            else prepare_ui_data(solution)
-        self._prepared = None
+    def setSolution(self, prepared: "PreparedUI"):
+        """Install a solution prepared by `prepare_ui_data`."""
         self.modes = prepared.modes
-        self.solution = solution
+        self.solution = prepared.solution
 
         # Initialize the list of layers from the solution
-        self.visible_layers = [layer.name for layer in solution.problem.layers]
+        self.visible_layers = [layer.name for layer in self.solution.problem.layers]
         self.current_layer_index = 0
 
         # Emit signal with available layers
@@ -2154,6 +2145,7 @@ class ColorScaleWidget(QWidget):
 class PreparedUI:
     """GL-free UI preparation for a solution (see `prepare_ui_data`)."""
 
+    solution: solver.Solution
     modes: list
 
 
@@ -2171,18 +2163,16 @@ def prepare_ui_data(solution: solver.Solution) -> PreparedUI:
     for mode in modes:
         mode.set_solution(solution)
         mode.autoscale_values(solution)
-    return PreparedUI(modes=modes)
+    return PreparedUI(solution=solution, modes=modes)
 
 
 class MainWindow(QMainWindow):
 
-    projectLoaded = Signal(solver.Solution)
-
-    def __init__(self, solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None,
-                 prepared: Optional[PreparedUI] = None):
+    def __init__(self, prepared: PreparedUI,
+                 warnings_list: Optional[list[warnings.WarningMessage]] = None):
         super().__init__()
 
-        self.project_file_name = solution.problem.project_name or "unknown"
+        self.project_file_name = prepared.solution.problem.project_name or "unknown"
         self.warnings_list = warnings_list if warnings_list else []
         self.warnings_shown = False
 
@@ -2197,7 +2187,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # Create the mesh viewer
-        self.mesh_viewer = MeshViewer(self, prepared=prepared)
+        self.mesh_viewer = MeshViewer(self)
 
         # Create ToolManager
         self.tool_manager = ToolManager(self.mesh_viewer, self)
@@ -2220,7 +2210,7 @@ class MainWindow(QMainWindow):
         self._setupStatusBar()
         self._connectSignals()
 
-        self.projectLoaded.emit(solution)
+        self.mesh_viewer.setSolution(prepared)
 
     def _setupStatusBar(self) -> None:
         # Add status bar widgets with fixed widths
@@ -2264,7 +2254,6 @@ class MainWindow(QMainWindow):
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
         self.mesh_viewer.currentModeChanged.connect(self.app_toolbar.updateActiveModeInMenu)
-        self.projectLoaded.connect(self.mesh_viewer.setSolution)
 
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
@@ -2334,13 +2323,12 @@ def configure_opengl() -> None:
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main(solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None,
-         prepared: Optional[PreparedUI] = None) -> int:
+def main(prepared: PreparedUI,
+         warnings_list: Optional[list[warnings.WarningMessage]] = None) -> int:
     """Main entry point for the UI application.
 
-    `prepared` is the result of `prepare_ui_data(solution)`. Passing it lets a
-    caller (the CLI) run the expensive, GL-free preparation as a timed stage
-    before the window is created; when omitted it is computed here.
+    `prepared` is the result of `prepare_ui_data`, which the caller runs (and
+    times) before the window is created.
     """
     # Configure OpenGL
     configure_opengl()
@@ -2349,7 +2337,7 @@ def main(solution: solver.Solution, warnings_list: Optional[list[warnings.Warnin
         warnings_list = []
 
     app = QApplication(sys.argv)
-    window = MainWindow(solution, warnings_list, prepared=prepared)
+    window = MainWindow(prepared, warnings_list)
 
     window.show()
     return app.exec()
