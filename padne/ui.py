@@ -7,9 +7,8 @@ import sys
 import warnings
 import OpenGL.GL as gl
 import time
-import concurrent.futures
 
-from typing import Optional, ClassVar
+from typing import Optional
 from dataclasses import dataclass, field
 
 import abc
@@ -142,51 +141,6 @@ void main() {
     out_color = vec4(frag_color, 1.0);
 }
 """
-
-
-class DeferedDict[K, V]:
-    """
-    A dictionary-like object that can hold futures for values,
-    unwrapping them when accessed.
-    """
-
-    def __init__(self):
-        self._futures: dict[K, concurrent.futures.Future[V]] = {}
-        self._values: dict[K, V] = {}
-
-    def is_ready(self, key: K) -> bool:
-        if key in self._values:
-            return True
-
-        if key in self._futures:
-            return self._futures[key].done()
-
-        return False
-
-    def set_future(self, key: K, future: concurrent.futures.Future[V]):
-        # We do not support overwriting existing keys for now
-        if key in self._values or key in self._futures:
-            raise KeyError(f"Key {key} already exists in DeferedDict")
-        self._futures[key] = future
-
-    def __getitem__(self, key: K) -> V:
-        if key in self._values:
-            return self._values[key]
-
-        if key in self._futures:
-            value = self._futures[key].result()
-            self._values[key] = value
-            del self._futures[key]
-            return value
-
-        raise KeyError(key)
-
-    def __contains__(self, key: K) -> bool:
-        return key in self._values or key in self._futures
-
-    def clear(self):
-        self._futures.clear()
-        self._values.clear()
 
 
 @dataclass
@@ -942,13 +896,10 @@ class MeshViewer(QOpenGLWidget):
         rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
         disconnected_rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
 
-        _prepared_rendered_meshes: DeferedDict[str, list[RenderedMesh.PreparedData]] = \
-            field(default_factory=DeferedDict)
-        _prepared_disconnected_rendered_meshes: DeferedDict[str, list[RenderedMesh.PreparedData]] = \
-            field(default_factory=DeferedDict)
-
-        _executor: ClassVar[concurrent.futures.ThreadPoolExecutor] = \
-            concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        _prepared_rendered_meshes: dict[str, list[RenderedMesh.PreparedData]] = \
+            field(default_factory=dict)
+        _prepared_disconnected_rendered_meshes: dict[str, list[RenderedMesh.PreparedData]] = \
+            field(default_factory=dict)
 
         def _compute_min_max(self) -> tuple[float, float]:
             """Compute min and max values across all spatial indices."""
@@ -984,33 +935,16 @@ class MeshViewer(QOpenGLWidget):
             # We have to delay this until the OpenGL context is properly initialized.
             self.rendered_meshes.clear()
             self.disconnected_rendered_meshes.clear()
-            self._prepared_rendered_meshes.clear()
-            self._prepared_disconnected_rendered_meshes.clear()
 
-            # Next, we do the OpenGL-independent preparation in background
-            # threads as to not block the UI thread
-            for layer in self.solution.problem.layers:
-                self._prepared_rendered_meshes.set_future(
-                    layer.name,
-                    self._executor.submit(
-                        self._prepare_rendered_meshes_for_layer,
-                        layer.name
-                    )
-                )
-                self._prepared_disconnected_rendered_meshes.set_future(
-                    layer.name,
-                    self._executor.submit(
-                        self._prepare_disconnected_rendered_meshes_for_layer,
-                        layer.name
-                    )
-                )
-
-            # Resolve the preparation now. It runs before the window is shown
-            # (see `prepare_ui_data`), so there is no UI to keep responsive and
-            # the cost is attributed to the caller's timing stage.
-            for layer in self.solution.problem.layers:
-                self._prepared_rendered_meshes[layer.name]
-                self._prepared_disconnected_rendered_meshes[layer.name]
+            # The OpenGL-independent part can be done right away
+            self._prepared_rendered_meshes = {
+                layer.name: self._prepare_rendered_meshes_for_layer(layer.name)
+                for layer in self.solution.problem.layers
+            }
+            self._prepared_disconnected_rendered_meshes = {
+                layer.name: self._prepare_disconnected_rendered_meshes_for_layer(layer.name)
+                for layer in self.solution.problem.layers
+            }
 
             self._build_spatial_indices()
 
@@ -1030,15 +964,9 @@ class MeshViewer(QOpenGLWidget):
                 # This means that everything is ready for rendering
                 return self.rendered_meshes[layer_name]
 
-            if not self._prepared_rendered_meshes.is_ready(layer_name):
-                # This means that preparation is still ongoing.
-                # Theoretically we could block here, but I think it's better to
-                # not render anything as to not lag the UI.
-                return []
-
-            # Okay, now we have prepared data, but it has not yet been
-            # inserted into the OpenGL context. Which is something we have to
-            # do in our main thread, meaning here.
+            # The prepared data has not yet been inserted into the OpenGL
+            # context. Which is something we have to do in our main thread,
+            # meaning here.
 
             # Also note: This function is not only called from the main thread,
             # it is also called from paintGL. This means that it is also
@@ -1075,15 +1003,9 @@ class MeshViewer(QOpenGLWidget):
                 # This means that everything is ready for rendering
                 return self.disconnected_rendered_meshes[layer_name]
 
-            if not self._prepared_disconnected_rendered_meshes.is_ready(layer_name):
-                # This means that preparation is still ongoing.
-                # Theoretically we could block here, but I think it's better to
-                # not render anything as to not lag the UI.
-                return []
-
-            # Okay, now we have prepared data, but it has not yet been
-            # inserted into the OpenGL context. Which is something we have to
-            # do in our main thread, meaning here.
+            # The prepared data has not yet been inserted into the OpenGL
+            # context. Which is something we have to do in our main thread,
+            # meaning here.
 
             prepared_meshes = self._prepared_disconnected_rendered_meshes[layer_name]
             self.disconnected_rendered_meshes[layer_name] = [
