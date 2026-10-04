@@ -272,7 +272,7 @@ class SolverSuite:
     def setup_cache(self):
         """Cache loaded projects and pre-computed solutions for benchmarks."""
         # Expanded project list to include simple_geometry
-        project_names = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
+        project_names = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes', 'test_set_1']
 
         problems = _load_problems(project_names)
         return {
@@ -281,17 +281,23 @@ class SolverSuite:
             'solutions': {name: solver.solve(prob) for name, prob in problems.items()},
         }
 
-    def setup(self, cache, project_name):
+    def setup(self, cache, *_):
         """Fix numpy array views in cache after unpickling."""
         _fix_numpy_array_views(cache)
 
-    def time_solver_solve(self, cache, project_name):
+    def time_solver_solve(self, cache, project_name, backend):
         """Time the complete FEM solving pipeline."""
+        backend = solver.SolverBackend(backend)
+        if backend not in solver.solver_backends():
+            raise NotImplementedError(f"{backend.value} backend not available in this build")
         problem = cache['problems'][project_name]
-        solver.solve(problem)
+        solver.solve(problem, backend=backend)
 
-    time_solver_solve.params = ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes']
-    time_solver_solve.param_names = ['project']
+    time_solver_solve.params = (
+        ['simple_geometry', 'two_big_planes', 'via_tht_4layer', 'many_meshes', 'test_set_1'],
+        ['scipy', 'pardiso'],
+    )
+    time_solver_solve.param_names = ['project', 'backend']
 
     def peakmem_solver_solve(self, cache, project_name):
         """Track peak memory usage for complete solve pipeline."""

@@ -187,7 +187,8 @@ class TestPrepareUiData:
         solution = solver.Solution(
             problem=problem.Problem(layers=[layer], networks=[]),
             layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0))
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0,
+                                          relative_residual=0.0))
 
         prepared = prepare_ui_data(solution)
 

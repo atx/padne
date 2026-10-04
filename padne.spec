@@ -117,6 +117,8 @@ excludes = [
     'parso',
     'pygments',
     'pytest',
+    # The binary ships without MKL, so PARDISO could never load anyway
+    'padne._pardiso',
 ]
 
 binaries_exclude = [

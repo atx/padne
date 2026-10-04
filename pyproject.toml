@@ -1,6 +1,12 @@
 [build-system]
 # Minimum requirements for the build system to execute.
-requires = ["scikit-build-core>=0.10", "nanobind>=2", "setuptools>=80.0.0", "setuptools-scm>=8", "wheel"]
+requires = [
+    "scikit-build-core>=0.10", "nanobind>=2", "setuptools>=80.0.0", "setuptools-scm>=8", "wheel",
+    # PARDISO is always built against these wheels, never a system MKL. The
+    # range must match the pardiso extra, as both must ship the same libmkl_rt
+    # SONAME.
+    "mkl>=2025,<2027", "mkl-include>=2025,<2027",
+]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -55,6 +61,10 @@ test = [
 ]
 bench = [
     "asv>=0.6.0",
+]
+# Runtime MKL for the PARDISO backend, must match build-system.requires
+pardiso = [
+    "mkl>=2025,<2027",
 ]
 docs = [
     "sphinx>=7,<9",

@@ -22,6 +22,9 @@
     // Need to initialize git submodules before building since CGAL is a submodule
     "build_command": [
         "python -m pip install 'git+https://github.com/Argmaster/pygerber'",
+        // --ignore-installed: the env sees ~/.local, but _pardiso's $ORIGIN rpath
+        // needs libmkl_rt in the env's own lib/
+        "python -m pip install --ignore-installed 'mkl>=2025,<2027'",
         "python {conf_dir}/benchmarks/copy_test_data.py {conf_dir} {build_dir}",
         "python -m pip wheel --no-deps -w {build_cache_dir} {build_dir}"
     ],

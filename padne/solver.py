@@ -1,9 +1,11 @@
 
 
 import collections
+import enum
 import itertools
 import logging
 import numpy as np
+import os
 import scipy.sparse
 import scipy.spatial
 import shapely
@@ -18,8 +20,48 @@ from .context import stage_timer
 
 log = logging.getLogger(__name__)
 
+try:
+    from . import _pardiso
+    _pardiso_import_error: Optional[ImportError] = None
+except ImportError as e:
+    # Built without MKL, or the padne[pardiso] extra (runtime MKL) is missing
+    _pardiso = None
+    _pardiso_import_error = e
+    log.debug("PARDISO backend unavailable: %s", e)
+
 
 DTYPE = np.float64
+
+# Relative residual above which the solution is considered unreliable. The test
+# boards stay below 1e-10, singular systems land on the order of 0.1
+RESIDUAL_WARNING_THRESHOLD = 1e-6
+
+class SolverBackend(enum.Enum):
+    """Sparse direct solver used for the final linear system."""
+    SCIPY = "scipy"
+    PARDISO = "pardiso"
+
+
+def solver_backends() -> list[SolverBackend]:
+    """Backends usable in this build, the default first."""
+    backends = [SolverBackend.SCIPY]
+    # PARDISO is faster, but not trusted enough to be the default yet
+    if _pardiso is not None:
+        backends.append(SolverBackend.PARDISO)
+    return backends
+
+
+def resolve_backend(backend: Optional[SolverBackend]) -> SolverBackend:
+    """Validate an explicit backend choice, or pick the default for None."""
+    available = solver_backends()
+    if backend is None:
+        return available[0]
+    if backend not in available:
+        raise ValueError(
+            f"Solver backend {backend.value} is not available ({_pardiso_import_error}), "
+            "install it with `pip install padne[pardiso]`"
+        )
+    return backend
 
 
 class SolverWarning(Warning):
@@ -36,6 +78,7 @@ class SolverInfo:
     """Diagnostic information from the solver."""
     ground_node_current: float  # Should be ~0 for well-posed problems
     residual_norm: float        # ||L @ v - r||, should be ~0 for solved systems
+    relative_residual: float    # ||L @ v - r|| / ||r||, independent of the problem scale
 
 
 @dataclass
@@ -762,19 +805,55 @@ def allocate_system(vindex: VertexIndexer,
     return L, r
 
 
+def _pardiso_thread_count() -> int:
+    # Running PARDISO on every core makes its OpenMP barriers stall behind
+    # the OS (measured 4x slowdowns on ~half the runs), while the serial
+    # reordering phase means nothing is gained beyond ~8 threads anyway.
+    return max(1, min(parallel.config().jobs, (os.cpu_count() or 2) // 2))
+
+
+def _solve_pardiso(L: scipy.sparse.csc_matrix, r: np.ndarray) -> np.ndarray:
+    L_csr = L.tocsr()
+    L_csr.sort_indices()
+    v, perturbed_pivots = _pardiso.solve(
+        L_csr.indptr.astype(np.int32),
+        L_csr.indices.astype(np.int32),
+        L_csr.data,
+        r,
+        _pardiso_thread_count(),
+    )
+    if perturbed_pivots:
+        # Mirrors what scipy's spsolve emits for an exactly singular matrix
+        warnings.warn(
+            f"PARDISO perturbed {perturbed_pivots} pivots, the matrix may be singular or "
+            "ill-conditioned and the solution may be inaccurate or non-unique",
+            scipy.sparse.linalg.MatrixRankWarning
+        )
+    return v
+
+
 @stage_timer
 def solve_system(L: scipy.sparse.spmatrix,
-                 r: np.ndarray) -> tuple[np.ndarray, SolverInfo]:
+                 r: np.ndarray,
+                 backend: Optional[SolverBackend] = None) -> tuple[np.ndarray, SolverInfo]:
     """
     Solve L * v = r and return the solution vector together with diagnostics.
     """
     L_csc = L.tocsc()
-    v = scipy.sparse.linalg.spsolve(L_csc, r)
+    match resolve_backend(backend):
+        case SolverBackend.SCIPY:
+            v = scipy.sparse.linalg.spsolve(L_csc, r)
+        case SolverBackend.PARDISO:
+            v = _solve_pardiso(L_csc, r)
 
     residual_norm = np.linalg.norm(L_csc @ v - r)
+    r_norm = np.linalg.norm(r)
+    # A zero r has the zero solution, so the residual is exactly zero as well
+    relative_residual = residual_norm / r_norm if r_norm > 0 else 0.0
     solver_info = SolverInfo(
         ground_node_current=float(v[-1]),  # Force a float for deterministic pickling reasons
         residual_norm=float(residual_norm),
+        relative_residual=float(relative_residual),
     )
     return v, solver_info
 
@@ -822,13 +901,16 @@ def assemble_system(prob: problem.Problem,
 
 
 @stage_timer
-def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = None) -> Solution:
+def solve(prob: problem.Problem,
+          mesher_config: Optional[mesh.Mesher.Config] = None,
+          backend: Optional[SolverBackend] = None) -> Solution:
     """
     Solve the given PCB problem to find voltage and current distribution.
 
     Args:
         problem: The Problem object containing layers and lumped elements
         mesher_config: Configuration for mesh generation, uses defaults if None
+        backend: Sparse direct solver to use, None picks the default (SciPy)
 
     Returns:
         A Solution object with the computed results
@@ -885,8 +967,8 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
 
     # Now we need to solve the system of equations
     # We are going to use a direct solver for now
-    log.info("Solving the system of equations")
-    v, solver_info = solve_system(L, r)
+    log.info(f"Solving the system of equations using {resolve_backend(backend).value}")
+    v, solver_info = solve_system(L, r, backend=backend)
 
     if not np.isclose(solver_info.ground_node_current, 0):
         # This is a warning, but we still continue to produce the solution object
@@ -895,6 +977,14 @@ def solve(prob: problem.Problem, mesher_config: Optional[mesh.Mesher.Config] = N
             f"Ground node current is not zero ({solver_info.ground_node_current} A), this may indicate an issue with the problem being solved. "
             "Check for unterminated current loops or floating connected components. "
             "This may be harmless if the current is small, but it may indicate an ill-conditioned system.",
+            SolverWarning
+        )
+
+    if solver_info.relative_residual > RESIDUAL_WARNING_THRESHOLD:
+        warnings.warn(
+            f"Residual of the solved system is large (relative {solver_info.relative_residual:.3g}), "
+            "the solution is likely inaccurate. This usually indicates a singular "
+            "or ill-conditioned system.",
             SolverWarning
         )
 

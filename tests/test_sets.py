@@ -316,14 +316,15 @@ def _load_board(ts: TestSet) -> pcbnew.BOARD:
     return pcbnew.LoadBoard(str(KICAD_DIR / ts.project / f"{ts.project}.kicad_pcb"))
 
 
-def solve_test_set(ts: TestSet, mesher_config=None
+def solve_test_set(ts: TestSet, mesher_config=None,
+                   backend: Optional[solver.SolverBackend] = None
                    ) -> tuple[solver.Solution, pcbnew.BOARD]:
     """Load the project with fully calibrated copper (ladder and via plating
     fits), solve it, and return solution plus board."""
     cal = extract_calibration(ts)
     via_cal = extract_via_calibration(ts, mesher_config=mesher_config)
     prob = _load_with(ts, _copper_spec(ts, cal, via_cal.plating_mm))
-    sol = solver.solve(prob, mesher_config=mesher_config)
+    sol = solver.solve(prob, mesher_config=mesher_config, backend=backend)
     return sol, _load_board(ts)
 
 
@@ -394,8 +395,8 @@ def extract_via_calibration(ts: TestSet, mesher_config=None) -> ViaCalibrationRe
 
 
 @functools.lru_cache(maxsize=None)
-def _solved(ts_name: str) -> tuple[solver.Solution, pcbnew.BOARD]:
-    return solve_test_set(TEST_SETS[ts_name])
+def _solved(ts_name: str, backend: solver.SolverBackend) -> tuple[solver.Solution, pcbnew.BOARD]:
+    return solve_test_set(TEST_SETS[ts_name], backend=backend)
 
 
 def _measurement_cases() -> list[tuple[str, Measurement]]:
@@ -411,8 +412,8 @@ def _fmt_tol(tol: Optional[float]) -> str:
     _measurement_cases(),
     ids=[f"{n}:{m.p_ref}-{m.n_ref}" for n, m in _measurement_cases()],
 )
-def test_measurement(ts_name, measurement):
-    sol, board = _solved(ts_name)
+def test_measurement(ts_name, measurement, solver_backend):
+    sol, board = _solved(ts_name, solver_backend)
     row = ResultRow(measurement, voltage_diff(sol, board, measurement))
     assert row.ok, (
         f"{ts_name} {measurement.p_ref}-{measurement.n_ref}: "

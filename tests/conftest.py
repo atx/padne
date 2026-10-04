@@ -108,3 +108,18 @@ def kicad_test_projects():
         dict: A dictionary where keys are project names and values are KiCadProject objects.
     """
     return _kicad_test_projects()
+
+
+def pytest_generate_tests(metafunc):
+    """Run solver_backend tests on every backend, skipping the ones not built."""
+    if "solver_backend" not in metafunc.fixturenames:
+        return
+    # Imported lazily for typeguard, see _kicad_test_projects
+    from padne import solver
+
+    metafunc.parametrize("solver_backend", [
+        pytest.param(backend, id=backend.value, marks=pytest.mark.skipif(
+            backend not in solver.solver_backends(),
+            reason=f"{backend.value} backend not available in this build"))
+        for backend in solver.SolverBackend
+    ])

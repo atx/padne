@@ -5,6 +5,10 @@ inputs:
     description: 'KiCad major.minor version to install (e.g. 9.0, 10.0). Ubuntu only, Debian uses the packaged KiCad.'
     required: false
     default: '9.0'
+  mkl:
+    description: 'Install the runtime MKL (pardiso extra), _pardiso is built either way'
+    required: false
+    default: 'true'
 runs:
   using: 'composite'
   steps:
@@ -28,4 +32,28 @@ runs:
     - name: Build C++ part of the repository, install the package
       shell: bash
       run: |
-        pip3 install --break-system-packages --user -e .[test] -v
+        if [ "${{ inputs.mkl }}" = "true" ]; then
+          pip3 install --break-system-packages --user -e .[test,pardiso] -v
+        else
+          pip3 install --break-system-packages --user -e .[test] -v
+        fi
+
+    - name: Check that _pardiso links the pip MKL relative to itself
+      shell: bash
+      run: |
+        # find_spec locates the (editable-installed) .so without loading MKL
+        so=$(python3 -c "import importlib.util; print(importlib.util.find_spec('padne._pardiso').origin)")
+        readelf -d $so | tee /dev/stderr | grep -q 'NEEDED.*\[libmkl_rt\.so\.[0-9]*\]'
+        readelf -d $so | grep -q 'R.*PATH.*\[\$ORIGIN/\.\./\.\./\.\.\]'
+
+    - name: Check that the PARDISO backend is usable
+      if: inputs.mkl == 'true'
+      shell: bash
+      run: |
+        python3 -c "import padne._pardiso"
+
+    - name: Check that padne falls back to SciPy without the runtime MKL
+      if: inputs.mkl != 'true'
+      shell: bash
+      run: |
+        python3 -c "from padne import solver; assert solver.solver_backends() == [solver.SolverBackend.SCIPY]"

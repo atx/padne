@@ -57,3 +57,42 @@ nanobind_add_stub(
 # it does not look like it is a canonical solution...
 install(TARGETS _cgal LIBRARY DESTINATION padne)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/_cgal.pyi DESTINATION padne)
+
+# Optional Intel oneMKL PARDISO wrapper, built only against the pip `mkl` and
+# `mkl-include` wheels from build-system.requires. A system MKL is never used,
+# Debian's lacks libiomp5 and crashes at runtime. Not cached on purpose, as
+# pip's isolated build env lives in a new temporary directory on every build.
+execute_process(
+    COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/find_mkl.py"
+    RESULT_VARIABLE _mkl_result
+    OUTPUT_VARIABLE _mkl_paths
+    ERROR_VARIABLE _mkl_error
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_STRIP_TRAILING_WHITESPACE)
+
+if(_mkl_result EQUAL 0)
+    list(GET _mkl_paths 0 _mkl_rt)
+    list(GET _mkl_paths 1 _mkl_include)
+    message(STATUS "MKL found, building _pardiso: ${_mkl_rt}")
+    nanobind_add_module(_pardiso _pardiso.cpp)
+    target_include_directories(_pardiso PRIVATE "${_mkl_include}")
+    # Linking the versioned file records its SONAME (libmkl_rt.so.N), which
+    # an unversioned system libmkl_rt.so can never satisfy.
+    target_link_libraries(_pardiso PRIVATE "${_mkl_rt}")
+    target_compile_features(_pardiso PRIVATE cxx_std_17)
+    # The runtime mkl wheel (padne[pardiso]) puts libmkl_rt into <prefix>/lib,
+    # three levels above <prefix>/lib/pythonX.Y/site-packages/padne. Without
+    # it the import fails and padne falls back to SciPy.
+    set_target_properties(_pardiso PROPERTIES INSTALL_RPATH "$ORIGIN/../../..")
+    nanobind_add_stub(
+        _pardiso_stub
+        MODULE _pardiso
+        OUTPUT _pardiso.pyi
+        PYTHON_PATH $<TARGET_FILE_DIR:_pardiso>
+        DEPENDS _pardiso
+    )
+    install(TARGETS _pardiso LIBRARY DESTINATION padne)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/_pardiso.pyi DESTINATION padne)
+else()
+    message(STATUS "MKL wheels not found (${_mkl_error}), skipping _pardiso")
+endif()
