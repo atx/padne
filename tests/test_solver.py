@@ -2538,7 +2538,9 @@ class TestPardisoBackend:
 
     def test_explicit_pardiso_without_module_raises(self, monkeypatch):
         monkeypatch.setattr(solver, "_pardiso", None)
+        monkeypatch.setattr(solver, "_pardiso_import_error",
+                            ImportError("libmkl_rt.so.3: cannot open shared object file"))
         assert solver.solver_backends() == [solver.SolverBackend.SCIPY]
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"libmkl_rt\.so\.3.*padne\[pardiso\]"):
             solver.resolve_backend(solver.SolverBackend.PARDISO)
         assert solver.resolve_backend(None) == solver.SolverBackend.SCIPY

@@ -18,12 +18,16 @@ from typing import Optional
 from . import problem, mesh, context, parallel
 from .context import stage_timer
 
+log = logging.getLogger(__name__)
+
 try:
     from . import _pardiso
-except ImportError:
+    _pardiso_import_error: Optional[ImportError] = None
+except ImportError as e:
+    # Built without MKL, or the padne[pardiso] extra (runtime MKL) is missing
     _pardiso = None
-
-log = logging.getLogger(__name__)
+    _pardiso_import_error = e
+    log.debug("PARDISO backend unavailable: %s", e)
 
 
 DTYPE = np.float64
@@ -51,7 +55,10 @@ def resolve_backend(backend: Optional[SolverBackend]) -> SolverBackend:
     if backend is None:
         return available[0]
     if backend not in available:
-        raise ValueError(f"Solver backend {backend.value} is not available in this build")
+        raise ValueError(
+            f"Solver backend {backend.value} is not available ({_pardiso_import_error}), "
+            "install it with `pip install padne[pardiso]`"
+        )
     return backend
 
 
