@@ -7,9 +7,8 @@ import sys
 import warnings
 import OpenGL.GL as gl
 import time
-import concurrent.futures
 
-from typing import Optional, ClassVar
+from typing import Optional
 from dataclasses import dataclass, field
 
 import abc
@@ -28,6 +27,7 @@ import shapely.geometry
 from scipy.spatial import cKDTree
 
 from . import mesh, solver, units, colormaps
+from .context import stage_timer
 
 # In this file, there are some cursed naming conventions due to the fact
 # that we are mixing Python and Qt together.
@@ -141,51 +141,6 @@ void main() {
     out_color = vec4(frag_color, 1.0);
 }
 """
-
-
-class DeferedDict[K, V]:
-    """
-    A dictionary-like object that can hold futures for values,
-    unwrapping them when accessed.
-    """
-
-    def __init__(self):
-        self._futures: dict[K, concurrent.futures.Future[V]] = {}
-        self._values: dict[K, V] = {}
-
-    def is_ready(self, key: K) -> bool:
-        if key in self._values:
-            return True
-
-        if key in self._futures:
-            return self._futures[key].done()
-
-        return False
-
-    def set_future(self, key: K, future: concurrent.futures.Future[V]):
-        # We do not support overwriting existing keys for now
-        if key in self._values or key in self._futures:
-            raise KeyError(f"Key {key} already exists in DeferedDict")
-        self._futures[key] = future
-
-    def __getitem__(self, key: K) -> V:
-        if key in self._values:
-            return self._values[key]
-
-        if key in self._futures:
-            value = self._futures[key].result()
-            self._values[key] = value
-            del self._futures[key]
-            return value
-
-        raise KeyError(key)
-
-    def __contains__(self, key: K) -> bool:
-        return key in self._values or key in self._futures
-
-    def clear(self):
-        self._futures.clear()
-        self._values.clear()
 
 
 @dataclass
@@ -941,13 +896,10 @@ class MeshViewer(QOpenGLWidget):
         rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
         disconnected_rendered_meshes: dict[str, list[RenderedMesh]] = field(default_factory=dict)
 
-        _prepared_rendered_meshes: DeferedDict[str, list[RenderedMesh.PreparedData]] = \
-            field(default_factory=DeferedDict)
-        _prepared_disconnected_rendered_meshes: DeferedDict[str, list[RenderedMesh.PreparedData]] = \
-            field(default_factory=DeferedDict)
-
-        _executor: ClassVar[concurrent.futures.ThreadPoolExecutor] = \
-            concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        _prepared_rendered_meshes: dict[str, list[RenderedMesh.PreparedData]] = \
+            field(default_factory=dict)
+        _prepared_disconnected_rendered_meshes: dict[str, list[RenderedMesh.PreparedData]] = \
+            field(default_factory=dict)
 
         def _compute_min_max(self) -> tuple[float, float]:
             """Compute min and max values across all spatial indices."""
@@ -983,29 +935,17 @@ class MeshViewer(QOpenGLWidget):
             # We have to delay this until the OpenGL context is properly initialized.
             self.rendered_meshes.clear()
             self.disconnected_rendered_meshes.clear()
-            self._prepared_rendered_meshes.clear()
-            self._prepared_disconnected_rendered_meshes.clear()
 
-            # Next, we do the OpenGL-independent preparation in background
-            # threads as to not block the UI thread
-            for layer in self.solution.problem.layers:
-                self._prepared_rendered_meshes.set_future(
-                    layer.name,
-                    self._executor.submit(
-                        self._prepare_rendered_meshes_for_layer,
-                        layer.name
-                    )
-                )
-                self._prepared_disconnected_rendered_meshes.set_future(
-                    layer.name,
-                    self._executor.submit(
-                        self._prepare_disconnected_rendered_meshes_for_layer,
-                        layer.name
-                    )
-                )
+            # The OpenGL-independent part can be done right away
+            self._prepared_rendered_meshes = {
+                layer.name: self._prepare_rendered_meshes_for_layer(layer.name)
+                for layer in self.solution.problem.layers
+            }
+            self._prepared_disconnected_rendered_meshes = {
+                layer.name: self._prepare_disconnected_rendered_meshes_for_layer(layer.name)
+                for layer in self.solution.problem.layers
+            }
 
-            # Do this _after_ starting the background tasks
-            # TODO: Eventually, we might want to do this in the background as well
             self._build_spatial_indices()
 
         def _prepare_rendered_meshes_for_layer(self, layer_name) -> list[RenderedMesh.PreparedData]:
@@ -1024,15 +964,9 @@ class MeshViewer(QOpenGLWidget):
                 # This means that everything is ready for rendering
                 return self.rendered_meshes[layer_name]
 
-            if not self._prepared_rendered_meshes.is_ready(layer_name):
-                # This means that preparation is still ongoing.
-                # Theoretically we could block here, but I think it's better to
-                # not render anything as to not lag the UI.
-                return []
-
-            # Okay, now we have prepared data, but it has not yet been
-            # inserted into the OpenGL context. Which is something we have to
-            # do in our main thread, meaning here.
+            # The prepared data has not yet been inserted into the OpenGL
+            # context. Which is something we have to do in our main thread,
+            # meaning here.
 
             # Also note: This function is not only called from the main thread,
             # it is also called from paintGL. This means that it is also
@@ -1069,15 +1003,9 @@ class MeshViewer(QOpenGLWidget):
                 # This means that everything is ready for rendering
                 return self.disconnected_rendered_meshes[layer_name]
 
-            if not self._prepared_disconnected_rendered_meshes.is_ready(layer_name):
-                # This means that preparation is still ongoing.
-                # Theoretically we could block here, but I think it's better to
-                # not render anything as to not lag the UI.
-                return []
-
-            # Okay, now we have prepared data, but it has not yet been
-            # inserted into the OpenGL context. Which is something we have to
-            # do in our main thread, meaning here.
+            # The prepared data has not yet been inserted into the OpenGL
+            # context. Which is something we have to do in our main thread,
+            # meaning here.
 
             prepared_meshes = self._prepared_disconnected_rendered_meshes[layer_name]
             self.disconnected_rendered_meshes[layer_name] = [
@@ -1162,6 +1090,14 @@ class MeshViewer(QOpenGLWidget):
     # Signal for visibility changes
     visibilityChanged = Signal()
 
+    @classmethod
+    def default_modes(cls) -> list["MeshViewer.BaseRenderingMode"]:
+        """The rendering modes in menu order, constructible without a widget."""
+        return [
+            cls.VoltageRenderingMode(),
+            cls.PowerDensityRenderingMode(),
+        ]
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.solution: None | solver.Solution = None
@@ -1171,10 +1107,7 @@ class MeshViewer(QOpenGLWidget):
         self.connection_points_visible: bool = True
 
         # Rendering modes and current mode tracking
-        self.modes = [
-            self.VoltageRenderingMode(),
-            self.PowerDensityRenderingMode()
-        ]
+        self.modes = self.default_modes()
         self.current_mode_index = 0  # Start with voltage mode
 
         self.scale = 1.0
@@ -1317,13 +1250,13 @@ class MeshViewer(QOpenGLWidget):
         # Refresh the display
         self.update()
 
-    @Slot(solver.Solution)
-    def setSolution(self, solution: solver.Solution):
-        """Set the solution for the mesh viewer."""
-        self.solution = solution
+    def setSolution(self, prepared: "PreparedUI"):
+        """Install a solution prepared by `prepare_ui_data`."""
+        self.modes = prepared.modes
+        self.solution = prepared.solution
 
         # Initialize the list of layers from the solution
-        self.visible_layers = [layer.name for layer in solution.problem.layers]
+        self.visible_layers = [layer.name for layer in self.solution.problem.layers]
         self.current_layer_index = 0
 
         # Emit signal with available layers
@@ -1336,11 +1269,6 @@ class MeshViewer(QOpenGLWidget):
 
         # Initialize all modes and emit mode signals
         current_mode = self.current_rendering_mode
-
-        # Initialize all modes with solution data (spatial indices + rendered meshes)
-        for mode in self.modes:
-            mode.set_solution(solution)
-            mode.autoscale_values(solution)
 
         # Emit mode-related signals
         self.currentModeChanged.emit(current_mode.name)
@@ -2135,14 +2063,38 @@ class ColorScaleWidget(QWidget):
             )
 
 
+@dataclass
+class PreparedUI:
+    """GL-free UI preparation for a solution (see `prepare_ui_data`)."""
+
+    solution: solver.Solution
+    modes: list
+
+
+@stage_timer
+def prepare_ui_data(solution: solver.Solution) -> PreparedUI:
+    """
+    Build the GL-free UI data for `solution`: per-mode spatial indices and the
+    prepared render arrays.
+
+    Pure Python/numpy -- it never touches Qt or the OpenGL context, so it can
+    run before the window exists. The GL side (VAO upload, shader compilation)
+    still happens later, on the render thread.
+    """
+    modes = MeshViewer.default_modes()
+    for mode in modes:
+        mode.set_solution(solution)
+        mode.autoscale_values(solution)
+    return PreparedUI(solution=solution, modes=modes)
+
+
 class MainWindow(QMainWindow):
 
-    projectLoaded = Signal(solver.Solution)
-
-    def __init__(self, solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None):
+    def __init__(self, prepared: PreparedUI,
+                 warnings_list: Optional[list[warnings.WarningMessage]] = None):
         super().__init__()
 
-        self.project_file_name = solution.problem.project_name or "unknown"
+        self.project_file_name = prepared.solution.problem.project_name or "unknown"
         self.warnings_list = warnings_list if warnings_list else []
         self.warnings_shown = False
 
@@ -2180,7 +2132,7 @@ class MainWindow(QMainWindow):
         self._setupStatusBar()
         self._connectSignals()
 
-        self.projectLoaded.emit(solution)
+        self.mesh_viewer.setSolution(prepared)
 
     def _setupStatusBar(self) -> None:
         # Add status bar widgets with fixed widths
@@ -2224,7 +2176,6 @@ class MainWindow(QMainWindow):
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
         self.mesh_viewer.currentModeChanged.connect(self.app_toolbar.updateActiveModeInMenu)
-        self.projectLoaded.connect(self.mesh_viewer.setSolution)
 
         # Connect the ToolManager
         self.mesh_viewer.meshClicked.connect(self.tool_manager.handle_mesh_click)
@@ -2294,8 +2245,13 @@ def configure_opengl() -> None:
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main(solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None) -> int:
-    """Main entry point for the UI application."""
+def main(prepared: PreparedUI,
+         warnings_list: Optional[list[warnings.WarningMessage]] = None) -> int:
+    """Main entry point for the UI application.
+
+    `prepared` is the result of `prepare_ui_data`, which the caller runs (and
+    times) before the window is created.
+    """
     # Configure OpenGL
     configure_opengl()
 
@@ -2303,7 +2259,7 @@ def main(solution: solver.Solution, warnings_list: Optional[list[warnings.Warnin
         warnings_list = []
 
     app = QApplication(sys.argv)
-    window = MainWindow(solution, warnings_list)
+    window = MainWindow(prepared, warnings_list)
 
     window.show()
     return app.exec()

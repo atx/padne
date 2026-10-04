@@ -216,9 +216,13 @@ def do_gui(args: argparse.Namespace) -> int:
             for msg in warns
             if issubclass(msg.category, padne.solver.SolverWarning)
         ]
+
+        # GL-free UI preparation, timed alongside the solve so the window can
+        # be created (and shown) quickly afterwards.
+        prepared = padne.ui.prepare_ui_data(solution)
     log.info("Stage timings:\n%s", session.format_summary())
 
-    return padne.ui.main(solution, captured_warnings)
+    return padne.ui.main(prepared, captured_warnings)
 
 
 @handle_errors
@@ -241,7 +245,10 @@ def do_show(args: argparse.Namespace) -> int:
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
         solution = pickle.load(f)
-    return padne.ui.main(solution)
+    with context.timing_session() as session:
+        prepared = padne.ui.prepare_ui_data(solution)
+    log.info("Stage timings:\n%s", session.format_summary())
+    return padne.ui.main(prepared)
 
 
 @handle_errors
