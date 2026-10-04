@@ -32,8 +32,9 @@ except ImportError as e:
 
 DTYPE = np.float64
 
-# Absolute ||L @ v - r|| above which the solution is considered unreliable
-RESIDUAL_WARNING_THRESHOLD = 1e-9
+# Relative residual above which the solution is considered unreliable. The test
+# boards stay below 1e-10, singular systems land on the order of 0.1
+RESIDUAL_WARNING_THRESHOLD = 1e-6
 
 class SolverBackend(enum.Enum):
     """Sparse direct solver used for the final linear system."""
@@ -76,6 +77,7 @@ class SolverInfo:
     """Diagnostic information from the solver."""
     ground_node_current: float  # Should be ~0 for well-posed problems
     residual_norm: float        # ||L @ v - r||, should be ~0 for solved systems
+    relative_residual: float    # ||L @ v - r|| / ||r||, independent of the problem scale
 
 
 @dataclass
@@ -844,9 +846,13 @@ def solve_system(L: scipy.sparse.spmatrix,
             v = _solve_pardiso(L_csc, r)
 
     residual_norm = np.linalg.norm(L_csc @ v - r)
+    r_norm = np.linalg.norm(r)
+    # A zero r has the zero solution, so the residual is exactly zero as well
+    relative_residual = residual_norm / r_norm if r_norm > 0 else 0.0
     solver_info = SolverInfo(
         ground_node_current=float(v[-1]),  # Force a float for deterministic pickling reasons
         residual_norm=float(residual_norm),
+        relative_residual=float(relative_residual),
     )
     return v, solver_info
 
@@ -973,9 +979,9 @@ def solve(prob: problem.Problem,
             SolverWarning
         )
 
-    if solver_info.residual_norm > RESIDUAL_WARNING_THRESHOLD:
+    if solver_info.relative_residual > RESIDUAL_WARNING_THRESHOLD:
         warnings.warn(
-            f"Residual of the solved system is large ({solver_info.residual_norm}), "
+            f"Residual of the solved system is large (relative {solver_info.relative_residual:.3g}), "
             "the solution is likely inaccurate. This usually indicates a singular "
             "or ill-conditioned system.",
             SolverWarning

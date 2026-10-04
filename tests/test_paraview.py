@@ -399,7 +399,7 @@ class TestSolutionExport:
         solution = solver.Solution(
             problem=mock_problem,
             layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0)
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -461,7 +461,7 @@ class TestSolutionExport:
         solution = solver.Solution(
             problem=mock_problem,
             layer_solutions=layer_solutions,
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0)
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -511,7 +511,7 @@ class TestXMLValidation:
         solution = solver.Solution(
             problem=mock_problem,
             layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0)
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
