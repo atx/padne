@@ -1680,6 +1680,123 @@ class TestMesher:
 
         assert seed_found, "Seed point was not included in the mesh"
 
+    def test_refinement_regions_refine_locally(self):
+        """A refinement region forces smaller elements only inside it."""
+        square = shapely.geometry.box(0, 0, 10, 10)
+        region = shapely.geometry.box(4, 4, 6, 6)
+
+        # Uniform refinement over the whole region (no grading).
+        mesher = Mesher(Mesher.Config(maximum_size=0.6, pad_refine_transition=0.0))
+        base = mesher.poly_to_mesh(square)
+        refined = mesher.poly_to_mesh(square, [], [(region, 0.15)])
+
+        def max_edge_inside(msh, predicate):
+            longest = 0.0
+            for face in msh.faces:
+                centroid = face.centroid
+                if not predicate(centroid.x, centroid.y):
+                    continue
+                for edge in face.edges:
+                    longest = max(longest, edge.origin.p.distance(edge.next.origin.p))
+            return longest
+
+        inside = lambda x, y: 4.0 <= x <= 6.0 and 4.0 <= y <= 6.0
+        assert max_edge_inside(refined, inside) < 0.25
+        assert max_edge_inside(base, inside) > max_edge_inside(refined, inside)
+        assert len(refined.vertices) > len(base.vertices)
+
+    def test_refinement_regions_grade_toward_interior(self):
+        """Grading: fine across the pad outline, coarse in the interior."""
+        square = shapely.geometry.box(0, 0, 10, 10)
+        region = shapely.geometry.box(4, 4, 6, 6)
+        target = 0.15
+
+        def unique_edges(msh):
+            seen = set()
+            for face in msh.faces:
+                for edge in face.edges:
+                    key = tuple(sorted((edge.origin.i, edge.twin.origin.i)))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    a = edge.origin.p
+                    b = edge.twin.origin.p
+                    yield shapely.geometry.LineString([(a.x, a.y), (b.x, b.y)])
+
+        graded = Mesher(Mesher.Config(maximum_size=0.6, pad_refine_transition=0.5)) \
+            .poly_to_mesh(square, [], [(region, target)])
+        uniform = Mesher(Mesher.Config(maximum_size=0.6, pad_refine_transition=0.0)) \
+            .poly_to_mesh(square, [], [(region, target)])
+
+        # C-add guard (mechanism-independent): no edge crossing the pad outline
+        # may be much longer than the target. The round-1 bug produced 0.46 mm
+        # edges over a 0.15 mm target. Selection is by geometric crossing,
+        # deliberately NOT by centroid.
+        crossing = [edge.length for edge in unique_edges(graded)
+                    if edge.crosses(region.boundary)]
+        assert crossing, "expected edges crossing the pad outline"
+        assert max(crossing) <= target * 1.5, max(crossing)
+
+        def interior_max(msh):
+            longest = 0.0
+            for face in msh.faces:
+                centroid = face.centroid
+                if not (4.7 <= centroid.x <= 5.3 and 4.7 <= centroid.y <= 5.3):
+                    continue
+                for edge in face.edges:
+                    longest = max(longest, edge.origin.p.distance(edge.next.origin.p))
+            return longest
+
+        assert interior_max(graded) > interior_max(uniform)
+        # Grading leaves the interior coarse, so it needs fewer elements.
+        assert len(graded.vertices) < len(uniform.vertices)
+
+    def test_tiny_pad_in_coarse_field_is_refined(self):
+        """A region smaller than one coarse face is still refined via its seed."""
+        square = shapely.geometry.box(0, 0, 10, 10)
+        pad = shapely.geometry.box(4.9, 4.9, 5.1, 5.1)
+        target = 0.05
+
+        def max_edge_touching_pad(msh):
+            longest = 0.0
+            found = False
+            for face in msh.faces:
+                touches = any(
+                    pad.contains(shapely.geometry.Point(e.origin.p.x, e.origin.p.y))
+                    for e in face.edges
+                )
+                if not touches:
+                    continue
+                found = True
+                for edge in face.edges:
+                    longest = max(longest, edge.origin.p.distance(edge.twin.origin.p))
+            return found, longest
+
+        mesher = Mesher(Mesher.Config(maximum_size=2.0, pad_refine_transition=0.0))
+        coarse = mesher.poly_to_mesh(square, [Point(5.0, 5.0)])
+        refined = mesher.poly_to_mesh(square, [Point(5.0, 5.0)], [(pad, target)])
+
+        found, touching_edge = max_edge_touching_pad(refined)
+        assert found, "the pad seed vertex should exist"
+        assert touching_edge <= target * 2.0, touching_edge
+        assert touching_edge < max_edge_touching_pad(coarse)[1]
+
+    def test_poly_to_mesh_region_contract(self):
+        """Explicit regions are always applied; non-positive sizes are dropped."""
+        square = shapely.geometry.box(0, 0, 10, 10)
+        region = shapely.geometry.box(4, 4, 6, 6)
+
+        base = Mesher(Mesher.Config(maximum_size=0.6)).poly_to_mesh(square)
+        # pad_refine_size is 0 here; the explicit region must still be honoured.
+        applied = Mesher(Mesher.Config(maximum_size=0.6, pad_refine_size=0.0,
+                                       pad_refine_transition=0.0)) \
+            .poly_to_mesh(square, [], [(region, 0.15)])
+        dropped = Mesher(Mesher.Config(maximum_size=0.6)) \
+            .poly_to_mesh(square, [], [(region, 0.0)])
+
+        assert len(applied.vertices) > len(base.vertices)
+        assert len(dropped.vertices) == len(base.vertices)
+
     def test_seed_points_on_boundary(self):
         """Test behavior with seed points on the polygon boundary."""
         # Create a square

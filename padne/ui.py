@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import math
 import numpy as np
 import sys
 import warnings
@@ -9,7 +10,7 @@ import OpenGL.GL as gl
 import time
 import concurrent.futures
 
-from typing import Optional, ClassVar
+from typing import Optional, ClassVar, Callable
 from dataclasses import dataclass, field
 
 import abc
@@ -20,7 +21,7 @@ from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QHBoxLayout,
-    QToolBar, QToolButton, QMenu, QMessageBox, QLineEdit
+    QToolBar, QToolButton, QMenu, QMessageBox, QLineEdit, QSlider, QCheckBox
 )
 from PySide6.QtCore import QTimer
 
@@ -28,6 +29,7 @@ import shapely.geometry
 from scipy.spatial import cKDTree
 
 from . import mesh, solver, units, colormaps
+from .context import stage_timer
 
 # In this file, there are some cursed naming conventions due to the fact
 # that we are mixing Python and Qt together.
@@ -199,8 +201,14 @@ class BaseSpatialIndex:
         raise NotImplementedError("This method should be implemented in subclasses")
 
     @classmethod
-    def from_layer_data(cls, layer: solver.problem.Layer, layer_solution: solver.LayerSolution) -> "BaseSpatialIndex":
+    def from_layer_data(cls, layer: solver.problem.Layer,
+                        layer_solution: solver.LayerSolution,
+                        value_transform: Optional[Callable[[float], float]] = None
+                        ) -> "BaseSpatialIndex":
         vertices, values = cls._extract_points_and_values(layer_solution)
+
+        if value_transform is not None:
+            values = [value_transform(value) for value in values]
 
         # cKDTree is not happy with empty arrays, so we just return an empty index
         if not vertices:
@@ -926,6 +934,99 @@ class RenderedPoints:
             gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
 
 
+def collect_contact_coverage(problem: solver.problem.Problem,
+                             layer_solutions: list[solver.LayerSolution]
+                             ) -> dict[str, list[tuple[tuple[float, float],
+                                                       tuple[float, float, float]]]]:
+    """
+    Compute per-layer point coverage for SMT contacts.
+
+    Prefers the actual `AreaContact` elements (coloured by their owning network:
+    red if the network has a source, gray otherwise). Falls back to the
+    `refinement_regions` preview when no contacts exist yet. Mirrors how THT pads
+    are marked by their rim connection points.
+    """
+    AreaContact = solver.problem.AreaContact
+
+    # (layer_name, shape, colour) entries, preferring real contacts.
+    entries: list[tuple[str, object, tuple[float, float, float]]] = []
+    for network in problem.networks:
+        color = (1.0, 0.0, 0.0) if network.has_source else (0.5, 0.5, 0.5)
+        for element in network.elements:
+            if isinstance(element, AreaContact):
+                entries.append((element.layer.name, element.shape, color))
+
+    if not entries:
+        # Preview fallback: refinement regions, coloured by a connection inside.
+        regions_by_layer: dict[str, list] = {}
+        for layer_name, region_shape in problem.refinement_regions:
+            regions_by_layer.setdefault(layer_name, []).append(region_shape)
+        if not regions_by_layer:
+            return {}
+        region_colors: dict[str, list] = {
+            layer_name: [None] * len(shapes)
+            for layer_name, shapes in regions_by_layer.items()
+        }
+        for network in problem.networks:
+            color = (1.0, 0.0, 0.0) if network.has_source else (0.5, 0.5, 0.5)
+            for connection in network.connections:
+                shapes = regions_by_layer.get(connection.layer.name)
+                if not shapes:
+                    continue
+                for index, region_shape in enumerate(shapes):
+                    if region_shape.contains(connection.point):
+                        if region_colors[connection.layer.name][index] is None or color[0] == 1.0:
+                            region_colors[connection.layer.name][index] = color
+        for layer_name, shapes in regions_by_layer.items():
+            for index, region_shape in enumerate(shapes):
+                entries.append((layer_name, region_shape,
+                                region_colors[layer_name][index] or (0.5, 0.5, 0.5)))
+
+    entries_by_layer: dict[str, list] = {}
+    for layer_name, shape, color in entries:
+        entries_by_layer.setdefault(layer_name, []).append((shape, color))
+
+    coverage: dict[str, list] = {}
+    for layer, layer_solution in zip(problem.layers, layer_solutions):
+        shapes = entries_by_layer.get(layer.name)
+        if not shapes:
+            continue
+
+        coords = [
+            (vertex.p.x, vertex.p.y)
+            for msh in layer_solution.meshes
+            for vertex in msh.vertices
+        ]
+        if not coords:
+            continue
+        points = np.asarray(coords)
+
+        # Deduplicate by coordinate with red-priority when regions overlap.
+        assigned: dict[tuple[float, float], tuple[float, float, float]] = {}
+        for shape, color in shapes:
+            min_x, min_y, max_x, max_y = shape.bounds
+            box_mask = (
+                (points[:, 0] >= min_x) & (points[:, 0] <= max_x) &
+                (points[:, 1] >= min_y) & (points[:, 1] <= max_y)
+            )
+            if not box_mask.any():
+                continue
+            candidates = points[box_mask]
+            inside = shapely.contains_xy(shape, candidates[:, 0], candidates[:, 1])
+            for x, y in candidates[inside]:
+                key = (float(x), float(y))
+                existing = assigned.get(key)
+                if existing is None or color[0] == 1.0:
+                    assigned[key] = color
+
+        if assigned:
+            coverage[layer.name] = [
+                (coordinate, color) for coordinate, color in assigned.items()
+            ]
+
+    return coverage
+
+
 class MeshViewer(QOpenGLWidget):
 
     @dataclass
@@ -935,6 +1036,12 @@ class MeshViewer(QOpenGLWidget):
         color_map: colormaps.UniformColorMap
         min_value: float = 0.0
         max_value: float = 1.0
+        # The autoscaled data range, kept separate from the (user-editable)
+        # min_value/max_value so the colour-scale sliders keep a stable mapping
+        # while the current range is edited. When the percentile cap is on,
+        # data_max_value is the current layer's percentile, not the global max.
+        data_min_value: float = 0.0
+        data_max_value: float = 1.0
         solution: Optional[solver.Solution] = None
         spatial_indices: dict[str, BaseSpatialIndex] = field(default_factory=dict)
 
@@ -970,6 +1077,25 @@ class MeshViewer(QOpenGLWidget):
         def autoscale_values(self, solution: solver.Solution):
             """Autoscale values for the rendering mode."""
             self.min_value, self.max_value = self._compute_min_max()
+            self.data_min_value, self.data_max_value = self.min_value, self.max_value
+
+        def values_for_layer(self, layer_name: str) -> list[float]:
+            """All data values this mode holds for `layer_name` (may be empty)."""
+            index = self.spatial_indices.get(layer_name)
+            return list(index.values) if index is not None else []
+
+        def cap_max_to_percentile(self, layer_name: str, percentile: float) -> bool:
+            """
+            Cap the colour maximum to `percentile` of the current layer's values
+            and return whether a cap was applied.
+            """
+            values = self.values_for_layer(layer_name)
+            if not values:
+                return False
+            cap = float(np.percentile(values, percentile))
+            self.max_value = cap
+            self.data_max_value = cap
+            return True
 
         def _build_spatial_indices(self):
             raise NotImplementedError("This method should be implemented in subclasses")
@@ -1004,8 +1130,13 @@ class MeshViewer(QOpenGLWidget):
                     )
                 )
 
-            # Do this _after_ starting the background tasks
-            # TODO: Eventually, we might want to do this in the background as well
+            # Resolve the preparation now. It runs before the window is shown
+            # (see `prepare_ui_data`), so there is no UI to keep responsive and
+            # the cost is attributed to the caller's timing stage.
+            for layer in self.solution.problem.layers:
+                self._prepared_rendered_meshes[layer.name]
+                self._prepared_disconnected_rendered_meshes[layer.name]
+
             self._build_spatial_indices()
 
         def _prepare_rendered_meshes_for_layer(self, layer_name) -> list[RenderedMesh.PreparedData]:
@@ -1141,8 +1272,77 @@ class MeshViewer(QOpenGLWidget):
                     prepared_meshes.append(RenderedMesh.prepare_two_form(msh, values))
             return prepared_meshes
 
+    @dataclass
+    class CurrentDensityRenderingMode(PowerDensityRenderingMode):
+        unit: str = "A/mm²"
+        name: str = "Current Density"
+        color_map: colormaps.UniformColorMap = colormaps.VIRIDIS
+
+        # Set in set_solution: if any layer lacks a thickness, the whole mode
+        # falls back to sheet current (A/mm) so the single/global unit is honest.
+        _sheet_fallback: bool = False
+
+        def set_solution(self, solution: solver.Solution):
+            missing = [
+                layer.name for layer in solution.problem.layers
+                if not getattr(layer, "thickness", None)
+            ]
+            self._sheet_fallback = bool(missing)
+            if self._sheet_fallback:
+                self.unit = "A/mm"
+                log.warning(
+                    "Layer(s) %s have no thickness; current density is shown as "
+                    "sheet current (A/mm) for the whole mode.", ", ".join(missing))
+            else:
+                self.unit = "A/mm²"
+            super().set_solution(solution)
+
+        def _current_density_factor(self, layer: solver.problem.Layer) -> float:
+            """
+            Factor c such that |J| = c * sqrt(power_density).
+
+            With thickness: |J| = sqrt(conductance * P) / thickness (A/mm²).
+            Sheet fallback (any layer missing thickness): sqrt(conductance * P)
+            (A/mm).
+            """
+            conductance = float(layer.conductance)
+            if self._sheet_fallback:
+                return float(np.sqrt(conductance))
+            thickness = getattr(layer, "thickness", None)
+            if not thickness:
+                return float(np.sqrt(conductance))
+            return float(np.sqrt(conductance) / thickness)
+
+        def _build_spatial_indices(self):
+            """Build spatial indices for fast face lookups."""
+            self.spatial_indices.clear()
+            for layer, layer_solution in zip(self.solution.problem.layers,
+                                             self.solution.layer_solutions):
+                factor = self._current_density_factor(layer)
+                spatial_index = FaceSpatialIndex.from_layer_data(
+                    layer, layer_solution,
+                    value_transform=lambda value, factor=factor: factor * np.sqrt(max(value, 0.0)))
+                self.spatial_indices[layer.name] = spatial_index
+
+        def _prepare_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh.PreparedData]:
+            """Create RenderedMesh objects for a specific layer."""
+            prepared_meshes = []
+            for layer, layer_solution in zip(self.solution.problem.layers,
+                                             self.solution.layer_solutions):
+                if layer.name != layer_name:
+                    continue
+                factor = self._current_density_factor(layer)
+                for msh, values in zip(layer_solution.meshes, layer_solution.power_densities):
+                    current_density = mesh.TwoForm(msh)
+                    current_density.values[:] = factor * np.sqrt(np.maximum(0.0, values.values))
+                    prepared_meshes.append(RenderedMesh.prepare_two_form(msh, current_density))
+            return prepared_meshes
+
     # Signal to notify when the value range changes
     valueRangeChanged = Signal(float, float)
+    # Signal to notify when the underlying data range (autoscale / percentile
+    # cap) changes, so the colour-scale sliders can re-map
+    dataRangeChanged = Signal(float, float)
     # Signal to notify when the current layer changes
     currentLayerChanged = Signal(str)
     # Signal to notify when the list of available layers changes
@@ -1162,7 +1362,16 @@ class MeshViewer(QOpenGLWidget):
     # Signal for visibility changes
     visibilityChanged = Signal()
 
-    def __init__(self, parent=None):
+    @classmethod
+    def default_modes(cls) -> list["MeshViewer.BaseRenderingMode"]:
+        """The rendering modes in menu order, constructible without a widget."""
+        return [
+            cls.VoltageRenderingMode(),
+            cls.PowerDensityRenderingMode(),
+            cls.CurrentDensityRenderingMode(),
+        ]
+
+    def __init__(self, parent=None, prepared=None):
         super().__init__(parent)
         self.solution: None | solver.Solution = None
         # Layer name -> RenderedMesh
@@ -1170,12 +1379,18 @@ class MeshViewer(QOpenGLWidget):
         self.rendered_connection_points: dict[str, RenderedPoints] = {}
         self.connection_points_visible: bool = True
 
-        # Rendering modes and current mode tracking
-        self.modes = [
-            self.VoltageRenderingMode(),
-            self.PowerDensityRenderingMode()
-        ]
+        # Rendering modes and current mode tracking. When `prepared` is given,
+        # its modes already carry the GL-free prepared data (spatial indices +
+        # render arrays), so we reuse them instead of rebuilding.
+        self._prepared = prepared
+        self.modes = prepared.modes if prepared is not None else self.default_modes()
         self.current_mode_index = 0  # Start with voltage mode
+        # SMT contact coverage precomputed by prepare_ui_data (GL-free).
+        self._contact_coverage = None
+
+        # When set, the colour maximum is capped to COLOR_SCALE_PERCENTILE of
+        # the values on the current layer (rather than the global autoscale).
+        self.percentile_cap = False
 
         self.scale = 1.0
         self.offset_x = 0.0
@@ -1187,6 +1402,9 @@ class MeshViewer(QOpenGLWidget):
 
         # Set focus policy to receive keyboard events
         self.setFocusPolicy(Qt.StrongFocus)
+
+        # The percentile cap is per-layer; re-apply when the layer changes.
+        self.currentLayerChanged.connect(self._onCurrentLayerChanged)
 
         # Layer management
         self.current_layer_index = 0
@@ -1267,17 +1485,37 @@ class MeshViewer(QOpenGLWidget):
 
     def autoscaleValue(self) -> None:
         """
-        Automatically adjust the min/max values for color scaling using the current rendering mode.
+        Automatically adjust the min/max values for color scaling using the
+        current rendering mode, applying the percentile cap if enabled.
         """
         if not self.solution or not self.solution.layer_solutions:
             return  # Nothing to scale if no solution is loaded
 
         # Delegate to current rendering mode
         self.current_rendering_mode.autoscale_values(self.solution)
-
-        # Emit signal to notify about the new value range
-        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
+        self._emit_value_range()
         self.update()
+
+    def _emit_value_range(self) -> None:
+        """Apply the percentile cap (if on) and emit the range signals."""
+        mode = self.current_rendering_mode
+        if self.percentile_cap:
+            mode.cap_max_to_percentile(self.current_layer_name,
+                                       COLOR_SCALE_PERCENTILE)
+        self.valueRangeChanged.emit(mode.min_value, mode.max_value)
+        self.dataRangeChanged.emit(mode.data_min_value, mode.data_max_value)
+
+    @Slot(bool)
+    def setPercentileCap(self, enabled: bool) -> None:
+        """Toggle capping the colour maximum to the current layer's percentile."""
+        self.percentile_cap = bool(enabled)
+        if self.solution is not None and self.solution.layer_solutions:
+            self.autoscaleValue()
+
+    def _onCurrentLayerChanged(self, _layer_name: str) -> None:
+        # The percentile, and hence the data range, is per-layer.
+        if self.percentile_cap and self.solution is not None:
+            self.autoscaleValue()
 
     def autoscaleXY(self) -> None:
         """
@@ -1319,7 +1557,14 @@ class MeshViewer(QOpenGLWidget):
 
     @Slot(solver.Solution)
     def setSolution(self, solution: solver.Solution):
-        """Set the solution for the mesh viewer."""
+        """Install a solution whose GL-free preparation is already done."""
+        # Reuse the modes prepared by `prepare_ui_data` when available;
+        # otherwise (direct `ui.main` callers, tests) prepare here.
+        prepared = self._prepared if self._prepared is not None \
+            else prepare_ui_data(solution)
+        self._prepared = None
+        self.modes = prepared.modes
+        self._contact_coverage = prepared.contact_coverage
         self.solution = solution
 
         # Initialize the list of layers from the solution
@@ -1337,18 +1582,11 @@ class MeshViewer(QOpenGLWidget):
         # Initialize all modes and emit mode signals
         current_mode = self.current_rendering_mode
 
-        # Initialize all modes with solution data (spatial indices + rendered meshes)
-        for mode in self.modes:
-            mode.set_solution(solution)
-            mode.autoscale_values(solution)
-
         # Emit mode-related signals
         self.currentModeChanged.emit(current_mode.name)
         self.unitChanged.emit(current_mode.unit)
         self.colorMapChanged.emit(current_mode.color_map)
-        self.valueRangeChanged.emit(
-            self.current_rendering_mode.min_value, self.current_rendering_mode.max_value
-        )
+        self._emit_value_range()
 
         # We can't just do autoscaleXY here, since we may be in some
         # semi-initialized state and the widget may not have reached a valid
@@ -1390,6 +1628,16 @@ class MeshViewer(QOpenGLWidget):
                 # Append a tuple of (coordinates, color)
                 points_by_layer[layer_name].append((point_coords, color))
 
+        # Expand SMT contact regions into per-vertex coverage so SMD pads are
+        # marked like THT rim connections. Prefer the coverage precomputed in
+        # prepare_ui_data; fall back to computing it here (direct ui.main use).
+        coverage = self._contact_coverage
+        if coverage is None:
+            coverage = collect_contact_coverage(
+                self.solution.problem, self.solution.layer_solutions)
+        for layer_name, coverage_points in coverage.items():
+            points_by_layer.setdefault(layer_name, []).extend(coverage_points)
+
         for layer_name, collected_points_data in points_by_layer.items():
             if not collected_points_data:
                 continue
@@ -1397,6 +1645,16 @@ class MeshViewer(QOpenGLWidget):
             # so we draw them _last_. This is a hack to order them, it
             # depends on the fact that (1.0, 0.0, 0.0) > (0.5, 0.5, 0.5)
             # _This will break if the colors change!_
+            # Deduplicate exact (coordinates, colour) duplicates, e.g. the pad
+            # centre connection also appearing as a region vertex.
+            seen = set()
+            deduplicated = []
+            for point_data in collected_points_data:
+                if point_data in seen:
+                    continue
+                seen.add(point_data)
+                deduplicated.append(point_data)
+            collected_points_data = deduplicated
             collected_points_data.sort(key=lambda x: x[1])
             # Pass the list of (coordinates, color) tuples
             rendered_obj = RenderedPoints.from_points(collected_points_data)
@@ -1902,7 +2160,7 @@ class MeshViewer(QOpenGLWidget):
             self.currentModeChanged.emit(mode.name)
             self.unitChanged.emit(mode.unit)
             self.colorMapChanged.emit(mode.color_map)
-            self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
+            self._emit_value_range()
             self.update()
 
     def _updateShaderColorMap(self) -> None:
@@ -1994,18 +2252,75 @@ class EditableValueLabel(QLabel):
         self.show()
 
 
+# The colour-scale sliders span COLOR_SCALE_LOG_DECADES decades below the top
+# (one pixel is a constant ratio), and the optional cap clamps the maximum to
+# this percentile of the *current layer* only.
+COLOR_SCALE_LOG_DECADES = 4.0
+COLOR_SCALE_PERCENTILE = 99.9
+
+
+def color_scale_uses_log(data_min: float, data_max: float) -> bool:
+    """Log mapping for non-negative data; linear fallback for signed data."""
+    return data_min >= 0.0 and data_max > 0.0
+
+
+def color_scale_bounds(data_min: float, data_max: float) -> tuple[float, float]:
+    """The (lo, hi) value range the sliders map over."""
+    if color_scale_uses_log(data_min, data_max):
+        lo = data_max * 10.0 ** (-COLOR_SCALE_LOG_DECADES)
+        if data_min > 0.0:
+            lo = max(lo, data_min)
+        return lo, data_max
+    # Signed data: linear over the data range.
+    lo, hi = data_min, data_max
+    if hi <= lo:
+        hi = lo + 1.0
+    return lo, hi
+
+
+def color_scale_value_at(fraction: float,
+                         data_min: float,
+                         data_max: float) -> float:
+    """Map a 0..1 slider fraction to a value."""
+    lo, hi = color_scale_bounds(data_min, data_max)
+    fraction = min(max(fraction, 0.0), 1.0)
+    if color_scale_uses_log(data_min, data_max):
+        return lo * (hi / lo) ** fraction
+    return lo + (hi - lo) * fraction
+
+
+def color_scale_fraction_of(value: float,
+                            data_min: float,
+                            data_max: float) -> float:
+    """Map a value to a 0..1 slider fraction (clamped)."""
+    lo, hi = color_scale_bounds(data_min, data_max)
+    if hi <= lo:
+        return 0.0
+    value = min(max(value, lo), hi)
+    if color_scale_uses_log(data_min, data_max):
+        return math.log(value / lo) / math.log(hi / lo)
+    return (value - lo) / (hi - lo)
+
+
 class ColorScaleWidget(QWidget):
-    """Widget that displays a color scale with delta and absolute range."""
+    """Colour scale with a log min/max slider pair and an optional percentile cap."""
 
     # Signal to notify when unit is changed manually
     unitChanged = Signal(str)
     minValueEdited = Signal(float)
     maxValueEdited = Signal(float)
+    percentileCapChanged = Signal(bool)
+
+    _SLIDER_STEPS = 1000
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.v_min = 0.0
         self.v_max = 1.0
+        # Data range the sliders map over: the global autoscale, or the current
+        # layer's percentile when the cap is on (see setDataRange).
+        self.data_min = 0.0
+        self.data_max = 1.0
         self.unit = "V"  # Default unit
         self.color_map = colormaps.PLASMA  # Default color map
 
@@ -2015,6 +2330,9 @@ class ColorScaleWidget(QWidget):
         self.delta_label: Optional[QLabel] = None
         self.max_label: Optional[EditableValueLabel] = None
         self.min_label: Optional[EditableValueLabel] = None
+        self.min_slider: Optional[QSlider] = None
+        self.max_slider: Optional[QSlider] = None
+        self.percentile_checkbox: Optional[QCheckBox] = None
 
         self.setupUI()
 
@@ -2052,13 +2370,69 @@ class ColorScaleWidget(QWidget):
         self.min_label.valueEdited.connect(self.minValueEdited)
         layout.addWidget(self.min_label)
 
+        # Two log-mapped sliders, one for the colour minimum and one for the
+        # maximum, both mapping over the current data range (setDataRange).
+        self.min_slider = QSlider(Qt.Horizontal, self)
+        self.max_slider = QSlider(Qt.Horizontal, self)
+        for slider, tip, slot in (
+            (self.min_slider, "Minimum colour-scale value",
+             self._onMinSliderChanged),
+            (self.max_slider, "Maximum colour-scale value",
+             self._onMaxSliderChanged),
+        ):
+            slider.setRange(0, self._SLIDER_STEPS)
+            slider.setToolTip(tip)
+            slider.setFocusPolicy(Qt.NoFocus)
+            slider.valueChanged.connect(slot)
+            layout.addWidget(slider)
+
+        self.percentile_checkbox = QCheckBox(f"Cap {COLOR_SCALE_PERCENTILE:g}%", self)
+        self.percentile_checkbox.setChecked(False)
+        self.percentile_checkbox.setFocusPolicy(Qt.NoFocus)
+        self.percentile_checkbox.setToolTip(
+            "Cap the colour maximum to this percentile of the current layer")
+        self.percentile_checkbox.toggled.connect(self.percentileCapChanged)
+        layout.addWidget(self.percentile_checkbox)
+
     @Slot(float, float)
     def setRange(self, v_min, v_max):
         """Set the minimum and maximum values for the scale."""
         self.v_min = v_min
         self.v_max = v_max
         self.updateLabels()
+        self._syncSliders()
         self.update()
+
+    @Slot(float, float)
+    def setDataRange(self, data_min: float, data_max: float) -> None:
+        """Set the data range the colour-scale sliders map over."""
+        self.data_min = data_min
+        self.data_max = data_max
+        self._syncSliders()
+        self.update()
+
+    def _syncSliders(self) -> None:
+        """Reflect v_min/v_max on the sliders without re-emitting."""
+        if self.min_slider is None or self.max_slider is None:
+            return
+        for slider, value in ((self.min_slider, self.v_min),
+                              (self.max_slider, self.v_max)):
+            fraction = color_scale_fraction_of(value, self.data_min, self.data_max)
+            slider.blockSignals(True)
+            slider.setValue(int(round(fraction * self._SLIDER_STEPS)))
+            slider.blockSignals(False)
+
+    @Slot(int)
+    def _onMinSliderChanged(self, position: int) -> None:
+        self.minValueEdited.emit(self._value_for_position(position))
+
+    @Slot(int)
+    def _onMaxSliderChanged(self, position: int) -> None:
+        self.maxValueEdited.emit(self._value_for_position(position))
+
+    def _value_for_position(self, position: int) -> float:
+        return color_scale_value_at(position / self._SLIDER_STEPS,
+                                    self.data_min, self.data_max)
 
     @Slot(str)
     def setUnit(self, unit):
@@ -2135,11 +2509,38 @@ class ColorScaleWidget(QWidget):
             )
 
 
+@dataclass
+class PreparedUI:
+    """GL-free UI preparation for a solution (see `prepare_ui_data`)."""
+
+    modes: list
+    contact_coverage: dict = field(default_factory=dict)
+
+
+@stage_timer
+def prepare_ui_data(solution: solver.Solution) -> PreparedUI:
+    """
+    Build the GL-free UI data for `solution`: per-mode spatial indices, the
+    prepared render arrays, and the SMT contact coverage.
+
+    Pure Python/numpy -- it never touches Qt or the OpenGL context, so it can
+    run before the window exists. The GL side (VAO upload, shader compilation)
+    still happens later, on the render thread.
+    """
+    modes = MeshViewer.default_modes()
+    for mode in modes:
+        mode.set_solution(solution)
+        mode.autoscale_values(solution)
+    coverage = collect_contact_coverage(solution.problem, solution.layer_solutions)
+    return PreparedUI(modes=modes, contact_coverage=coverage)
+
+
 class MainWindow(QMainWindow):
 
     projectLoaded = Signal(solver.Solution)
 
-    def __init__(self, solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None):
+    def __init__(self, solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None,
+                 prepared: Optional[PreparedUI] = None):
         super().__init__()
 
         self.project_file_name = solution.problem.project_name or "unknown"
@@ -2157,7 +2558,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # Create the mesh viewer
-        self.mesh_viewer = MeshViewer(self)
+        self.mesh_viewer = MeshViewer(self, prepared=prepared)
 
         # Create ToolManager
         self.tool_manager = ToolManager(self.mesh_viewer, self)
@@ -2216,10 +2617,12 @@ class MainWindow(QMainWindow):
     def _connectSignals(self) -> None:
         # Connect the MeshViewer
         self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
+        self.mesh_viewer.dataRangeChanged.connect(self.color_scale.setDataRange)
         self.mesh_viewer.unitChanged.connect(self.color_scale.setUnit)
         self.mesh_viewer.colorMapChanged.connect(self.color_scale.setColorMap)
         self.color_scale.minValueEdited.connect(self.mesh_viewer.setMinValue)
         self.color_scale.maxValueEdited.connect(self.mesh_viewer.setMaxValue)
+        self.color_scale.percentileCapChanged.connect(self.mesh_viewer.setPercentileCap)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)
@@ -2294,8 +2697,14 @@ def configure_opengl() -> None:
     QSurfaceFormat.setDefaultFormat(gl_format)
 
 
-def main(solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None) -> int:
-    """Main entry point for the UI application."""
+def main(solution: solver.Solution, warnings_list: Optional[list[warnings.WarningMessage]] = None,
+         prepared: Optional[PreparedUI] = None) -> int:
+    """Main entry point for the UI application.
+
+    `prepared` is the result of `prepare_ui_data(solution)`. Passing it lets a
+    caller (the CLI) run the expensive, GL-free preparation as a timed stage
+    before the window is created; when omitted it is computed here.
+    """
     # Configure OpenGL
     configure_opengl()
 
@@ -2303,7 +2712,7 @@ def main(solution: solver.Solution, warnings_list: Optional[list[warnings.Warnin
         warnings_list = []
 
     app = QApplication(sys.argv)
-    window = MainWindow(solution, warnings_list)
+    window = MainWindow(solution, warnings_list, prepared=prepared)
 
     window.show()
     return app.exec()

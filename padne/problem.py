@@ -24,6 +24,11 @@ class Layer:
     # conductivity [S/mm] * thickness [mm]
     conductance: float
 
+    # Copper foil thickness in mm. Optional because synthetic Problems may not
+    # carry it; the UI uses it to turn sheet current into volumetric current
+    # density (A/mm^2).
+    thickness: float | None = None
+
     # Cached tuple of individual polygons, extracted from shape
     geoms: tuple[shapely.geometry.Polygon, ...] = field(init=False, repr=False)
 
@@ -173,7 +178,45 @@ class VoltageRegulator(BaseLumped):
 
 
 @dataclass(frozen=True)
+class AreaContact(BaseLumped):
+    """
+    Distributed vertical contact between a region of a copper layer and a lumped
+    terminal node (e.g. an SMD pad and the component terminal). The solver
+    resolves the region against the mesh and stamps a distributed (Robin)
+    conductance, so from the network's point of view this is a single terminal.
+    """
+    layer: Layer
+    shape: shapely.geometry.Polygon | shapely.geometry.MultiPolygon
+    node: NodeID
+    conductance_per_area: float  # S/mm^2
+    mode: str = "robin"          # robin | neumann | point
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.conductance_per_area <= 0:
+            raise ValueError(
+                f"Contact conductance per area must be positive, got "
+                f"{self.conductance_per_area}")
+        if self.mode not in ("robin", "neumann", "point"):
+            raise ValueError(f"Unknown area-contact mode {self.mode!r}")
+
+    @property
+    def terminals(self) -> list[NodeID]:
+        return [self.node]
+
+
+@dataclass(frozen=True)
 class Problem:
     layers: list[Layer]
     networks: list[Network]
     project_name: str | None = None
+
+    # (layer name, polygon) pairs that should be locally refined by the mesher,
+    # e.g. SMD pad footprints. The target size lives in Mesher.Config, with
+    # `pad_refine_size` here as the project default when the config does not
+    # override it.
+    refinement_regions: list[tuple[str, shapely.geometry.MultiPolygon]] = \
+        field(default_factory=list)
+
+    # Auto mesh-refinement target for contact regions (mm). Zero disables.
+    pad_refine_size: float = 0.0

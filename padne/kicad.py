@@ -89,6 +89,36 @@ def nm_to_mm(f: float) -> float:
     return f / 1000000
 
 
+def shape_poly_set_to_shapely(poly_set: "pcbnew.SHAPE_POLY_SET") -> shapely.geometry.MultiPolygon:
+    """
+    Convert a KiCad SHAPE_POLY_SET (board coordinates, internal units) into a
+    shapely MultiPolygon in millimetres.
+    """
+    def chain_to_coords(chain) -> list[tuple[float, float]]:
+        return [
+            (nm_to_mm(chain.CPoint(i).x), nm_to_mm(chain.CPoint(i).y))
+            for i in range(chain.PointCount())
+        ]
+
+    polygons: list[shapely.geometry.Polygon] = []
+    for outline_index in range(poly_set.OutlineCount()):
+        exterior = chain_to_coords(poly_set.Outline(outline_index))
+        holes = [
+            chain_to_coords(poly_set.Hole(outline_index, hole_index))
+            for hole_index in range(poly_set.HoleCount(outline_index))
+        ]
+        polygon = shapely.geometry.Polygon(exterior, holes)
+        if not polygon.is_valid:
+            # Self-intersecting outlines can appear for exotic pads; heal them.
+            polygon = polygon.buffer(0)
+        if polygon.geom_type == "Polygon":
+            polygons.append(polygon)
+        elif polygon.geom_type == "MultiPolygon":
+            polygons.extend(polygon.geoms)
+
+    return shapely.geometry.MultiPolygon(polygons)
+
+
 @dataclass
 class StackupItem:
 
@@ -292,6 +322,11 @@ class PadIndex:
     """
     mapping: dict[Endpoint, list[LayerPoint]] = field(default_factory=dict)
 
+    # Exact pad outlines in board coordinates (mm), keyed by endpoint. A single
+    # pad may span several copper layers, hence the list of (layer, polygon).
+    shapes: dict[Endpoint, list[tuple[str, shapely.geometry.MultiPolygon]]] = \
+        field(default_factory=dict)
+
     def find_by_endpoint(self, ep: Endpoint) -> list[LayerPoint]:
         # Note that we return an empty list if the endpoint does not exist
         # This can totally happen if it gets eliminated due to falling outside
@@ -300,6 +335,11 @@ class PadIndex:
         # for a given terminal, but this is unlikely to happen in well-formed
         # simulations.
         return self.mapping.get(ep, [])
+
+    def find_shapes_by_endpoint(self, ep: Endpoint
+                                ) -> list[tuple[str, shapely.geometry.MultiPolygon]]:
+        """Return the exact pad outlines for an endpoint as (layer, polygon)."""
+        return self.shapes.get(ep, [])
 
     def load_smd_pads(self, board: pcbnew.BOARD, layer_dict: dict[str, problem.Layer]) -> None:
         """
@@ -363,6 +403,22 @@ class PadIndex:
                     continue
 
                 layer_point = LayerPoint(layer=layer_name, point=point)
+
+                # Record the exact pad outline on this layer. Used by the
+                # distributed area-contact model and by pad-aware refinement.
+                # Extraction is best-effort: a pad whose outline cannot be
+                # obtained is simply not refined / not area-contacted.
+                try:
+                    effective_polygon = pad_obj.GetEffectivePolygon(layer_id)
+                    pad_shape = shape_poly_set_to_shapely(effective_polygon)
+                except Exception as exc:
+                    log.warning(
+                        "Could not extract the outline of SMD pad %s on layer %s (%s); "
+                        "it will not be refined or used as an area contact.",
+                        endpoint, layer_name, exc)
+                else:
+                    if not pad_shape.is_empty:
+                        self.shapes.setdefault(endpoint, []).append((layer_name, pad_shape))
 
                 # Add to mapping (initialize list if endpoint doesn't exist)
                 if endpoint not in self.mapping:
@@ -432,6 +488,12 @@ class BaseLumpedSpec:
     values: dict[str, float] = field(default_factory=dict)
 
     coupling: float = 0.001
+
+    # Optional distributed area-contact conductance per unit area (S/mm^2).
+    # None keeps the legacy point coupling (no behaviour change until the
+    # CONTACT directive / default enables it).
+    contact_conductance_per_area: Optional[float] = None
+    contact_mode: str = "robin"
 
     # To be overridden by subclasses
     endpoint_names: ClassVar[dict[str, str]] = {}
@@ -505,45 +567,63 @@ class BaseLumpedSpec:
                 raise ValueError(f"No endpoints specified for {directive_param_name} in {self.__class__.__name__}")
 
             internal_arg_name = self.endpoint_names[directive_param_name]
+            target_node = internal_nodes[internal_arg_name]
 
-            layerpoints = [
-                lp
-                for ep in endpoints_list
-                for lp in pad_index.find_by_endpoint(ep)
-            ]
+            # Resolve each endpoint to (layerpoint, pad outline) pairs. SMD pads
+            # carry an outline; THT rim points and vias do not.
+            pads: list[tuple[LayerPoint, Optional[shapely.geometry.MultiPolygon]]] = []
+            for ep in endpoints_list:
+                shapes_by_layer = dict(pad_index.find_shapes_by_endpoint(ep))
+                for lp in pad_index.find_by_endpoint(ep):
+                    pads.append((lp, shapes_by_layer.get(lp.layer)))
 
-            if len(layerpoints) == 1:
+            area_contacts_enabled = self.contact_conductance_per_area is not None
+
+            def emit(layer_point: LayerPoint, pad_shape, node: problem.NodeID) -> None:
+                # A Connection is always emitted so that connectivity analysis
+                # and mesh seeding keep working. For an area contact it carries
+                # a fresh, unused node: the marker must NOT be the contact
+                # terminal, otherwise the pad is point-coupled and Robin-coupled
+                # at the same time and the point singularity is not removed.
+                layer = layer_dict[layer_point.layer]
+                if area_contacts_enabled and pad_shape is not None:
+                    elements.append(problem.AreaContact(
+                        layer=layer,
+                        shape=pad_shape,
+                        node=node,
+                        conductance_per_area=self.contact_conductance_per_area,
+                        mode=self.contact_mode,
+                    ))
+                    connections.append(problem.Connection(
+                        layer=layer,
+                        point=layer_point.point,
+                        node_id=problem.NodeID(),
+                    ))
+                else:
+                    connections.append(problem.Connection(
+                        layer=layer,
+                        point=layer_point.point,
+                        node_id=node,
+                    ))
+
+            if len(pads) == 1:
                 # Optimize by wiring directly to the internal node
-                lp = layerpoints[0]
-                layer = layer_dict[lp.layer]
-                conn = problem.Connection(
-                    layer=layer,
-                    point=lp.point,
-                    node_id=internal_nodes[internal_arg_name]
-                )
-                connections.append(conn)
+                emit(pads[0][0], pads[0][1], target_node)
             else:
-                # If there are multiple endpoints, we create a "star"
-                # shaped resistor network leading from the endpoints to the
-                # internal node
+                # If there are multiple pads, we create a "star" shaped resistor
+                # network leading from the pads to the internal node
                 # Note: using a V=0 voltage sources instead of resistors
                 # may work, but I have observed weird numerical stability
                 # issues, so we do this by default and optimize in subclasses
                 # if needed
-                for lp in layerpoints:
-                    layer = layer_dict[lp.layer]
-                    resistor = problem.Resistor(
-                        a=problem.NodeID(),
-                        b=internal_nodes[internal_arg_name],
+                for layer_point, pad_shape in pads:
+                    branch = problem.NodeID()
+                    elements.append(problem.Resistor(
+                        a=branch,
+                        b=target_node,
                         resistance=self.coupling,
-                    )
-                    conn = problem.Connection(
-                        layer=layer,
-                        point=lp.point,
-                        node_id=resistor.a,
-                    )
-                    elements.append(resistor)
-                    connections.append(conn)
+                    ))
+                    emit(layer_point, pad_shape, branch)
         return connections, elements
 
     def construct(self,
@@ -592,72 +672,41 @@ class VoltageSourceSpec(BaseLumpedSpec):
     default_values = {"esr": 0.0}
     lumped_type = problem.VoltageSource
 
-    def _construct_connections(self,
-                               pad_index: PadIndex,
-                               layer_dict: dict[str, problem.Layer]
-                               ) -> tuple[list[problem.Connection], list[problem.Connection]]:
-        p_endpoints = self.endpoints["p"]
-        n_endpoints = self.endpoints["n"]
-        if not p_endpoints:
-            raise ValueError("No positive endpoints specified for voltage source")
-        if not n_endpoints:
-            raise ValueError("No negative endpoints specified for voltage source")
+    def _resolve_pads(self,
+                      pad_index: PadIndex,
+                      endpoints_list: list[Endpoint]
+                      ) -> list[tuple[LayerPoint, Optional[shapely.geometry.MultiPolygon]]]:
+        """Resolve endpoints to (layer point, pad outline) pairs."""
+        pads = []
+        for ep in endpoints_list:
+            shapes_by_layer = dict(pad_index.find_shapes_by_endpoint(ep))
+            for lp in pad_index.find_by_endpoint(ep):
+                pads.append((lp, shapes_by_layer.get(lp.layer)))
+        return pads
 
-        p_connections = []
-        n_connections = []
-        for endpoints, connections in zip([p_endpoints, n_endpoints],
-                                          [p_connections, n_connections]):
-            layerpoints = [
-                lp
-                for ep in endpoints
-                for lp in pad_index.find_by_endpoint(ep)
-            ]
-
-            for lp in layerpoints:
-                layer = layer_dict[lp.layer]
-                conn = problem.Connection(layer=layer, point=lp.point)
-                connections.append(conn)
-
-        return p_connections, n_connections
-
-    def _construct_source(self,
-                          p_connection: problem.Connection,
-                          n_connection: problem.Connection
-                          ) -> list[problem.BaseLumped]:
-        if self.values.get("esr", 0.0) > 0.0:
-            internal_node = problem.NodeID()
-            esr_resistor = problem.Resistor(
-                a=p_connection.node_id,
-                b=internal_node,
-                resistance=self.values["esr"]
-            )
-            voltage_source = problem.VoltageSource(
-                p=internal_node,
-                n=n_connection.node_id,
-                voltage=self.values["v"],
-            )
-            return [esr_resistor, voltage_source]
+    def _emit_pad_wiring(self,
+                         pad: tuple[LayerPoint, Optional[shapely.geometry.MultiPolygon]],
+                         node: problem.NodeID,
+                         layer_dict: dict[str, problem.Layer],
+                         connections: list[problem.Connection],
+                         elements: list[problem.BaseLumped]) -> None:
+        """
+        Wire one pad to `node`. SMD pads with an outline and contacts enabled
+        become a distributed AreaContact plus a marker Connection (fresh node);
+        everything else stays a point Connection to `node`.
+        """
+        layer_point, pad_shape = pad
+        layer = layer_dict[layer_point.layer]
+        if self.contact_conductance_per_area is not None and pad_shape is not None:
+            elements.append(problem.AreaContact(
+                layer=layer, shape=pad_shape, node=node,
+                conductance_per_area=self.contact_conductance_per_area,
+                mode=self.contact_mode))
+            connections.append(problem.Connection(
+                layer=layer, point=layer_point.point, node_id=problem.NodeID()))
         else:
-            voltage_source = problem.VoltageSource(
-                p=p_connection.node_id,
-                n=n_connection.node_id,
-                voltage=self.values["v"]
-            )
-            return [voltage_source]
-
-    def _glue_with_zero_voltage_sources(self,
-                                        main_connection: problem.Connection,
-                                        aux_connections: list[problem.Connection]
-                                        ) -> Iterable[problem.VoltageSource]:
-        # Create 0V voltage sources to connect additional terminals to the
-        # primary terminal
-        for ac in aux_connections:
-            zero_v_source = problem.VoltageSource(
-                p=ac.node_id,
-                n=main_connection.node_id,
-                voltage=0.0
-            )
-            yield zero_v_source
+            connections.append(problem.Connection(
+                layer=layer, point=layer_point.point, node_id=node))
 
     def construct(self,
                   pad_index: PadIndex,
@@ -667,36 +716,58 @@ class VoltageSourceSpec(BaseLumpedSpec):
         Custom construct method for voltage sources that properly handles
         multiple endpoints without introducing coupling resistance.
 
-        Strategy:
-        1. Create main voltage source between first positive and first negative endpoints
-        2. Create 0V voltage sources to connect additional endpoints to the first ones
+        All positive pads tie directly to the source's positive node and all
+        negative pads to its negative node (a hard short, as an ideal source
+        should). SMD pads are coupled through distributed area contacts.
         """
-        # First, construct the Connection objects for the positive and negative
-        # terminal
-        p_connections, n_connections = \
-            self._construct_connections(pad_index, layer_dict)
+        if not self.endpoints["p"]:
+            raise ValueError("No positive endpoints specified for voltage source")
+        if not self.endpoints["n"]:
+            raise ValueError("No negative endpoints specified for voltage source")
 
-        elements = []
+        p_node = problem.NodeID()
+        n_node = problem.NodeID()
+        connections: list[problem.Connection] = []
+        elements: list[problem.BaseLumped] = []
 
-        main_source_elements = self._construct_source(p_connections[0], n_connections[0])
-        elements.extend(main_source_elements)
+        for endpoints_list, terminal in ((self.endpoints["p"], p_node),
+                                         (self.endpoints["n"], n_node)):
+            pads = self._resolve_pads(pad_index, endpoints_list)
+            contact_pads = []
+            point_pads = []
+            for pad in pads:
+                if self.contact_conductance_per_area is not None and pad[1] is not None:
+                    contact_pads.append(pad)
+                else:
+                    point_pads.append(pad)
 
-        p_glue_sources = self._glue_with_zero_voltage_sources(
-            main_connection=p_connections[0],
-            aux_connections=p_connections[1:]
-        )
-        elements.extend(p_glue_sources)
+            for pad in contact_pads:
+                self._emit_pad_wiring(pad, terminal, layer_dict, connections, elements)
 
-        n_glue_sources = self._glue_with_zero_voltage_sources(
-            main_connection=n_connections[0],
-            aux_connections=n_connections[1:]
-        )
-        elements.extend(n_glue_sources)
+            for index, pad in enumerate(point_pads):
+                if index == 0 and not contact_pads:
+                    # A single point terminal binds directly to the source node.
+                    self._emit_pad_wiring(pad, terminal, layer_dict, connections, elements)
+                else:
+                    # Additional point pads get their own node, hard-tied to the
+                    # terminal with a 0 V source (also avoids sharing a
+                    # Connection node across different mesh vertices).
+                    branch = problem.NodeID()
+                    self._emit_pad_wiring(pad, branch, layer_dict, connections, elements)
+                    elements.append(problem.VoltageSource(
+                        p=branch, n=terminal, voltage=0.0))
 
-        return problem.Network(
-            connections=(p_connections + n_connections),
-            elements=elements
-        )
+        if self.values.get("esr", 0.0) > 0.0:
+            internal_node = problem.NodeID()
+            elements.append(problem.Resistor(
+                a=p_node, b=internal_node, resistance=self.values["esr"]))
+            elements.append(problem.VoltageSource(
+                p=internal_node, n=n_node, voltage=self.values["v"]))
+        else:
+            elements.append(problem.VoltageSource(
+                p=p_node, n=n_node, voltage=self.values["v"]))
+
+        return problem.Network(connections=connections, elements=elements)
 
 
 class CurrentSourceSpec(BaseLumpedSpec):
@@ -785,6 +856,94 @@ class CopperSpec:
             raise ValueError(f"Conductivity must be positive, got {conductivity}")
 
         return cls(conductivity=conductivity)
+
+
+# Physical defaults for the SMD joint contact (see the sources doc):
+# SAC305 solder, 75 um standoff, 3 um IMC per side at 7e6 S/m, 10% voids.
+CONTACT_SOLDER_CONDUCTIVITY = 8.5e6   # S/m (SAC305)
+CONTACT_SOLDER_THICKNESS = 75e-6      # m
+CONTACT_VOID_FRACTION = 0.10
+CONTACT_IMC_CONDUCTIVITY = 7e6        # S/m
+CONTACT_IMC_THICKNESS = 3e-6          # m, per side
+
+# Screening auto refinement size over contact pads: CONTACT_REFINE_LAMBDA_FACTOR
+# extraction decay lengths. 2.0 gets the fringe localisation right but is ~15%
+# off the integrated-power gate, which needs `--pad-refine-size <~ lambda/2`.
+# See the CONTACT docs.
+CONTACT_REFINE_LAMBDA_FACTOR = 2.0
+
+
+@dataclass(frozen=True)
+class ContactSpec:
+    """
+    Specifies how SMD pads couple vertically to their lumped terminal. Enabled
+    by default (`mode="robin"`): an SMD pad terminal otherwise injects current
+    at a single point. The joint conductance per unit area is
+
+        g = (1 - void) / ( t_sn/sigma_sn + 2 * t_imc/sigma_imc )   [S/mm^2]
+
+    unless overridden with `g=`.
+    """
+    conductance_per_area: float  # S/mm^2
+    mode: str = "robin"          # robin | point (point disables the contact)
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != "point"
+
+    @classmethod
+    def default(cls) -> 'ContactSpec':
+        return cls.from_directive(Directive(name="CONTACT", params={}))
+
+    @classmethod
+    def disabled(cls) -> 'ContactSpec':
+        """A spec that keeps the legacy point coupling (no area contact)."""
+        base = cls.default()
+        return cls(conductance_per_area=base.conductance_per_area, mode="point")
+
+    @classmethod
+    def from_directive(cls, directive: Directive) -> 'ContactSpec':
+        known = {"mode", "g", "solder_conductivity", "solder_thickness",
+                 "imc_conductivity", "imc_thickness", "void"}
+        unknown = sorted(set(directive.params) - known)
+        if unknown:
+            log.warning(
+                "Ignoring unknown CONTACT parameter(s): %s (known: %s)",
+                ", ".join(unknown), ", ".join(sorted(known)))
+
+        mode = directive.params.get("mode", "robin")
+        if mode not in ("robin", "point"):
+            raise ValueError(
+                f"Unknown CONTACT mode {mode!r} (expected 'robin' or 'point')")
+
+        if "g" in directive.params:
+            conductance = units.Value.parse(directive.params["g"]).value  # S/mm^2
+        else:
+            sigma_sn = units.Value.parse(
+                directive.params.get("solder_conductivity", str(CONTACT_SOLDER_CONDUCTIVITY))
+            ).value * 1e-3  # S/mm
+            t_sn = units.Value.parse(
+                directive.params.get("solder_thickness", f"{CONTACT_SOLDER_THICKNESS:g}")
+            ).value * 1e3  # mm
+            sigma_imc = units.Value.parse(
+                directive.params.get("imc_conductivity", str(CONTACT_IMC_CONDUCTIVITY))
+            ).value * 1e-3  # S/mm
+            t_imc = units.Value.parse(
+                directive.params.get("imc_thickness", f"{CONTACT_IMC_THICKNESS:g}")
+            ).value * 1e3  # mm
+            void = float(directive.params.get("void", CONTACT_VOID_FRACTION))
+
+            if not (0.0 <= void < 1.0):
+                raise ValueError(f"Void fraction must be in [0, 1), got {void}")
+            if t_sn <= 0 or t_imc < 0 or sigma_sn <= 0 or sigma_imc <= 0:
+                raise ValueError("Solder/IMC thickness and conductivity must be positive")
+
+            conductance = (1.0 - void) / (t_sn / sigma_sn + 2.0 * t_imc / sigma_imc)
+
+        if conductance <= 0:
+            raise ValueError(f"Contact conductance must be positive, got {conductance}")
+
+        return cls(conductance_per_area=conductance, mode=mode)
 
 
 @dataclass(frozen=True)
@@ -989,6 +1148,7 @@ class Directives:
     """
     lumped_specs: list[BaseLumpedSpec]
     copper_spec: Optional[CopperSpec] = None
+    contact_spec: Optional[ContactSpec] = None
     probe_specs: list[ProbeSpec] = field(default_factory=list)
 
 
@@ -1023,6 +1183,7 @@ def process_directives(directives: list[Directive]) -> Directives:
     }
     lumped_specs = []
     copper_spec = None
+    contact_spec = None
     probe_specs = []
 
     for directive in directives:
@@ -1031,6 +1192,11 @@ def process_directives(directives: list[Directive]) -> Directives:
                 warnings.warn("Multiple COPPER directives found, using the first one")
                 continue
             copper_spec = CopperSpec.from_directive(directive)
+        elif directive.name == "CONTACT":
+            if contact_spec is not None:
+                warnings.warn("Multiple CONTACT directives found, using the first one")
+                continue
+            contact_spec = ContactSpec.from_directive(directive)
         elif directive.name == "PROBE":
             probe_specs.append(ProbeSpec.from_directive(directive))
         elif directive.name in directive_name_to_spec_type:
@@ -1040,7 +1206,7 @@ def process_directives(directives: list[Directive]) -> Directives:
             warnings.warn(f"Unknown directive: {directive.name}")
 
     return Directives(lumped_specs=lumped_specs, copper_spec=copper_spec,
-                      probe_specs=probe_specs)
+                      contact_spec=contact_spec, probe_specs=probe_specs)
 
 
 @stage_timer
@@ -1600,7 +1766,8 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
         layer = problem.Layer(
             shape=plotted_layer.geometry,
             name=plotted_layer.name,
-            conductance=stackup_layer.conductance
+            conductance=stackup_layer.conductance,
+            thickness=stackup_layer.thickness,
         )
         layer_dict[plotted_layer.name] = layer
     return layer_dict
@@ -1624,7 +1791,8 @@ def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
 
 
 @stage_timer
-def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
+def load_kicad_project(pro_file_path: pathlib.Path,
+                       contact_override: Optional[ContactSpec] = None) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
 
@@ -1687,6 +1855,17 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     for via_spec in via_specs:
         networks.extend(process_via_spec(via_spec, layer_dict, stackup))
 
+    # SMD pads that are lumped-element terminals get a distributed area contact
+    # by default: a lumped element otherwise injects current at a single point,
+    # which creates the artificial singularity of issue #77.
+    contact_spec = contact_override or directives.contact_spec or ContactSpec.default()
+    if contact_spec.enabled:
+        for lumped_spec in directives.lumped_specs:
+            lumped_spec.contact_conductance_per_area = contact_spec.conductance_per_area
+            lumped_spec.contact_mode = contact_spec.mode
+    else:
+        log.info("SMD area contact disabled (CONTACT mode=point); point coupling in use")
+
     log.info("Creating networks from specifications")
     for lumped_spec in directives.lumped_specs:
         network = lumped_spec.construct(pad_index, layer_dict)
@@ -1695,11 +1874,39 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     for probe_spec in directives.probe_specs:
         networks.extend(probe_spec.construct(pad_index, layer_dict))
 
+    # Collect the SMD pads referenced by directives. These become explicit mesh
+    # refinement regions for the distributed area contacts.
+    referenced_endpoints = set()
+    for lumped_spec in directives.lumped_specs:
+        for endpoints_list in lumped_spec.endpoints.values():
+            referenced_endpoints.update(endpoints_list)
+    for probe_spec in directives.probe_specs:
+        referenced_endpoints.update(probe_spec.endpoints)
+
+    refinement_regions = [
+        (layer_name, polygon)
+        for endpoint in referenced_endpoints
+        for layer_name, polygon in pad_index.find_shapes_by_endpoint(endpoint)
+    ]
+
     # Get all layers as a list
     layer_names_in_order = list(layer_dict.keys())
     layer_names_in_order.sort(key=lambda name: stackup.index_by_name(name))
 
     layers = [layer_dict[name] for name in layer_names_in_order]
 
+    # Auto screening size: CONTACT_REFINE_LAMBDA_FACTOR * lambda, floored by
+    # Mesher.Config.pad_refine_min_size.
+    pad_refine_size = 0.0
+    if contact_spec.enabled and layers:
+        sheet_conductance = max(layer.conductance for layer in layers)
+        if sheet_conductance > 0:
+            decay_length = math.sqrt(sheet_conductance / contact_spec.conductance_per_area)
+            pad_refine_size = CONTACT_REFINE_LAMBDA_FACTOR * decay_length
+
     # Return the Problem object
-    return problem.Problem(layers=layers, networks=networks, project_name=project.name)
+    return problem.Problem(
+        layers=layers, networks=networks, project_name=project.name,
+        refinement_regions=refinement_regions,
+        pad_refine_size=pad_refine_size,
+    )

@@ -1,5 +1,6 @@
 
 import pytest
+import shapely.geometry
 
 from padne import problem as p
 
@@ -47,3 +48,37 @@ class TestResistor:
         n_b = p.NodeID()
         with pytest.raises(ValueError, match="Resistance must be positive"):
             p.Resistor(n_a, n_b, -1.0)
+
+
+class TestAreaContact:
+
+    @staticmethod
+    def _layer():
+        return p.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 1, 1)]),
+            name="F.Cu",
+            conductance=1.0,
+        )
+
+    @staticmethod
+    def _shape():
+        return shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 1, 1)])
+
+    def test_valid_contact_has_a_single_terminal(self):
+        node = p.NodeID()
+        contact = p.AreaContact(layer=self._layer(), shape=self._shape(), node=node,
+                                conductance_per_area=9e4)
+        assert contact.terminals == [node]
+        assert not contact.is_source
+        assert contact.extra_variable_count == 0
+        assert contact.mode == "robin"
+
+    def test_non_positive_conductance_rejected(self):
+        with pytest.raises(ValueError, match="must be positive"):
+            p.AreaContact(layer=self._layer(), shape=self._shape(), node=p.NodeID(),
+                          conductance_per_area=0.0)
+
+    def test_unknown_mode_rejected(self):
+        with pytest.raises(ValueError, match="mode"):
+            p.AreaContact(layer=self._layer(), shape=self._shape(), node=p.NodeID(),
+                          conductance_per_area=9e4, mode="bogus")

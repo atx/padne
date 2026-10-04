@@ -9,6 +9,7 @@ import traceback
 import functools
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Optional
 
 import padne.kicad
 import padne.solver
@@ -86,6 +87,55 @@ def add_mesher_args(parser: argparse.ArgumentParser) -> None:
         default=default_config.distance_map_quantization,
         help="Quantization step for distance map"
     )
+    parser.add_argument(
+        "--pad-refine-size",
+        type=float,
+        default=default_config.pad_refine_size,
+        help="Target mesh edge length (mm) inside SMD pad regions; "
+             "0 uses the computed screening default"
+    )
+    parser.add_argument(
+        "--pad-refine-transition",
+        type=float,
+        default=default_config.pad_refine_transition,
+        help="Distance (mm) over which pad refinement relaxes into the pad interior"
+    )
+    parser.add_argument(
+        "--pad-refine-min-size",
+        type=float,
+        default=default_config.pad_refine_min_size,
+        help="Floor (mm) for auto pad refinement; prevents runaway refinement "
+             "for very good joints. 0 disables. An explicit --pad-refine-size "
+             "is never clamped"
+    )
+
+
+def add_contact_args(parser: argparse.ArgumentParser) -> None:
+    """Add SMD area-contact override arguments to a parser."""
+    parser.add_argument(
+        "--contact-mode",
+        choices=["robin", "point"],
+        default=None,
+        help="Override the SMD area-contact mode (default: robin, or the CONTACT directive)",
+    )
+    parser.add_argument(
+        "--contact-g",
+        type=float,
+        default=None,
+        help="Override the contact conductance per unit area [S/mm^2]",
+    )
+
+
+def contact_override_from_args(args: argparse.Namespace) -> Optional[padne.kicad.ContactSpec]:
+    """Build a ContactSpec override from CLI arguments, or None."""
+    if getattr(args, "contact_mode", None) is None and getattr(args, "contact_g", None) is None:
+        return None
+    base = padne.kicad.ContactSpec.default()
+    return padne.kicad.ContactSpec(
+        conductance_per_area=args.contact_g if args.contact_g is not None
+        else base.conductance_per_area,
+        mode=args.contact_mode if args.contact_mode is not None else base.mode,
+    )
 
 
 def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Config:
@@ -96,7 +146,10 @@ def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Confi
         variable_density_min_distance=args.variable_density_min_distance,
         variable_density_max_distance=args.variable_density_max_distance,
         variable_size_maximum_factor=args.variable_size_maximum_factor,
-        distance_map_quantization=args.distance_map_quantization
+        distance_map_quantization=args.distance_map_quantization,
+        pad_refine_size=args.pad_refine_size,
+        pad_refine_transition=args.pad_refine_transition,
+        pad_refine_min_size=args.pad_refine_min_size,
     )
 
 
@@ -131,6 +184,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to the input file",
     )
     add_mesher_args(parser_gui)
+    add_contact_args(parser_gui)
 
     parser_show = subparsers.add_parser(
         "show",
@@ -160,6 +214,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to save the pickled solution file",
     )
     add_mesher_args(parser_solve)
+    add_contact_args(parser_solve)
 
     parser_paraview = subparsers.add_parser(
         "paraview",
@@ -203,7 +258,8 @@ def do_gui(args: argparse.Namespace) -> int:
     log = logging.getLogger(__name__)
     with context.timing_session() as session:
         log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
-        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+        prob = padne.kicad.load_kicad_project(
+            args.kicad_pro_file, contact_override=contact_override_from_args(args))
         log.info("Solving problem for GUI...")
         mesher_config = mesher_config_from_args(args)
 
@@ -216,9 +272,13 @@ def do_gui(args: argparse.Namespace) -> int:
             for msg in warns
             if issubclass(msg.category, padne.solver.SolverWarning)
         ]
+
+        # GL-free UI preparation, timed alongside the solve so the window can
+        # be created (and shown) quickly afterwards.
+        prepared = padne.ui.prepare_ui_data(solution)
     log.info("Stage timings:\n%s", session.format_summary())
 
-    return padne.ui.main(solution, captured_warnings)
+    return padne.ui.main(solution, captured_warnings, prepared=prepared)
 
 
 @handle_errors
@@ -226,7 +286,8 @@ def do_solve(args: argparse.Namespace) -> None:
     log = logging.getLogger(__name__)
     with context.timing_session() as session:
         log.info(f"Loading KiCad project: {args.kicad_pro_file}")
-        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+        prob = padne.kicad.load_kicad_project(
+            args.kicad_pro_file, contact_override=contact_override_from_args(args))
         log.info("Solving problem...")
         mesher_config = mesher_config_from_args(args)
         solution = padne.solver.solve(prob, mesher_config=mesher_config)
@@ -241,7 +302,10 @@ def do_show(args: argparse.Namespace) -> int:
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
         solution = pickle.load(f)
-    return padne.ui.main(solution)
+    with context.timing_session() as session:
+        prepared = padne.ui.prepare_ui_data(solution)
+    log.info("Stage timings:\n%s", session.format_summary())
+    return padne.ui.main(solution, prepared=prepared)
 
 
 @handle_errors
