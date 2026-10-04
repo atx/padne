@@ -43,15 +43,16 @@ class SolverBackend(enum.Enum):
 
 
 def solver_backends() -> list[SolverBackend]:
-    """Backends usable in this build, fastest first."""
+    """Backends usable in this build, the default first."""
     backends = [SolverBackend.SCIPY]
+    # PARDISO is faster, but not trusted enough to be the default yet
     if _pardiso is not None:
-        backends.insert(0, SolverBackend.PARDISO)
+        backends.append(SolverBackend.PARDISO)
     return backends
 
 
 def resolve_backend(backend: Optional[SolverBackend]) -> SolverBackend:
-    """Validate an explicit backend choice, or pick the best available for None."""
+    """Validate an explicit backend choice, or pick the default for None."""
     available = solver_backends()
     if backend is None:
         return available[0]
@@ -909,7 +910,7 @@ def solve(prob: problem.Problem,
     Args:
         problem: The Problem object containing layers and lumped elements
         mesher_config: Configuration for mesh generation, uses defaults if None
-        backend: Sparse direct solver to use, None picks the best one available
+        backend: Sparse direct solver to use, None picks the default (SciPy)
 
     Returns:
         A Solution object with the computed results

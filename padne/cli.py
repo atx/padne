@@ -123,8 +123,9 @@ def parse_args() -> argparse.Namespace:
         type=padne.solver.SolverBackend,
         choices=list(padne.solver.SolverBackend),
         metavar="{" + ",".join(b.value for b in padne.solver.SolverBackend) + "}",
-        default=None,
-        help="Sparse direct solver backend, defaults to the best one available: "
+        # argparse runs string defaults through type, so this is a SolverBackend
+        default=padne.solver.resolve_backend(None).value,
+        help="Sparse direct solver backend, available in this build: "
              + ", ".join(b.value for b in padne.solver.solver_backends())
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
