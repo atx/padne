@@ -226,6 +226,10 @@ def do_gui(args: argparse.Namespace) -> int:
             for msg in warns
             if issubclass(msg.category, padne.solver.SolverWarning)
         ]
+        # Release the worker processes; joining them at interpreter exit
+        # would run in the degraded threading-shutdown context and take
+        # seconds instead of milliseconds.
+        parallel.shutdown()
 
         # GL-free UI preparation, timed alongside the solve so the window can
         # be created (and shown) quickly afterwards.
@@ -244,6 +248,10 @@ def do_solve(args: argparse.Namespace) -> None:
         log.info("Solving problem...")
         mesher_config = mesher_config_from_args(args)
         solution = padne.solver.solve(prob, mesher_config=mesher_config, backend=args.solver)
+        # Release the worker processes; joining them at interpreter exit
+        # would run in the degraded threading-shutdown context and take
+        # seconds instead of milliseconds.
+        parallel.shutdown()
         with open(args.output_file, "wb") as f:
             pickle.dump(solution, f)
     log.info("Stage timings:\n%s", session.format_summary())
