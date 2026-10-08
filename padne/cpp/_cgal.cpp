@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 #include <iostream>
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <limits>
 #include <streambuf>
+#include <unordered_map>
 #include <utility>
 
 
@@ -343,38 +345,43 @@ static void set_mesher_seeds(Mesher& mesher,
     mesher.set_seeds(seed_points.begin(), seed_points.end(), mark);
 }
 
-std::pair<nb::list, nb::list> convert_meshing_result_to_python(CDT &cdt)
+// Flattened mesher output: (x, y) per finite vertex and vertex indices per
+// in-domain triangle.
+struct MeshingResult {
+    std::vector<double> vertices;
+    std::vector<uint32_t> triangles;
+};
+
+static void extract_meshing_result(CDT &cdt, MeshingResult &result)
 {
-    nb::list py_vertices;
-    std::map<Vertex_handle, int> vertex_index_map;
+    std::unordered_map<Vertex_handle, uint32_t> vertex_index_map;
+    vertex_index_map.reserve(cdt.number_of_vertices());
+    result.vertices.reserve(2 * cdt.number_of_vertices());
     for (auto it = cdt.finite_vertices_begin(); it != cdt.finite_vertices_end(); ++it) {
-        Point p = it->point();
-        auto key = it->handle();
-        vertex_index_map[key] = py_vertices.size();
-        py_vertices.append(nb::make_tuple(p.x(), p.y()));
+        vertex_index_map[it] = static_cast<uint32_t>(vertex_index_map.size());
+        result.vertices.push_back(it->point().x());
+        result.vertices.push_back(it->point().y());
     }
 
-    nb::list py_triangles;
     for (auto it = cdt.finite_faces_begin(); it != cdt.finite_faces_end(); ++it) {
         if (!it->is_in_domain()) {
             continue; // Skip faces that are not in the domain
         }
-        auto v0 = it->vertex(0);
-        auto v1 = it->vertex(1);
-        auto v2 = it->vertex(2);
-
-        auto i0 = vertex_index_map[v0];
-        auto i1 = vertex_index_map[v1];
-        auto i2 = vertex_index_map[v2];
-
-        nb::tuple triangle = nb::make_tuple(i0, i1, i2);
-        py_triangles.append(triangle);
+        for (int k = 0; k < 3; k++) {
+            result.triangles.push_back(vertex_index_map.at(it->vertex(k)));
+        }
     }
-
-    return std::make_pair(py_vertices, py_triangles);
 }
 
-
+template <typename T>
+static nb::ndarray<nb::numpy, T> vector_to_numpy(std::vector<T> &&v, size_t cols)
+{
+    auto *buf = new std::vector<T>(std::move(v));
+    nb::capsule owner(buf, [](void *p) noexcept {
+        delete static_cast<std::vector<T> *>(p);
+    });
+    return nb::ndarray<nb::numpy, T>(buf->data(), {buf->size() / cols, cols}, owner);
+}
 
 
 nb::dict mesh(const nb::object& py_config,
@@ -393,14 +400,17 @@ nb::dict mesh(const nb::object& py_config,
     const double max_distance = nb::cast<double>(py_config.attr("variable_density_max_distance"));
     const double size_factor = nb::cast<double>(py_config.attr("variable_size_maximum_factor"));
 
-    CDT cdt;
+    MeshingResult result;
     {
         // The CGAL meshing touches no Python state: the geometry inputs are
         // owned C++ copies and the distance map is precomputed and kept alive
         // by the caller. Releasing the GIL lets sibling meshing threads run
         // concurrently. nb::gil_scoped_release re-acquires the GIL on scope
         // exit, including while a C++ exception unwinds.
+        // The CDT is declared after nogil so that it is also destroyed
+        // without the GIL.
         nb::gil_scoped_release nogil;
+        CDT cdt;
 
         setup_cdt(cdt, vertices, segments, seeds);
 
@@ -409,18 +419,15 @@ nb::dict mesh(const nb::object& py_config,
                                      min_distance, max_distance, size_factor, K()));
         set_mesher_seeds(mesher, seeds);
         mesher.refine_mesh();
+        extract_meshing_result(cdt, result);
     }
 
-    // Okay, so for the result, we return
-    // result["vertices"], which is a list of tuples (x, y) from the triangulation
-    // result["triangles"] which is a list of tuples (v1, v2, v3) where v1, v2, and v3 are the indices of the vertices
-
-    auto [py_vertices, py_triangles] = convert_meshing_result_to_python(cdt);
-
-    nb::dict result;
-    result["vertices"] = py_vertices;
-    result["triangles"] = py_triangles;
-    return result;
+    // result["vertices"] is an (N, 2) float64 array of vertex coordinates,
+    // result["triangles"] an (M, 3) uint32 array of vertex indices.
+    nb::dict py_result;
+    py_result["vertices"] = vector_to_numpy(std::move(result.vertices), 2);
+    py_result["triangles"] = vector_to_numpy(std::move(result.triangles), 3);
+    return py_result;
 }
 
 // PolyBoundaryDistanceMap implementation

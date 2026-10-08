@@ -596,12 +596,7 @@ class Mesher:
             # Re-raise as MeshingException to provide clearer error context
             raise MeshingException(str(e)) from e
 
-        mesh = Mesh.from_triangle_soup(
-            np.asarray(cgal_output['vertices'], dtype=np.float64),
-            cgal_output['triangles']
-        )
-
-        return mesh
+        return Mesh.from_triangle_soup(cgal_output['vertices'], cgal_output['triangles'])
 
 
 Mesher.Config.RELAXED = Mesher.Config(
