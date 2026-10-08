@@ -1,8 +1,11 @@
 import pytest
+import numpy as np
 import shapely.geometry
+import threading
+from dataclasses import fields
 
-from padne import mesh, problem, solver
-from padne.ui import VertexSpatialIndex, FaceSpatialIndex, prepare_ui_data
+from padne import mesh, problem, solver, parallel, ui
+from padne.ui import VertexSpatialIndex, FaceSpatialIndex, RenderedMesh, prepare_ui_data
 
 
 class TestSpatialIndex:
@@ -197,3 +200,162 @@ class TestPrepareUiData:
             assert mode.solution is solution
             assert "F.Cu" in mode.spatial_indices
             assert mode.max_value >= mode.min_value
+
+
+def _ring_mesh():
+    # An exterior boundary, a hole, and shared interior edges. Face traversal
+    # starts at the mesh's face.edge, which need not be the soup's first vertex.
+    return mesh.Mesh.from_triangle_soup(
+        [mesh.Point(x, y) for x, y in
+         [(0, 0), (4, 0), (4, 4), (0, 4), (1, 1), (3, 1), (3, 3), (1, 3)]],
+        [(0, 1, 5), (0, 5, 4), (1, 2, 6), (1, 6, 5),
+         (2, 3, 7), (2, 7, 6), (3, 0, 4), (3, 4, 7)],
+    )
+
+
+def _reference_render(msh, values):
+    """Independent half-edge traversal oracle for the former rendering path."""
+    triangles, colors, edges, boundary = [], [], [], []
+    for face in msh.faces:
+        for edge in face.edges:
+            p, q = edge.origin.p, edge.next.origin.p
+            triangles.extend((p.x, p.y))
+            colors.append(values[face] if isinstance(values, mesh.TwoForm)
+                          else values[edge.origin])
+            target = boundary if edge.twin.is_boundary else edges
+            target.extend((p.x, p.y, q.x, q.y))
+    return RenderedMesh.PreparedData(
+        np.asarray(triangles, dtype=np.float32), np.asarray(colors, dtype=np.float32),
+        np.asarray(edges, dtype=np.float32), np.full(len(edges) // 4 * 6, 0.9, dtype=np.float32),
+        np.asarray(boundary, dtype=np.float32), np.full(len(boundary) // 4 * 6, 0.9, dtype=np.float32),
+    )
+
+
+def _assert_render_equal(actual, expected):
+    for f in fields(RenderedMesh.PreparedData):
+        a, b = getattr(actual, f.name), getattr(expected, f.name)
+        np.testing.assert_array_equal(a, b)
+        assert a.dtype == np.float32
+        assert a.flags.c_contiguous
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_bulk_render_preserves_face_edge_and_field_order(empty):
+    msh = mesh.Mesh() if empty else _ring_mesh()
+    voltage, power = mesh.ZeroForm(msh), mesh.TwoForm(msh)
+    voltage.values[:] = np.arange(len(msh.vertices)) * -0.137 + 1.23456789
+    power.values[:] = np.arange(len(msh.faces)) * 0.197
+    for values, prepare in [(voltage, RenderedMesh.prepare_zero_form),
+                            (power, RenderedMesh.prepare_two_form)]:
+        _assert_render_equal(prepare(msh, values), _reference_render(msh, values))
+    zero = mesh.ZeroForm(msh)
+    _assert_render_equal(RenderedMesh.prepare_mesh(msh), _reference_render(msh, zero))
+
+    expected_mask = np.asarray([
+        [edge.twin.is_boundary for edge in face.edges] for face in msh.faces
+    ], dtype=np.uint8).reshape(-1, 3)
+    np.testing.assert_array_equal(msh.triangle_boundary_mask(), expected_mask)
+    if not empty:
+        assert expected_mask.sum() == 8  # Four exterior edges and four hole edges.
+
+
+def _ui_solution():
+    layers, solutions = [], []
+    ring = shapely.geometry.Polygon(
+        [(0, 0), (4, 0), (4, 4), (0, 4)],
+        holes=[[(1, 1), (3, 1), (3, 3), (1, 3)]],
+    )
+    for i, name in enumerate(["F.Cu", "B.Cu", "empty"]):
+        msh = _ring_mesh()
+        voltage, power = mesh.ZeroForm(msh), mesh.TwoForm(msh)
+        voltage.values[:] = np.arange(8) * 0.1 + i * 10
+        power.values[:] = np.arange(8) * 0.3 + i * 20
+        other, empty = _ring_mesh(), mesh.Mesh()
+        other_voltage, other_power = mesh.ZeroForm(other), mesh.TwoForm(other)
+        other_voltage.values[:] = voltage.values + 0.5
+        other_power.values[:] = power.values + 0.7
+        layers.append(problem.Layer(shapely.geometry.MultiPolygon([ring]), name, 1.0))
+        # Two meshes check concatenation ordering; the last layer has no fields.
+        solutions.append(solver.LayerSolution(
+            meshes=[msh, other, empty] if i < 2 else [],
+            potentials=[voltage, other_voltage, mesh.ZeroForm(empty)] if i < 2 else [],
+            power_densities=[power, other_power, mesh.TwoForm(empty)] if i < 2 else [],
+            disconnected_meshes=[_ring_mesh()],
+        ))
+    return solver.Solution(problem.Problem(layers, []), solutions,
+                           solver.SolverInfo(0.0, 0.0, 0.0))
+
+
+def test_bulk_spatial_indices_preserve_order_and_snapshot_values():
+    sol = _ui_solution()
+    layer, ls = sol.problem.layers[0], sol.layer_solutions[0]
+    for index_type, form_values, coords in [
+        (VertexSpatialIndex, ls.potentials,
+         [[v.p.x, v.p.y] for msh in ls.meshes for v in msh.vertices]),
+        (FaceSpatialIndex, ls.power_densities,
+         [[f.centroid.x, f.centroid.y] for msh in ls.meshes for f in msh.faces]),
+    ]:
+        index = index_type.from_layer_data(layer, ls)
+        np.testing.assert_allclose(index.tree.data, coords, rtol=0, atol=1e-15)
+        expected = np.concatenate([f.values for f in form_values])
+        np.testing.assert_array_equal(index.values, expected)
+        form_values[0].values[:] = -100
+        np.testing.assert_array_equal(index.values, expected)
+        assert index.query_nearest(2, 2) is None  # Hole is not copper.
+        assert index.query_nearest(10, 10) is None
+        assert isinstance(index.query_nearest(0.1, 0.1), float)
+
+
+def test_parallel_ui_matches_serial_and_shares_geometry(monkeypatch):
+    sol = _ui_solution()
+    monkeypatch.setattr(parallel, "_default", parallel.Parallel(parallel.Config(jobs=1)))
+    serial = prepare_ui_data(sol)
+    # Force the small correctness fixture through the same worker path as a
+    # large board. Fail immediately if CPU preparation accidentally touches GL.
+    monkeypatch.setattr(ui, "_UI_PARALLEL_MIN_SIZE", 1)
+    monkeypatch.setattr(ui.gl, "glGenVertexArrays",
+                        lambda *_: pytest.fail("GL called during CPU preparation"))
+    calls = []
+    original_map = parallel.thread_map
+
+    def observed_map(fn, items):
+        worker_ids = set()
+        lock = threading.Lock()
+
+        def observed(item):
+            with lock:
+                worker_ids.add(threading.get_ident())
+            return fn(item)
+
+        result = original_map(observed, items)
+        calls.append(worker_ids)
+        return result
+
+    monkeypatch.setattr(parallel, "thread_map", observed_map)
+    monkeypatch.setattr(parallel, "_default", parallel.Parallel(parallel.Config(jobs=4)))
+    threaded = prepare_ui_data(sol)
+    assert len(calls) == 3  # Geometry plus vertex and face spatial indexes.
+    assert all(ids and threading.get_ident() not in ids for ids in calls)
+    for a, b in zip(serial.modes, threaded.modes):
+        assert (a.min_value, a.max_value) == (b.min_value, b.max_value)
+        assert b.rendered_meshes == b.disconnected_rendered_meshes == {}
+        for layer in sol.problem.layers:
+            name = layer.name
+            np.testing.assert_array_equal(a.spatial_indices[name].values,
+                                          b.spatial_indices[name].values)
+            if a.spatial_indices[name].tree is not None:
+                np.testing.assert_array_equal(a.spatial_indices[name].tree.data,
+                                              b.spatial_indices[name].tree.data)
+            for attr in ["_prepared_rendered_meshes", "_prepared_disconnected_rendered_meshes"]:
+                for expected, actual in zip(getattr(a, attr)[name], getattr(b, attr)[name]):
+                    _assert_render_equal(actual, expected)
+    voltage, power = threaded.modes
+    assert voltage._prepared_disconnected_rendered_meshes is power._prepared_disconnected_rendered_meshes
+    for a, b in zip(voltage._prepared_rendered_meshes["F.Cu"],
+                    power._prepared_rendered_meshes["F.Cu"]):
+        for name in ["triangle_vertices", "edge_vertices", "edge_colors",
+                     "boundary_vertices", "boundary_colors"]:
+            assert getattr(a, name) is getattr(b, name)
+            assert not getattr(a, name).flags.writeable
+    assert voltage.spatial_indices["empty"].tree is None
+    assert power.spatial_indices["empty"].tree is None
