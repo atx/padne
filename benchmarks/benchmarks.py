@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import shapely.geometry
 from padne.mesh import Mesher, Mesh, Point, ZeroForm, TwoForm
-from padne import kicad, solver, problem
+from padne import kicad, solver, problem, parallel
 import padne.ui as ui
 import padne._cgal as cgal
 import pcbnew
@@ -841,6 +841,31 @@ class RenderedMeshSuite(_MeshWithFormsSuiteBase):
 
     time_prepare_two_form.params = ['small_rect', 'large_rect', 'rect_with_hole']
     time_prepare_two_form.param_names = ['geometry']
+
+
+class UIPreparationSuite:
+    """Full CPU preparation, including shared geometry and both spatial indexes."""
+
+    params = (['two_big_planes', 'many_meshes_many_vias'], [1, 4])
+    param_names = ['project', 'jobs']
+
+    def setup_cache(self):
+        return {name: solver.solve(prob) for name, prob in
+                _load_problems(self.params[0]).items()}
+
+    def setup(self, cache, project, jobs):
+        self.original_jobs = parallel.config().jobs
+        parallel.shutdown()
+        parallel.configure(jobs)
+
+    def teardown(self, cache, project, jobs):
+        parallel.configure(self.original_jobs)
+
+    def time_prepare_ui_data(self, cache, project, jobs):
+        ui.prepare_ui_data(cache[project])
+
+    def peakmem_prepare_ui_data(self, cache, project, jobs):
+        ui.prepare_ui_data(cache[project])
 
 
 class NFormSuite(_MeshWithFormsSuiteBase):

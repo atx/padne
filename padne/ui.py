@@ -26,7 +26,7 @@ from PySide6.QtCore import QTimer
 import shapely.geometry
 from scipy.spatial import cKDTree
 
-from . import mesh, solver, units, colormaps
+from . import mesh, solver, units, colormaps, parallel
 from .context import stage_timer
 
 # In this file, there are some cursed naming conventions due to the fact
@@ -143,14 +143,28 @@ void main() {
 """
 
 
+# Small meshes spend most of their time allocating/wrapping arrays under the
+# GIL. Even batches of them regress with threads. Only dispatch substantial
+# native work, and preserve input order when adding the small serial results.
+_UI_PARALLEL_MIN_SIZE = 32768
+
+
+def _map_ui_work(fn, items, sizes):
+    large = [i for i, size in enumerate(sizes) if size >= _UI_PARALLEL_MIN_SIZE]
+    if parallel.config().jobs == 1 or len(large) < 2:
+        return [fn(item) for item in items]
+    results = dict(zip(large, parallel.thread_map(fn, [items[i] for i in large])))
+    return [results[i] if i in results else fn(item) for i, item in enumerate(items)]
+
+
 @dataclass
 class BaseSpatialIndex:
     tree: Optional[cKDTree]
-    values: list[float]
+    values: np.ndarray
     shape: shapely.geometry.MultiPolygon
 
     @classmethod
-    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[list[list[float]], list[float]]:
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError("This method should be implemented in subclasses")
 
     @classmethod
@@ -158,11 +172,10 @@ class BaseSpatialIndex:
         vertices, values = cls._extract_points_and_values(layer_solution)
 
         # cKDTree is not happy with empty arrays, so we just return an empty index
-        if not vertices:
-            return cls(None, [], layer.shape)
+        if len(vertices) == 0:
+            return cls(None, values, layer.shape)
 
-        vertex_array = np.array(vertices)
-        tree = cKDTree(vertex_array)
+        tree = cKDTree(vertices)
 
         return cls(tree, values, layer.shape)
 
@@ -181,7 +194,7 @@ class BaseSpatialIndex:
 
         # Return value if distance is reasonable
         if distance < float('inf'):
-            return self.values[index]
+            return float(self.values[index])
 
         return None
 
@@ -190,36 +203,28 @@ class VertexSpatialIndex(BaseSpatialIndex):
     """Spatial index for fast vertex value lookups within a layer."""
 
     @classmethod
-    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[list[list[float]], list[float]]:
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[np.ndarray, np.ndarray]:
         """Extract vertex coordinates and their values from the layer solution."""
-        all_vertices = []
-        all_values = []
-
-        for msh, values in zip(layer_solution.meshes, layer_solution.potentials):
-            for vertex in msh.vertices:
-                all_vertices.append([vertex.p.x, vertex.p.y])
-                all_values.append(values[vertex])
-
-        return all_vertices, all_values
+        pairs = list(zip(layer_solution.meshes, layer_solution.potentials))
+        if not pairs:
+            return np.empty((0, 2)), np.empty(0)
+        return (np.concatenate([msh.positions() for msh, _ in pairs]),
+                np.concatenate([values.values for _, values in pairs]))
 
 
 class FaceSpatialIndex(BaseSpatialIndex):
     """Spatial index for fast face value lookups within a layer."""
 
     @classmethod
-    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[list[list[float]], list[float]]:
+    def _extract_points_and_values(cls, layer_solution: solver.LayerSolution) -> tuple[np.ndarray, np.ndarray]:
         """Extract face coordinates and their values from the layer solution."""
-        all_faces = []
-        all_values = []
-
-        for msh, values in zip(layer_solution.meshes, layer_solution.power_densities):
-            for face in msh.faces:
-                # Use the centroid of the face as the representative point
-                centroid = face.centroid
-                all_faces.append([centroid.x, centroid.y])
-                all_values.append(values[face])
-
-        return all_faces, all_values
+        pairs = list(zip(layer_solution.meshes, layer_solution.power_densities))
+        if not pairs:
+            return np.empty((0, 2)), np.empty(0)
+        return (np.concatenate([
+                    msh.positions()[msh.triangles()].mean(axis=1)
+                    for msh, _ in pairs]),
+                np.concatenate([values.values for _, values in pairs]))
 
 
 class BaseTool(abc.ABC):
@@ -684,123 +689,66 @@ class RenderedMesh:
                    vao_boundary,
                    len(boundary_vertices) // 2)
 
-    @classmethod
-    def prepare_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm) -> 'RenderedMesh.PreparedData':
-        # Note: This code is a relatively optimized hot loop. Even though, it
-        # does not provide huge performance benefits (20%-ish) over the original
-        # version. At some point, it will probably be replaced by another approach.
-        n_faces = len(msh.faces)
+    @dataclass(frozen=True)
+    class PreparedGeometry:
+        """Read-only CPU geometry shared by the two field rendering modes."""
+        triangles: np.ndarray
+        triangle_vertices: np.ndarray
+        edge_vertices: np.ndarray
+        edge_colors: np.ndarray
+        boundary_vertices: np.ndarray
+        boundary_colors: np.ndarray
 
-        # Triangle arrays - exact size known (assuming triangles)
-        triangle_vertices = np.zeros(n_faces * 6, dtype=np.float32)
-        triangle_colors = np.zeros(n_faces * 3, dtype=np.float32)
-
-        # Edge arrays - preallocate to max, clip later
-        max_edges = n_faces * 3
-        edge_vertices = np.zeros(max_edges * 4, dtype=np.float32)
-        boundary_vertices = np.zeros(max_edges * 4, dtype=np.float32)
-
-        n_edges = 0
-        n_boundary = 0
-        values_array = values.values  # Direct numpy array access
-
-        for i_face, face in enumerate(msh.faces):
-            for i_edge, edge in enumerate(face.edges):
-                # Triangle vertex
-                vertex = edge.origin
-                p = vertex.p
-                triangle_vertices[i_face * 6 + i_edge * 2] = p.x
-                triangle_vertices[i_face * 6 + i_edge * 2 + 1] = p.y
-                triangle_colors[i_face * 3 + i_edge] = values_array[vertex.i]
-
-                # Edge data
-                v2 = edge.next.origin
-                if edge.twin.is_boundary:
-                    boundary_vertices[n_boundary * 4 + 0] = p.x
-                    boundary_vertices[n_boundary * 4 + 1] = p.y
-                    boundary_vertices[n_boundary * 4 + 2] = v2.p.x
-                    boundary_vertices[n_boundary * 4 + 3] = v2.p.y
-                    n_boundary += 1
-                else:
-                    edge_vertices[n_edges * 4 + 0] = p.x
-                    edge_vertices[n_edges * 4 + 1] = p.y
-                    edge_vertices[n_edges * 4 + 2] = v2.p.x
-                    edge_vertices[n_edges * 4 + 3] = v2.p.y
-                    n_edges += 1
-
-        # Clip and construct color arrays
-        edge_vertices = edge_vertices[:n_edges * 4]
-        boundary_vertices = boundary_vertices[:n_boundary * 4]
-        edge_colors = np.full(n_edges * 6, 0.9, dtype=np.float32)
-        boundary_colors = np.full(n_boundary * 6, 0.9, dtype=np.float32)
-
-        return cls.PreparedData(
-            triangle_vertices,
-            triangle_colors,
-            edge_vertices,
-            edge_colors,
-            boundary_vertices,
-            boundary_colors,
-        )
+        def with_colors(self, colors: np.ndarray) -> 'RenderedMesh.PreparedData':
+            colors.setflags(write=False)
+            return RenderedMesh.PreparedData(
+                self.triangle_vertices, colors,
+                self.edge_vertices, self.edge_colors,
+                self.boundary_vertices, self.boundary_colors,
+            )
 
     @classmethod
-    def prepare_two_form(cls, msh: mesh.Mesh, values: mesh.TwoForm) -> 'RenderedMesh.PreparedData':
-        # Just like above, this is a relatively optimized hot loop
-        n_faces = len(msh.faces)
+    def prepare_geometry(cls, msh: mesh.Mesh) -> 'RenderedMesh.PreparedGeometry':
+        """Extract face-ordered geometry without Python half-edge traversal.
 
-        # Triangle arrays - exact size known (assuming triangles)
-        triangle_vertices = np.zeros(n_faces * 6, dtype=np.float32)
-        triangle_colors = np.zeros(n_faces * 3, dtype=np.float32)
-
-        # Edge arrays - preallocate to max, clip later
-        max_edges = n_faces * 3
-        edge_vertices = np.zeros(max_edges * 4, dtype=np.float32)
-        boundary_vertices = np.zeros(max_edges * 4, dtype=np.float32)
-
-        n_edges = 0
-        n_boundary = 0
-        values_array = values.values  # Direct numpy array access
-
-        for i_face, face in enumerate(msh.faces):
-            # TwoForm: one color per face (cache outside inner loop)
-            face_color = values_array[face.i]
-
-            for i_edge, edge in enumerate(face.edges):
-                # Triangle vertex
-                p = edge.origin.p
-                triangle_vertices[i_face * 6 + i_edge * 2] = p.x
-                triangle_vertices[i_face * 6 + i_edge * 2 + 1] = p.y
-                triangle_colors[i_face * 3 + i_edge] = face_color
-
-                # Edge data
-                v2 = edge.next.origin
-                if edge.twin.is_boundary:
-                    boundary_vertices[n_boundary * 4 + 0] = p.x
-                    boundary_vertices[n_boundary * 4 + 1] = p.y
-                    boundary_vertices[n_boundary * 4 + 2] = v2.p.x
-                    boundary_vertices[n_boundary * 4 + 3] = v2.p.y
-                    n_boundary += 1
-                else:
-                    edge_vertices[n_edges * 4 + 0] = p.x
-                    edge_vertices[n_edges * 4 + 1] = p.y
-                    edge_vertices[n_edges * 4 + 2] = v2.p.x
-                    edge_vertices[n_edges * 4 + 3] = v2.p.y
-                    n_edges += 1
-
-        # Clip and construct color arrays
-        edge_vertices = edge_vertices[:n_edges * 4]
-        boundary_vertices = boundary_vertices[:n_boundary * 4]
-        edge_colors = np.full(n_edges * 6, 0.9, dtype=np.float32)
-        boundary_colors = np.full(n_boundary * 6, 0.9, dtype=np.float32)
-
-        return cls.PreparedData(
-            triangle_vertices,
-            triangle_colors,
-            edge_vertices,
-            edge_colors,
-            boundary_vertices,
-            boundary_colors,
+        Interior edges deliberately occur twice, matching the original drawing
+        order. Boundary edges include both the exterior and any hole rims.
+        Native extraction releases the GIL; each task owns its output arrays.
+        """
+        triangles = msh.triangles()
+        corners = msh.positions()[triangles].astype(np.float32)
+        boundary = msh.triangle_boundary_mask().reshape(-1).astype(bool)
+        edges = np.stack((corners, np.roll(corners, -1, axis=1)), axis=2).reshape(-1, 4)
+        edge_vertices = edges[~boundary].reshape(-1)
+        boundary_vertices = edges[boundary].reshape(-1)
+        geometry = cls.PreparedGeometry(
+            triangles, corners.reshape(-1),
+            edge_vertices, np.full(edge_vertices.size // 4 * 6, 0.9, dtype=np.float32),
+            boundary_vertices, np.full(boundary_vertices.size // 4 * 6, 0.9, dtype=np.float32),
         )
+        for array in (geometry.triangles, geometry.triangle_vertices,
+                      geometry.edge_vertices, geometry.edge_colors,
+                      geometry.boundary_vertices, geometry.boundary_colors):
+            array.setflags(write=False)
+        return geometry
+
+    @classmethod
+    def prepare_zero_form(cls, msh: mesh.Mesh, values: mesh.ZeroForm,
+                          geometry: Optional['RenderedMesh.PreparedGeometry'] = None
+                          ) -> 'RenderedMesh.PreparedData':
+        if geometry is None:
+            geometry = cls.prepare_geometry(msh)
+        colors = values.values[geometry.triangles].astype(np.float32).reshape(-1)
+        return geometry.with_colors(colors)
+
+    @classmethod
+    def prepare_two_form(cls, msh: mesh.Mesh, values: mesh.TwoForm,
+                         geometry: Optional['RenderedMesh.PreparedGeometry'] = None
+                         ) -> 'RenderedMesh.PreparedData':
+        if geometry is None:
+            geometry = cls.prepare_geometry(msh)
+        colors = np.repeat(values.values.astype(np.float32), 3)
+        return geometry.with_colors(colors)
 
     def render_triangles(self):
         gl.glBindVertexArray(self.vao_triangles)
@@ -815,16 +763,13 @@ class RenderedMesh:
         gl.glDrawArrays(gl.GL_LINES, 0, self.boundary_count)
 
     @classmethod
-    def prepare_mesh(cls, msh: mesh.Mesh) -> "RenderedMesh.PreparedData":
-        """Create a RenderedMesh from a mesh with zero values.
-        Used for disconnected copper regions that will be rendered in gray."""
-        # Create a ZeroForm with all values set to zero
-        zero_values = mesh.ZeroForm(msh)
-        for vertex in msh.vertices:
-            zero_values[vertex] = 0.0
-
-        # Use the existing from_zero_form method
-        return cls.prepare_zero_form(msh, zero_values)
+    def prepare_mesh(cls, msh: mesh.Mesh,
+                     geometry: Optional['RenderedMesh.PreparedGeometry'] = None
+                     ) -> "RenderedMesh.PreparedData":
+        """Prepare disconnected copper, with a zero-valued field."""
+        if geometry is None:
+            geometry = cls.prepare_geometry(msh)
+        return geometry.with_colors(np.zeros(len(msh.faces) * 3, dtype=np.float32))
 
 
 @dataclass
@@ -907,10 +852,10 @@ class MeshViewer(QOpenGLWidget):
             max_val = float('-inf')
 
             for index in self.spatial_indices.values():
-                if not index.values:
+                if len(index.values) == 0:
                     continue
-                min_val = min(min_val, min(index.values))
-                max_val = max(max_val, max(index.values))
+                min_val = min(min_val, float(index.values.min()))
+                max_val = max(max_val, float(index.values.max()))
 
             if min_val == float('inf'):
                 min_val, max_val = 0.0, 1.0
@@ -927,7 +872,9 @@ class MeshViewer(QOpenGLWidget):
             raise NotImplementedError("This method should be implemented in subclasses")
 
         @abc.abstractmethod
-        def set_solution(self, solution: solver.Solution):
+        def set_solution(self, solution: solver.Solution,
+                         geometries: Optional[dict[mesh.Mesh, RenderedMesh.PreparedGeometry]] = None,
+                         disconnected: Optional[dict[str, list[RenderedMesh.PreparedData]]] = None):
             """Initialize this mode with solution data (build indices + meshes)."""
             self.solution = solution
             self.spatial_indices.clear()
@@ -938,17 +885,17 @@ class MeshViewer(QOpenGLWidget):
 
             # The OpenGL-independent part can be done right away
             self._prepared_rendered_meshes = {
-                layer.name: self._prepare_rendered_meshes_for_layer(layer.name)
+                layer.name: self._prepare_rendered_meshes_for_layer(layer.name, geometries)
                 for layer in self.solution.problem.layers
             }
-            self._prepared_disconnected_rendered_meshes = {
+            self._prepared_disconnected_rendered_meshes = disconnected if disconnected is not None else {
                 layer.name: self._prepare_disconnected_rendered_meshes_for_layer(layer.name)
                 for layer in self.solution.problem.layers
             }
 
             self._build_spatial_indices()
 
-        def _prepare_rendered_meshes_for_layer(self, layer_name) -> list[RenderedMesh.PreparedData]:
+        def _prepare_rendered_meshes_for_layer(self, layer_name, geometries=None) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for a specific layer."""
             raise NotImplementedError("This method should be implemented in subclasses")
 
@@ -1022,12 +969,14 @@ class MeshViewer(QOpenGLWidget):
 
         def _build_spatial_indices(self):
             """Build spatial indices for fast vertex lookups."""
-            self.spatial_indices.clear()
-            for layer, layer_solution in zip(self.solution.problem.layers, self.solution.layer_solutions):
-                spatial_index = VertexSpatialIndex.from_layer_data(layer, layer_solution)
-                self.spatial_indices[layer.name] = spatial_index
+            layers = list(zip(self.solution.problem.layers, self.solution.layer_solutions))
+            indices = _map_ui_work(
+                lambda item: VertexSpatialIndex.from_layer_data(*item), layers,
+                [sum(len(msh.vertices) for msh in ls.meshes) for _, ls in layers],
+            )
+            self.spatial_indices = {layer.name: index for (layer, _), index in zip(layers, indices)}
 
-        def _prepare_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh.PreparedData]:
+        def _prepare_rendered_meshes_for_layer(self, layer_name: str, geometries=None) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for a specific layer."""
             prepared_meshes = []
             for layer, layer_solution in zip(self.solution.problem.layers,
@@ -1035,7 +984,8 @@ class MeshViewer(QOpenGLWidget):
                 if layer.name != layer_name:
                     continue
                 for msh, values in zip(layer_solution.meshes, layer_solution.potentials):
-                    prepared_meshes.append(RenderedMesh.prepare_zero_form(msh, values))
+                    prepared_meshes.append(RenderedMesh.prepare_zero_form(
+                        msh, values, None if geometries is None else geometries[msh]))
 
             return prepared_meshes
 
@@ -1053,12 +1003,14 @@ class MeshViewer(QOpenGLWidget):
 
         def _build_spatial_indices(self):
             """Build spatial indices for fast face lookups."""
-            self.spatial_indices.clear()
-            for layer, layer_solution in zip(self.solution.problem.layers, self.solution.layer_solutions):
-                spatial_index = FaceSpatialIndex.from_layer_data(layer, layer_solution)
-                self.spatial_indices[layer.name] = spatial_index
+            layers = list(zip(self.solution.problem.layers, self.solution.layer_solutions))
+            indices = _map_ui_work(
+                lambda item: FaceSpatialIndex.from_layer_data(*item), layers,
+                [sum(len(msh.faces) for msh in ls.meshes) for _, ls in layers],
+            )
+            self.spatial_indices = {layer.name: index for (layer, _), index in zip(layers, indices)}
 
-        def _prepare_rendered_meshes_for_layer(self, layer_name: str) -> list[RenderedMesh.PreparedData]:
+        def _prepare_rendered_meshes_for_layer(self, layer_name: str, geometries=None) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for a specific layer."""
             prepared_meshes = []
             for layer, layer_solution in zip(self.solution.problem.layers,
@@ -1066,7 +1018,8 @@ class MeshViewer(QOpenGLWidget):
                 if layer.name != layer_name:
                     continue
                 for msh, values in zip(layer_solution.meshes, layer_solution.power_densities):
-                    prepared_meshes.append(RenderedMesh.prepare_two_form(msh, values))
+                    prepared_meshes.append(RenderedMesh.prepare_two_form(
+                        msh, values, None if geometries is None else geometries[msh]))
             return prepared_meshes
 
     # Signal to notify when the value range changes
@@ -2077,13 +2030,28 @@ def prepare_ui_data(solution: solver.Solution) -> PreparedUI:
     Build the GL-free UI data for `solution`: per-mode spatial indices and the
     prepared render arrays.
 
-    Pure Python/numpy -- it never touches Qt or the OpenGL context, so it can
+    CPU-only native/numpy work -- it never touches Qt or the OpenGL context, so it can
     run before the window exists. The GL side (VAO upload, shader compilation)
     still happens later, on the render thread.
     """
+    # Mesh geometry is identical for every field mode. Prepare it once, using
+    # threads for large meshes, and share only read-only CPU arrays. GL objects remain local
+    # to each mode and are created later with the rendering context current.
+    meshes = list(dict.fromkeys(
+        msh for ls in solution.layer_solutions
+        for msh in [*ls.meshes, *ls.disconnected_meshes]
+    ))
+    geometries = dict(zip(meshes, _map_ui_work(
+        RenderedMesh.prepare_geometry, meshes, [len(msh.faces) for msh in meshes],
+    )))
+    disconnected = {
+        layer.name: [RenderedMesh.prepare_mesh(msh, geometries[msh])
+                     for msh in ls.disconnected_meshes]
+        for layer, ls in zip(solution.problem.layers, solution.layer_solutions)
+    }
     modes = MeshViewer.default_modes()
     for mode in modes:
-        mode.set_solution(solution)
+        mode.set_solution(solution, geometries, disconnected)
         mode.autoscale_values(solution)
     return PreparedUI(solution=solution, modes=modes)
 

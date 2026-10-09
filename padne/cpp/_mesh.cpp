@@ -595,35 +595,68 @@ NB_MODULE(_mesh, m) {
         // vectorization (KDTree construction, solution transfer, ...).
         .def("positions", [](const Mesh &m_) {
             size_t n = m_.n_vertices();
-            auto *buf = new std::vector<double>(2 * n);
-            for (size_t i = 0; i < n; i++) {
-                (*buf)[2 * i] = m_.vertex_x[i];
-                (*buf)[2 * i + 1] = m_.vertex_y[i];
-            }
+            auto *buf = new std::vector<double>();
             nb::capsule owner(buf, [](void *p) noexcept {
                 delete static_cast<std::vector<double> *>(p);
             });
+            {
+                nb::gil_scoped_release nogil;
+                buf->resize(2 * n);
+                for (size_t i = 0; i < n; i++) {
+                    (*buf)[2 * i] = m_.vertex_x[i];
+                    (*buf)[2 * i + 1] = m_.vertex_y[i];
+                }
+            }
             return nb::ndarray<nb::numpy, double>(buf->data(), {n, 2}, owner);
         })
         // Interior-face vertex indices as an (F, 3) array, in face index
         // order. Requires all interior faces to be triangles.
         .def("triangles", [](const Mesh &m_) {
             size_t nf = m_.n_faces(false);
-            auto *buf = new std::vector<uint32_t>(3 * nf);
-            for (size_t f = 0; f < nf; f++) {
-                uint32_t e0 = m_.face_edge[f];
-                uint32_t e1 = m_.he_next[e0];
-                uint32_t e2 = m_.he_next[e1];
-                if (m_.he_next[e2] != e0)
-                    throw std::runtime_error("Non-triangular interior face");
-                (*buf)[3 * f] = m_.he_origin[e0];
-                (*buf)[3 * f + 1] = m_.he_origin[e1];
-                (*buf)[3 * f + 2] = m_.he_origin[e2];
-            }
+            auto *buf = new std::vector<uint32_t>();
             nb::capsule owner(buf, [](void *p) noexcept {
                 delete static_cast<std::vector<uint32_t> *>(p);
             });
+            {
+                nb::gil_scoped_release nogil;
+                buf->resize(3 * nf);
+                for (size_t f = 0; f < nf; f++) {
+                    uint32_t e0 = m_.face_edge[f];
+                    uint32_t e1 = m_.he_next[e0];
+                    uint32_t e2 = m_.he_next[e1];
+                    if (m_.he_next[e2] != e0)
+                        throw std::runtime_error("Non-triangular interior face");
+                    (*buf)[3 * f] = m_.he_origin[e0];
+                    (*buf)[3 * f + 1] = m_.he_origin[e1];
+                    (*buf)[3 * f + 2] = m_.he_origin[e2];
+                }
+            }
             return nb::ndarray<nb::numpy, uint32_t>(buf->data(), {nf, 3}, owner);
+        })
+        // One byte per triangle edge, in the same order as triangles(). A
+        // nonzero byte means its twin belongs to an exterior or hole boundary.
+        // Like the other bulk readers, requires no concurrent mesh mutation.
+        .def("triangle_boundary_mask", [](const Mesh &m_) {
+            size_t nf = m_.n_faces(false);
+            auto *buf = new std::vector<uint8_t>();
+            nb::capsule owner(buf, [](void *p) noexcept {
+                delete static_cast<std::vector<uint8_t> *>(p);
+            });
+            {
+                nb::gil_scoped_release nogil;
+                buf->resize(3 * nf);
+                for (size_t f = 0; f < nf; f++) {
+                    uint32_t start = m_.face_edge[f];
+                    uint32_t h = start;
+                    for (size_t k = 0; k < 3; k++) {
+                        (*buf)[3 * f + k] = bool(m_.he_face[h ^ 1] & BOUNDARY_BIT);
+                        h = m_.he_next[h];
+                    }
+                    if (h != start)
+                        throw std::runtime_error("Non-triangular interior face");
+                }
+            }
+            return nb::ndarray<nb::numpy, uint8_t>(buf->data(), {nf, 3}, owner);
         })
         // Cotan-weighted Laplace operator in COO form: a (rows, cols, values)
         // tuple over mesh-local vertex indices, including the diagonal.
