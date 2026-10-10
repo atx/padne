@@ -1227,32 +1227,17 @@ class MeshViewer(QOpenGLWidget):
         return self.width() / self.height() if self.height() > 0 else 1.0
 
     def _compute_mesh_bounds(self) -> tuple[float, float, float, float] | None:
-        """
-        Compute the bounding box of all meshes across all layers.
-
-        Returns:
-            A tuple of (min_x, min_y, max_x, max_y) or None if no vertices found.
-        """
-        if not self.solution or not self.solution.layer_solutions:
+        """Bounding box (min_x, min_y, max_x, max_y) of all meshes, or None if there are no vertices."""
+        if not self.solution:
             return None
 
-        min_x, min_y = float('inf'), float('inf')
-        max_x, max_y = float('-inf'), float('-inf')
-
-        for layer_solution in self.solution.layer_solutions:
-            for msh in layer_solution.meshes:
-                for vertex in msh.vertices:
-                    x, y = vertex.p.x, vertex.p.y
-                    min_x = min(min_x, x)
-                    min_y = min(min_y, y)
-                    max_x = max(max_x, x)
-                    max_y = max(max_y, y)
-
-        # Check if we found any vertices
-        if min_x == float('inf'):
+        positions = [msh.positions() for ls in self.solution.layer_solutions for msh in ls.meshes]
+        pts = np.concatenate(positions) if positions else np.empty((0, 2))
+        if len(pts) == 0:
             return None
 
-        return min_x, min_y, max_x, max_y
+        (min_x, min_y), (max_x, max_y) = pts.min(axis=0), pts.max(axis=0)
+        return float(min_x), float(min_y), float(max_x), float(max_y)
 
     def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
         """
