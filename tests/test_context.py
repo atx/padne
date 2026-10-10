@@ -5,6 +5,10 @@ import pytest
 from padne import context
 
 
+def _local_key(test_fn, name):
+    return f"test_context.{test_fn.__qualname__}.<locals>.{name}"
+
+
 class TestTimingSession:
 
     def test_durations_empty_when_nothing_recorded(self):
@@ -92,11 +96,8 @@ class TestStageTimerDecorator:
         with context.timing_session() as s:
             assert my_decorated_func() == 42
         # qualname for a function defined inside a method is nested
-        expected = (
-            f"test_context."
-            f"{TestStageTimerDecorator.test_bare_decorator_uses_qualname.__qualname__}"
-            f".<locals>.my_decorated_func"
-        )
+        expected = _local_key(TestStageTimerDecorator.test_bare_decorator_uses_qualname,
+                              "my_decorated_func")
         with s.durations as d:
             assert expected in d
 
@@ -154,11 +155,7 @@ class TestDirectSessionAPI:
             def my_fn():
                 return 7
             assert my_fn() == 7
-        expected = (
-            f"test_context."
-            f"{TestDirectSessionAPI.test_bare_decorator_on_session.__qualname__}"
-            f".<locals>.my_fn"
-        )
+        expected = _local_key(TestDirectSessionAPI.test_bare_decorator_on_session, "my_fn")
         with s.durations as d:
             assert expected in d
 
