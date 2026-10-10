@@ -622,6 +622,9 @@ class ShaderProgram:
 
         return cls(shader_program)
 
+    def set_mvp(self, mvp: np.ndarray):
+        gl.glUniformMatrix4fv(self.shader_program.uniformLocation("mvp"), 1, gl.GL_TRUE, mvp.flatten())
+
     @contextlib.contextmanager
     def use(self):
         self.shader_program.bind()
@@ -1202,6 +1205,7 @@ class MeshViewer(QOpenGLWidget):
 
         # OpenGL objects
         self.mesh_shader = None
+        self.disconnected_shader = None
         self.edge_shader = None
         self.points_shader = None
 
@@ -1492,11 +1496,7 @@ class MeshViewer(QOpenGLWidget):
     def _renderMeshTriangles(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the triangles of the meshes for the current layer."""
         with self.mesh_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.mesh_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.mesh_shader.set_mvp(mvp)
 
             # Set the min/max value uniforms for color scaling
             gl.glUniform1f(
@@ -1514,15 +1514,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderMeshEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the edges of the meshes for the current layer."""
-        if not self.edges_visible or not self.edge_shader:
+        if not self.edges_visible:
             return
 
         with self.edge_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.edge_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.edge_shader.set_mvp(mvp)
 
             # Draw edges for current layer only
             for rmesh in rendered_mesh_list:
@@ -1530,15 +1526,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderBoundaryEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the boundary edges of the meshes for the current layer."""
-        if not self.outline_visible or not self.edge_shader:
+        if not self.outline_visible:
             return
 
         with self.edge_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.edge_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.edge_shader.set_mvp(mvp)
 
             # Draw boundary edges for current layer only
             for rmesh in rendered_mesh_list:
@@ -1546,15 +1538,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderDisconnectedMeshes(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders disconnected copper meshes in gray."""
-        if not self.disconnected_shader or not rendered_mesh_list:
+        if not rendered_mesh_list:
             return
 
         with self.disconnected_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.disconnected_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.disconnected_shader.set_mvp(mvp)
 
             # Draw triangles for disconnected meshes
             for rmesh in rendered_mesh_list:
@@ -1566,15 +1554,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: RenderedPoints) -> None:
         """Renders the connection points for the current layer."""
-        if not self.connection_points_visible or not self.points_shader:
+        if not self.connection_points_visible:
             return
 
         with self.points_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.points_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.points_shader.set_mvp(mvp)
 
             gl.glEnable(gl.GL_PROGRAM_POINT_SIZE)
             rendered_points_obj.render()
