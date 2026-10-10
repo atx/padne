@@ -63,7 +63,7 @@ class Value:
         Raises:
             ValueError: If the string cannot be parsed
         """
-        if not s or not s.strip():
+        if not s.strip():
             raise ValueError(f"Empty value string: '{s}'")
 
         # First, drop all spaces
@@ -75,6 +75,9 @@ class Value:
         if last_character in _KNOWN_UNITS:
             s = s[:-1]
             unit = last_character
+
+        if not s:
+            raise ValueError(f"Missing numeric value before unit '{unit}'")
 
         # Check for SI prefix
         last_character = s[-1]

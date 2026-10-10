@@ -67,6 +67,8 @@ class TestParsing:
             "10..5",      # Double decimal point
             "10 mA V",    # Multiple units
             "10 ZV",      # Invalid prefix
+            "A",          # Unit only
+            "V",          # Unit only
         ]
     )
     def test_invalid_parsing(self, invalid_str):
