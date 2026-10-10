@@ -380,6 +380,38 @@ class TestFilterDeadNetworks:
         assert filtered[1] is off_copper
 
 
+class TestFindBestGroundNodeIndex:
+
+    def test_picks_n_node_of_highest_voltage_source(self):
+        nodes = [problem.NodeID() for _ in range(6)]
+        networks = [
+            problem.Network(connections=[], elements=[
+                problem.VoltageSource(p=nodes[0], n=nodes[1], voltage=1.0),
+                problem.Resistor(a=nodes[0], b=nodes[1], resistance=1.0),
+            ]),
+            problem.Network(connections=[], elements=[
+                problem.VoltageSource(p=nodes[2], n=nodes[3], voltage=5.0),
+                problem.VoltageSource(p=nodes[4], n=nodes[5], voltage=3.0),
+            ]),
+        ]
+        prob = problem.Problem(layers=[], networks=networks)
+        node_indexer = solver.NodeIndexer(
+            node_to_global_index={node: 10 + i for i, node in enumerate(nodes)})
+
+        assert solver.find_best_ground_node_index(prob, node_indexer) == 13
+
+    def test_falls_back_to_zero_without_voltage_sources(self):
+        a, b = problem.NodeID(), problem.NodeID()
+        prob = problem.Problem(layers=[], networks=[
+            problem.Network(connections=[], elements=[
+                problem.CurrentSource(f=a, t=b, current=1.0),
+            ]),
+        ])
+        node_indexer = solver.NodeIndexer(node_to_global_index={a: 5, b: 6})
+
+        assert solver.find_best_ground_node_index(prob, node_indexer) == 0
+
+
 class TestSolverMeshLayer:
     def test_generate_meshes_for_problem_simple_geometry(self, kicad_test_projects):
         """Test that generate_meshes_for_problem correctly meshes layers from the simple_geometry project."""
