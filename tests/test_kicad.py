@@ -18,6 +18,28 @@ from padne import kicad, problem
 from conftest import for_all_kicad_projects
 
 
+# Points inside and outside the castellated_vias_internal_cutout board outline
+CASTELLATED_INSIDE_POINTS = [
+    (100.2, 90.2),
+    (100.2, 109.2),
+    (101, 100),
+    (117.8, 93.8),
+    (149.4, 109.4),
+    (141.5, 107.2)
+]
+
+CASTELLATED_OUTSIDE_POINTS = [
+    (98, 110),
+    (124, 89),
+    (118.5, 94.4),
+    (129.1, 93.8),
+    (129, 106.3),
+    (119.2, 100.3),
+    (166.5, 101.7),
+    (126.7, 100.0)
+]
+
+
 class Utils:
     """Utility functions for KiCad test operations."""
 
@@ -1250,35 +1272,13 @@ class TestExtractBoardOutline:
         # Extract the board outline
         outline = kicad.extract_board_outline(board)
 
-        # Points that should be inside the board outline
-        inside_points = [
-            (100.2, 90.2),
-            (100.2, 109.2),
-            (101, 100),
-            (117.8, 93.8),
-            (149.4, 109.4),
-            (141.5, 107.2)
-        ]
-
-        # Points that should be outside the board outline
-        outside_points = [
-            (98, 110),
-            (124, 89),
-            (118.5, 94.4),
-            (129.1, 93.8),
-            (129, 106.3),
-            (119.2, 100.3),
-            (166.5, 101.7),
-            (126.7, 100.0)
-        ]
-
         # Test inside points
-        for x, y in inside_points:
+        for x, y in CASTELLATED_INSIDE_POINTS:
             point = shapely.geometry.Point(x, y)
             assert outline.contains(point), f"Point ({x}, {y}) should be inside the board outline but is not"
 
         # Test outside points
-        for x, y in outside_points:
+        for x, y in CASTELLATED_OUTSIDE_POINTS:
             point = shapely.geometry.Point(x, y)
             assert not outline.contains(point), f"Point ({x}, {y}) should be outside the board outline but is inside"
 
@@ -1303,28 +1303,6 @@ class TestClipLayerWithOutline:
         # Load the KiCad project - this will apply layer clipping
         problem = kicad.load_kicad_project(project.pro_path)
 
-        # Points that should be inside the board outline (from TestExtractBoardOutline)
-        inside_points = [
-            (100.2, 90.2),
-            (100.2, 109.2),
-            (101, 100),
-            (117.8, 93.8),
-            (149.4, 109.4),
-            (141.5, 107.2)
-        ]
-
-        # Points that should be outside the board outline (from TestExtractBoardOutline)
-        outside_points = [
-            (98, 110),
-            (124, 89),
-            (118.5, 94.4),
-            (129.1, 93.8),
-            (129, 106.3),
-            (119.2, 100.3),
-            (166.5, 101.7),
-            (126.7, 100.0)
-        ]
-
         # Verify that we have layers in the problem
         assert len(problem.layers) > 0, "Problem should contain layers"
 
@@ -1336,19 +1314,10 @@ class TestClipLayerWithOutline:
 
             # Test outside points - none should be contained in any layer geometry
             # since they are outside the board outline
-            for x, y in outside_points:
+            for x, y in CASTELLATED_OUTSIDE_POINTS:
                 point = shapely.geometry.Point(x, y)
                 assert not layer.shape.contains(point), \
                     f"Point ({x}, {y}) should not be contained in layer {layer.name} geometry after clipping (outside board outline)"
-
-            # For inside points, they may or may not be contained depending on whether
-            # there's actual copper geometry at those locations, but if they are contained,
-            # it means the clipping is working (geometry is present and within board bounds)
-            for x, y in inside_points:
-                point = shapely.geometry.Point(x, y)
-                # We don't assert anything here since copper may or may not be present
-                # at these specific points, but the key test is that outside points
-                # are never contained (tested above)
 
     def test_layer_clipping_simple_geometry_no_outline(self, kicad_test_projects):
         """Test layer clipping behavior when board has no outline defined."""
