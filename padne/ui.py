@@ -240,22 +240,14 @@ class BaseTool(abc.ABC):
         self.tool_manager = tool_manager
 
     @property
+    @abc.abstractmethod
     def name(self) -> str:
         """Returns the display name of the tool."""
-        pass
 
     @property
+    @abc.abstractmethod
     def status_tip(self) -> str:
         """Returns the status tip for the tool."""
-        pass
-
-    def on_activate(self):
-        """Called when the tool becomes active."""
-        pass
-
-    def on_deactivate(self):
-        """Called when the tool becomes inactive."""
-        pass
 
     @property
     def shortcut(self) -> Optional[tuple[Qt.Key, Qt.KeyboardModifier]]:
@@ -345,41 +337,20 @@ class ToolManager(QtCore.QObject):
             SetMaxValueTool(self.mesh_viewer, self)
         ]
 
-        # Activate the first tool by default, but don't call on_activate yet
-        # as the tool might not be fully ready (e.g. UI elements)
-        # on_activate will be called by the first explicit activate_tool call
-        self.active_tool: Optional[BaseTool] = self.available_tools[0]
+        self.active_tool: BaseTool = self.available_tools[0]
 
     @Slot(BaseTool)
-    def activate_tool(self, tool_to_activate: Optional[BaseTool]):
-        if self.active_tool == tool_to_activate:
-            return
-
-        # At the moment, there should always be an active tool we are switching
-        # away from. But let's be safe and check.
-        if self.active_tool:
-            log.debug(f"Deactivating Tool: {self.active_tool.name}")
-            self.active_tool.on_deactivate()
-
+    def activate_tool(self, tool_to_activate: BaseTool):
+        log.debug(f"Activating Tool: {tool_to_activate.name}")
         self.active_tool = tool_to_activate
-
-        if self.active_tool:
-            log.debug(f"Activating Tool: {self.active_tool.name}")
-            self.active_tool.on_activate()
 
     @Slot(object, QtGui.QMouseEvent)
     def handle_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
-        if not self.active_tool:
-            return
-
         log.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name}. Button: {event.button()}")
         self.active_tool.on_mesh_click(world_point, event)
 
     @Slot(float, float, QtGui.QMouseEvent)
     def handle_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
-        if not self.active_tool:
-            return
-
         log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name}. Buttons: {event.buttons()}")
         self.active_tool.on_screen_drag(dx, dy, event)
 
