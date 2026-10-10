@@ -6,6 +6,7 @@ import scipy.sparse
 import shapely.geometry
 
 from padne import kicad
+import padne._mesh as _mesh
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, Mesh, \
     Mesher, MeshingException, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon, index_type
@@ -896,6 +897,20 @@ class TestMesh:
 
         with pytest.raises(ValueError, match="Non-manifold"):
             Mesh.from_triangle_soup(points, triangles)
+
+    def test_triangle_soup_index_out_of_range(self):
+        points = [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0)]
+
+        with pytest.raises(ValueError, match="Triangle vertex index out of range"):
+            Mesh.from_triangle_soup(points, [(0, 1, 3)])
+
+    def test_triangle_soup_into_nonempty_mesh(self):
+        points = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        triangles = np.array([[0, 1, 2]], dtype=np.uint32)
+        mesh = Mesh.from_triangle_soup(points, triangles)
+
+        with pytest.raises(ValueError, match="Mesh must be empty"):
+            _mesh.build_from_triangle_soup(mesh, points, triangles)
 
     def test_grid_mesh(self):
         """Programmatic N x N grid of squares, each split into two triangles."""
