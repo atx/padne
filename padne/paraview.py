@@ -9,7 +9,7 @@ visualization tools.
 import logging
 import re
 from pathlib import Path
-from typing import Iterable, List, Set, Tuple
+from typing import Iterable
 
 import lxml.etree
 import numpy as np
@@ -20,17 +20,8 @@ from . import mesh, solver
 log = logging.getLogger(__name__)
 
 
-def _sanitize_filename(name: str, used_names: Set[str], fallback_prefix: str = "layer") -> str:
-    """Sanitize a layer name for use as a filename.
-
-    Args:
-        name: Original layer name
-        used_names: Set of already used filenames to avoid duplicates
-        fallback_prefix: Prefix to use if name is empty or invalid
-
-    Returns:
-        Sanitized filename (without extension)
-    """
+def _sanitize_filename(name: str, used_names: set[str], fallback_prefix: str = "layer") -> str:
+    """Sanitize a layer name into a filename (no extension) unique in used_names, adding it."""
     # Handle empty or whitespace-only names
     if not name or not name.strip():
         base = fallback_prefix
@@ -66,18 +57,7 @@ def create_data_array(
     name: str | None = None,
     number_of_components: int | None = None
 ) -> Element:
-    """Create a DataArray element with specified type and values.
-
-    Args:
-        parent: Parent element to attach the DataArray to
-        data_type: VTK data type (e.g., "Float64", "Int32", "UInt8")
-        values: Numeric values to store in the array
-        name: Optional name attribute for the DataArray
-        number_of_components: Optional NumberOfComponents attribute
-
-    Returns:
-        Created DataArray element
-    """
+    """Append an ASCII DataArray of the given VTK type (e.g. "Float64") to parent."""
     data_array = SubElement(parent, "DataArray")
     data_array.set("type", data_type)
     data_array.set("format", "ascii")
@@ -95,11 +75,7 @@ def create_data_array(
 
 
 def create_vtk_root() -> Element:
-    """Create the root VTKFile element with standard attributes.
-
-    Returns:
-        Root VTKFile element configured for UnstructuredGrid format
-    """
+    """Create the root VTKFile element for an UnstructuredGrid."""
     root = Element("VTKFile")
     root.set("type", "UnstructuredGrid")
     root.set("version", "0.1")
@@ -108,14 +84,7 @@ def create_vtk_root() -> Element:
 
 
 def create_point_data(potentials: mesh.ZeroForm) -> Element:
-    """Create PointData element with voltage scalar field values.
-
-    Args:
-        potentials: ZeroForm containing scalar values at mesh vertices
-
-    Returns:
-        PointData element containing the voltage field data
-    """
+    """Create a PointData element holding the voltage at each vertex."""
     point_data = Element("PointData")
     point_data.set("Scalars", "voltage")
 
@@ -124,15 +93,7 @@ def create_point_data(potentials: mesh.ZeroForm) -> Element:
 
 
 def create_points(mesh_obj: mesh.Mesh) -> Element:
-    """Create Points element with vertex coordinates.
-
-    Args:
-        mesh_obj: Mesh object containing vertices
-
-    Returns:
-        Points element containing 3D coordinates (z=0 for 2D meshes)
-        Note: Y coordinates are negated for ParaView orientation
-    """
+    """Create a Points element with z=0 and Y negated for ParaView orientation."""
     points = Element("Points")
 
     pos = mesh_obj.positions()
@@ -142,14 +103,7 @@ def create_points(mesh_obj: mesh.Mesh) -> Element:
 
 
 def create_cells(mesh_obj: mesh.Mesh) -> Element:
-    """Create Cells element with triangle connectivity, offsets, and types.
-
-    Args:
-        mesh_obj: Mesh object containing triangular faces
-
-    Returns:
-        Cells element with connectivity, offsets, and types arrays
-    """
+    """Create a Cells element with triangle connectivity, offsets and types."""
     cells = Element("Cells")
     triangles = mesh_obj.triangles()
 
@@ -165,15 +119,7 @@ def create_cells(mesh_obj: mesh.Mesh) -> Element:
 
 
 def create_piece(mesh_obj: mesh.Mesh, potentials: mesh.ZeroForm) -> Element:
-    """Create a Piece element representing one triangular mesh with voltage data.
-
-    Args:
-        mesh_obj: Triangular mesh object
-        potentials: Scalar field values at mesh vertices
-
-    Returns:
-        Piece element containing mesh geometry and voltage field
-    """
+    """Create a Piece element for one triangular mesh with its voltage field."""
     num_points = len(mesh_obj.vertices)
     num_cells = len(mesh_obj.faces)
 
@@ -190,66 +136,33 @@ def create_piece(mesh_obj: mesh.Mesh, potentials: mesh.ZeroForm) -> Element:
 
 
 def export_solution(solution: solver.Solution, output_dir: Path) -> None:
-    """Export a complete Solution to VTK XML format as separate files per layer.
-
-    Args:
-        solution: Complete solution containing meshes and potential fields
-        output_dir: Directory where VTU files should be written (one per layer)
-    """
+    """Export a Solution to VTK XML, one .vtu file per layer."""
     log.info(f"Exporting solution to ParaView format: {output_dir}")
-
-    # Create output directory if it doesn't exist
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Keep track of used filenames to handle duplicates
-    used_names: Set[str] = set()
-
-    # Process each layer solution as a separate file
+    used_names: set[str] = set()
     total_files = 0
     total_pieces = 0
-
-    for layer_idx, layer_solution in enumerate(solution.layer_solutions):
-        # Get layer name from the problem
-        layer_name = solution.problem.layers[layer_idx].name
-        log.debug(f"Processing layer '{layer_name}' with {len(layer_solution.meshes)} meshes")
-
-        # Skip layers with no meshes
-        meshes_and_potentials = [
-            (mesh_obj, potential)
-            for mesh_obj, potential in
-            zip(layer_solution.meshes, layer_solution.potentials)
-        ]
-
-        if not meshes_and_potentials:
-            log.warning(f"Skipping layer '{layer_name}' - no non-empty meshes")
+    for layer, layer_solution in zip(solution.problem.layers, solution.layer_solutions):
+        layer_pieces = len(layer_solution.meshes)
+        log.debug(f"Processing layer '{layer.name}' with {layer_pieces} meshes")
+        if not layer_pieces:
+            log.warning(f"Skipping layer '{layer.name}' - no non-empty meshes")
             continue
 
-        # Generate sanitized filename
-        filename = _sanitize_filename(layer_name, used_names)
-        output_file = output_dir / f"{filename}.vtu"
-
-        # Create root structure for this layer
+        output_file = output_dir / f"{_sanitize_filename(layer.name, used_names)}.vtu"
         root = create_vtk_root()
         unstructured_grid = SubElement(root, "UnstructuredGrid")
+        for mesh_obj, potential in zip(layer_solution.meshes, layer_solution.potentials):
+            unstructured_grid.append(create_piece(mesh_obj, potential))
+        log.debug(f"Layer '{layer.name}' -> {output_file} ({layer_pieces} pieces)")
 
-        # Add all meshes in this layer as pieces
-        layer_pieces = 0
-        for mesh_obj, potential in meshes_and_potentials:
-            piece = create_piece(mesh_obj, potential)
-            unstructured_grid.append(piece)
-            layer_pieces += 1
-
-        log.debug(f"Layer '{layer_name}' -> {output_file} ({layer_pieces} pieces)")
-
-        # Write XML to file
-        tree = lxml.etree.ElementTree(root)
-        tree.write(
+        lxml.etree.ElementTree(root).write(
             str(output_file),
             xml_declaration=True,
             encoding="utf-8",
             pretty_print=True
         )
-
         total_files += 1
         total_pieces += layer_pieces
 
