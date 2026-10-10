@@ -609,16 +609,15 @@ def _create_vao(vertices: np.ndarray, colors: np.ndarray, color_components: int)
 
 @dataclass
 class ShaderProgram:
-    shader_program: QOpenGLShaderProgram = field(default_factory=QOpenGLShaderProgram)
+    shader_program: QOpenGLShaderProgram
 
     @classmethod
     def from_source(cls, vertex_source, fragment_source):
         shader_program = QOpenGLShaderProgram()
-        shader_program.addShaderFromSourceCode(QOpenGLShader.Vertex, vertex_source)
-        shader_program.addShaderFromSourceCode(QOpenGLShader.Fragment, fragment_source)
-        linked = shader_program.link()
-        if not linked:
-            raise Exception("Failed to link shader program")
+        if not (shader_program.addShaderFromSourceCode(QOpenGLShader.Vertex, vertex_source)
+                and shader_program.addShaderFromSourceCode(QOpenGLShader.Fragment, fragment_source)
+                and shader_program.link()):
+            raise RuntimeError(f"Failed to build shader program: {shader_program.log()}")
 
         return cls(shader_program)
 
