@@ -885,55 +885,20 @@ class TestLoadKicadProject:
         """Test that flipped pads are handled correctly."""
         project = kicad_test_projects["simple_via"]
 
-        # Load the project
         result = kicad.load_kicad_project(project.pro_path)
 
-        # Find the voltage source lumped element by searching networks
-        voltage_source_element = None
-        voltage_source_connections = []
-        for network in result.networks:
-            for element in network.elements:
-                if isinstance(element, problem.VoltageSource):
-                    voltage_source_element = element
-                    voltage_source_connections = network.connections
-                    break
-            if voltage_source_element:
-                break
+        _, voltage_network = Utils.find_first_network_with_element_type(
+            result, problem.VoltageSource)
 
-        # Check that we found a voltage source
-        assert voltage_source_element is not None, "No voltage source found in the simple_via project"
+        points = sorted(
+            (c.layer.name, c.point.x, c.point.y)
+            for c in voltage_network.connections
+        )
 
-        # Find the connections corresponding to the voltage source terminals
-        conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
-        conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
-
-        # Check that one endpoint is on F.Cu at position (122, 100)
-        # and the other is on B.Cu at (142, 100)
-        if conn_p.layer.name == "F.Cu":
-            f_cu_conn = conn_p
-            b_cu_conn = conn_n
-        elif conn_n.layer.name == "F.Cu":
-            f_cu_conn = conn_n
-            b_cu_conn = conn_p
-        else:
-            pytest.fail("Neither connection point p nor n was on F.Cu")
-
-        f_cu_point = f_cu_conn.point
-        b_cu_point = b_cu_conn.point
-        f_cu_layer = f_cu_conn.layer
-        b_cu_layer = b_cu_conn.layer
-
-        # Verify F.Cu point is at expected coordinates (122, 100)
-        assert abs(f_cu_point.x - 122) < 1e-3, f"F.Cu point X should be 122, got {f_cu_point.x}"
-        assert abs(f_cu_point.y - 100) < 1e-3, f"F.Cu point Y should be 100, got {f_cu_point.y}"
-
-        # Verify B.Cu point is at expected coordinates (142, 100)
-        assert abs(b_cu_point.x - 142) < 1e-3, f"B.Cu point X should be 142, got {b_cu_point.x}"
-        assert abs(b_cu_point.y - 100) < 1e-3, f"B.Cu point Y should be 100, got {b_cu_point.y}"
-
-        # Verify the layer names
-        assert f_cu_layer.name == "F.Cu", f"Expected F.Cu layer, got {f_cu_layer.name}"
-        assert b_cu_layer.name == "B.Cu", f"Expected B.Cu layer, got {b_cu_layer.name}"
+        assert points == [
+            ("B.Cu", pytest.approx(142, abs=1e-3), pytest.approx(100, abs=1e-3)),
+            ("F.Cu", pytest.approx(122, abs=1e-3), pytest.approx(100, abs=1e-3)),
+        ]
 
     def test_flipped_pads_with_pad_offset_are_not_mirrored(self, kicad_test_projects):
         """
