@@ -5,7 +5,7 @@ import padne._cgal as cgal
 import padne._mesh as _mesh
 
 from dataclasses import dataclass, field
-from typing import Optional, Iterator
+from typing import Optional, Iterator, TypeVar
 
 # The purpose of this module is to generate triangular meshes from Shapely
 # (multi)polygons
@@ -194,11 +194,49 @@ def _(cls,
     return mesh
 
 
+_F = TypeVar("_F", bound="_Form")
+
+
 @dataclass
-class ZeroForm:
+class _Form:
+    """
+    Element-wise arithmetic shared by the discrete forms.
+    """
     mesh: Mesh
     values: np.ndarray = field(init=False, repr=False)
 
+    def _with_values(self: _F, values: np.ndarray) -> _F:
+        result = type(self)(self.mesh)
+        result.values = values
+        return result
+
+    def __add__(self: _F, other: _F) -> _F:
+        if self.mesh is not other.mesh:
+            raise ValueError(f"Cannot add {type(self).__name__}s on different meshes")
+        return self._with_values(self.values + other.values)
+
+    def __sub__(self: _F, other: _F) -> _F:
+        if self.mesh is not other.mesh:
+            raise ValueError(f"Cannot subtract {type(self).__name__}s on different meshes")
+        return self._with_values(self.values - other.values)
+
+    def __mul__(self: _F, scalar: float) -> _F:
+        return self._with_values(self.values * scalar)
+
+    def __rmul__(self: _F, scalar: float) -> _F:
+        return self.__mul__(scalar)
+
+    def __truediv__(self: _F, scalar: float) -> _F:
+        if scalar == 0:
+            raise ZeroDivisionError(f"Cannot divide {type(self).__name__} by zero")
+        return self._with_values(self.values / scalar)
+
+    def __neg__(self: _F) -> _F:
+        return self._with_values(-self.values)
+
+
+@dataclass
+class ZeroForm(_Form):
     def __post_init__(self):
         self.values = np.zeros(len(self.mesh.vertices), dtype=np.float64)
 
@@ -211,94 +249,6 @@ class ZeroForm:
         if vertex not in self.mesh.vertices:
             raise KeyError("Vertex not in mesh")
         self.values[vertex.i] = value
-
-    def __add__(self, other: "ZeroForm") -> "ZeroForm":
-        """Add two ZeroForms element-wise.
-
-        Args:
-            other: The ZeroForm to add to this one
-
-        Returns:
-            A new ZeroForm with the sum of values
-
-        Raises:
-            ValueError: If the two ZeroForms are on different meshes
-        """
-        if self.mesh is not other.mesh:
-            raise ValueError("Cannot add ZeroForms on different meshes")
-        result = ZeroForm(self.mesh)
-        result.values = self.values + other.values
-        return result
-
-    def __sub__(self, other: "ZeroForm") -> "ZeroForm":
-        """Subtract another ZeroForm element-wise.
-
-        Args:
-            other: The ZeroForm to subtract from this one
-
-        Returns:
-            A new ZeroForm with the difference of values
-
-        Raises:
-            ValueError: If the two ZeroForms are on different meshes
-        """
-        if self.mesh is not other.mesh:
-            raise ValueError("Cannot subtract ZeroForms on different meshes")
-        result = ZeroForm(self.mesh)
-        result.values = self.values - other.values
-        return result
-
-    def __mul__(self, scalar: float) -> "ZeroForm":
-        """Multiply this ZeroForm by a scalar.
-
-        Args:
-            scalar: The scalar value to multiply by
-
-        Returns:
-            A new ZeroForm with scaled values
-        """
-        result = ZeroForm(self.mesh)
-        result.values = self.values * scalar
-        return result
-
-    def __rmul__(self, scalar: float) -> "ZeroForm":
-        """Right multiplication by a scalar.
-
-        Args:
-            scalar: The scalar value to multiply by
-
-        Returns:
-            A new ZeroForm with scaled values
-        """
-        return self.__mul__(scalar)
-
-    def __truediv__(self, scalar: float) -> "ZeroForm":
-        """Divide this ZeroForm by a scalar.
-
-        Args:
-            scalar: The scalar value to divide by
-
-        Returns:
-            A new ZeroForm with divided values
-
-        Raises:
-            ZeroDivisionError: If scalar is zero
-        """
-        if scalar == 0:
-            raise ZeroDivisionError("Cannot divide ZeroForm by zero")
-        result = ZeroForm(self.mesh)
-        result.values = self.values / scalar
-        return result
-
-    def __neg__(self) -> "ZeroForm":
-        """Negate all values in this ZeroForm.
-
-        Returns:
-            A new ZeroForm with negated values
-        """
-        result = ZeroForm(self.mesh)
-        result.values = -self.values
-        return result
 
     def d(self) -> "OneForm":
         """
@@ -323,12 +273,10 @@ class ZeroForm:
 
 
 @dataclass
-class OneForm:
+class OneForm(_Form):
     """
     A discrete 1-form defined on the (h)edges of a mesh.
     """
-    mesh: Mesh
-    values: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self):
         self.values = np.zeros(len(self.mesh.halfedges), dtype=np.float64)
@@ -347,54 +295,12 @@ class OneForm:
         self.values[hedge.i] = value
         self.values[hedge.twin.i] = -value
 
-    def __add__(self, other: "OneForm") -> "OneForm":
-        """Add two OneForm objects element-wise."""
-        if self.mesh is not other.mesh:
-            raise ValueError("Cannot add OneForms on different meshes")
-        result = OneForm(self.mesh)
-        result.values = self.values + other.values
-        return result
-
-    def __sub__(self, other: "OneForm") -> "OneForm":
-        """Subtract another OneForm element-wise."""
-        if self.mesh is not other.mesh:
-            raise ValueError("Cannot subtract OneForms on different meshes")
-        result = OneForm(self.mesh)
-        result.values = self.values - other.values
-        return result
-
-    def __mul__(self, scalar: float) -> "OneForm":
-        """Multiply this OneForm by a scalar."""
-        result = OneForm(self.mesh)
-        result.values = self.values * scalar
-        return result
-
-    def __rmul__(self, scalar: float) -> "OneForm":
-        """Right multiplication by a scalar."""
-        return self.__mul__(scalar)
-
-    def __truediv__(self, scalar: float) -> "OneForm":
-        """Divide this OneForm by a scalar."""
-        if scalar == 0:
-            raise ZeroDivisionError("Cannot divide OneForm by zero")
-        result = OneForm(self.mesh)
-        result.values = self.values / scalar
-        return result
-
-    def __neg__(self) -> "OneForm":
-        """Negate all values in this OneForm."""
-        result = OneForm(self.mesh)
-        result.values = -self.values
-        return result
-
 
 @dataclass
-class TwoForm:
+class TwoForm(_Form):
     """
     A discrete 2-form defined on the faces of a mesh.
     """
-    mesh: Mesh
-    values: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self):
         self.values = np.zeros(len(self.mesh.faces), dtype=np.float64)
@@ -413,46 +319,6 @@ class TwoForm:
         if face not in self.mesh.faces:
             raise KeyError("Face not in mesh.faces (boundary faces not supported)")
         self.values[face.i] = value
-
-    def __add__(self, other: "TwoForm") -> "TwoForm":
-        """Add two TwoForm objects element-wise."""
-        if self.mesh is not other.mesh:
-            raise ValueError("Cannot add TwoForms on different meshes")
-        result = TwoForm(self.mesh)
-        result.values = self.values + other.values
-        return result
-
-    def __sub__(self, other: "TwoForm") -> "TwoForm":
-        """Subtract another TwoForm element-wise."""
-        if self.mesh is not other.mesh:
-            raise ValueError("Cannot subtract TwoForms on different meshes")
-        result = TwoForm(self.mesh)
-        result.values = self.values - other.values
-        return result
-
-    def __mul__(self, scalar: float) -> "TwoForm":
-        """Multiply this TwoForm by a scalar."""
-        result = TwoForm(self.mesh)
-        result.values = self.values * scalar
-        return result
-
-    def __rmul__(self, scalar: float) -> "TwoForm":
-        """Right multiplication by a scalar."""
-        return self.__mul__(scalar)
-
-    def __truediv__(self, scalar: float) -> "TwoForm":
-        """Divide this TwoForm by a scalar."""
-        if scalar == 0:
-            raise ZeroDivisionError("Cannot divide TwoForm by zero")
-        result = TwoForm(self.mesh)
-        result.values = self.values / scalar
-        return result
-
-    def __neg__(self) -> "TwoForm":
-        """Negate all values in this TwoForm."""
-        result = TwoForm(self.mesh)
-        result.values = -self.values
-        return result
 
 
 PolyBoundaryDistanceMap = cgal.PolyBoundaryDistanceMap
