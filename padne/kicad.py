@@ -10,7 +10,7 @@ import sexpdata
 import shapely
 import tempfile
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional, Iterator, ClassVar, Iterable
 
@@ -1582,12 +1582,7 @@ def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
         assert punched_geometry.geom_type == "MultiPolygon", \
             f"Expected MultiPolygon after punching holes, got {punched_geometry.geom_type}"
 
-        # Create a new PlottedGerberLayer with the punched geometry
-        return PlottedGerberLayer(
-            name=plotted_layer.name,
-            layer_id=plotted_layer.layer_id,
-            geometry=punched_geometry
-        )
+        return replace(plotted_layer, geometry=punched_geometry)
 
     # The hole union and the difference are GEOS calls that release the GIL,
     # so the layers punch concurrently.
@@ -1648,11 +1643,7 @@ def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
 
     clipped_geometry = ensure_geometry_is_multipolygon(clipped_geometry)
 
-    return PlottedGerberLayer(
-        name=plotted_layer.name,
-        layer_id=plotted_layer.layer_id,
-        geometry=clipped_geometry
-    )
+    return replace(plotted_layer, geometry=clipped_geometry)
 
 
 @stage_timer
@@ -1667,10 +1658,8 @@ def erode_layers_by_undercut(plotted_layers: list[PlottedGerberLayer],
         # Mitre joins add no arc vertices at concave corners, so large pours
         # keep their vertex count; the corner shape error is O(undercut^2).
         eroded_geometry = plotted_layer.geometry.buffer(-undercut, join_style="mitre")
-        eroded_layers.append(PlottedGerberLayer(
-            name=plotted_layer.name,
-            layer_id=plotted_layer.layer_id,
-            geometry=ensure_geometry_is_multipolygon(eroded_geometry)
+        eroded_layers.append(replace(
+            plotted_layer, geometry=ensure_geometry_is_multipolygon(eroded_geometry)
         ))
     return eroded_layers
 
