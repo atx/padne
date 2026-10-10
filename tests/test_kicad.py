@@ -119,6 +119,14 @@ class Utils:
 
         return found_elements[0]
 
+    @staticmethod
+    def assert_one_1v_source_and_one_10mohm_resistor(kicad_problem):
+        elements = [e for network in kicad_problem.networks for e in network.elements]
+        voltage_source, = [e for e in elements if isinstance(e, problem.VoltageSource)]
+        resistor, = [e for e in elements if isinstance(e, problem.Resistor)]
+        assert voltage_source.voltage == 1.0
+        assert resistor.resistance == 0.01
+
 
 class TestKiCadProject:
 
@@ -610,38 +618,15 @@ class TestDirectiveParse:
 
         # Should have exactly 2 lumped elements: 1 from root + 1 from nested schematic
         assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
-
-        # Extract the voltage source and resistor by type
-        voltage_source_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.VoltageSource)
-        resistor_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.Resistor)
-
-        # Verify the voltage source properties (from root schematic)
-        assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
-
-        # Verify the resistor properties (from nested schematic)
-        assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
+        Utils.assert_one_1v_source_and_one_10mohm_resistor(kicad_problem)
 
     def test_multiline_directives_from_project(self, kicad_test_projects):
         """Test that the multiline_directive project loads correctly with multiple directives."""
         project = kicad_test_projects["multiline_directive"]
 
-        # Load the entire project - this tests the full integration
-        problem = kicad.load_kicad_project(project.pro_path)
+        kicad_problem = kicad.load_kicad_project(project.pro_path)
 
-        # Should have both a voltage source and a resistor from the multiline directive
-        from padne.problem import VoltageSource, Resistor
-
-        voltage_sources = [e for network in problem.networks for e in network.elements if isinstance(e, VoltageSource)]
-        resistors = [e for network in problem.networks for e in network.elements if isinstance(e, Resistor)]
-
-        assert len(voltage_sources) == 1
-        assert len(resistors) == 1
-
-        # Check the voltage source parameters
-        assert voltage_sources[0].voltage == 1.0
-
-        # Check the resistor parameters
-        assert resistors[0].resistance == 0.01
+        Utils.assert_one_1v_source_and_one_10mohm_resistor(kicad_problem)
 
     def test_nested_schematic_twoinstances_directive_deduplication(self, kicad_test_projects):
         """Test that directives from multiple instances of the same file are deduplicated."""
@@ -656,16 +641,7 @@ class TestDirectiveParse:
         # Should have exactly 2 lumped elements: 1 from root + 1 from nested schematic
         # Even though nested schematic is referenced twice, directive should only be extracted once
         assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
-
-        # Extract the voltage source and resistor by type
-        voltage_source_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.VoltageSource)
-        resistor_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.Resistor)
-
-        # Verify the voltage source properties (from root schematic)
-        assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
-
-        # Verify the resistor properties (from nested schematic)
-        assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
+        Utils.assert_one_1v_source_and_one_10mohm_resistor(kicad_problem)
 
     def test_nested_schematic_twoinstances_hierarchy_structure(self, kicad_test_projects):
         """Test that hierarchy correctly preserves multiple instances with proper names."""
