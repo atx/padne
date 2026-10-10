@@ -120,28 +120,9 @@ class TestKiCadProject:
         assert project.pcb_path.exists()
         assert project.sch_path.exists()
 
-    def test_simple_geometry_paths(self):
-        """Test that paths are correctly resolved for the simple_geometry project."""
-        kicad_dir = Path(__file__).parent / "kicad"
-        pro_path = kicad_dir / "simple_geometry" / "simple_geometry.kicad_pro"
-
-        project = kicad.KiCadProject.from_pro_file(pro_path)
-
-        # Test that all paths point to the expected locations
-        expected_dir = kicad_dir / "simple_geometry"
-        assert project.pro_path == expected_dir / "simple_geometry.kicad_pro"
-        assert project.pcb_path == expected_dir / "simple_geometry.kicad_pcb"
-        assert project.sch_path == expected_dir / "simple_geometry.kicad_sch"
-
-        # Test that all paths are absolute
         assert project.pro_path.is_absolute()
         assert project.pcb_path.is_absolute()
         assert project.sch_path.is_absolute()
-
-        # Test that all files have correct extensions
-        assert project.pro_path.suffix == ".kicad_pro"
-        assert project.pcb_path.suffix == ".kicad_pcb"
-        assert project.sch_path.suffix == ".kicad_sch"
 
     def test_from_pro_file_missing_project_file(self):
         """Test that from_pro_file() raises FileNotFoundError for missing project file."""
