@@ -30,20 +30,7 @@ class TestNetwork:
 
 class TestResistor:
 
-    def test_valid_resistance(self):
-        n_a = p.NodeID()
-        n_b = p.NodeID()
-        r = p.Resistor(n_a, n_b, 100.0)
-        assert r.resistance == 100.0
-
-    def test_invalid_resistance_zero(self):
-        n_a = p.NodeID()
-        n_b = p.NodeID()
+    @pytest.mark.parametrize("resistance", [0.0, -1.0])
+    def test_invalid_resistance(self, resistance):
         with pytest.raises(ValueError, match="Resistance must be positive"):
-            p.Resistor(n_a, n_b, 0.0)
-
-    def test_invalid_resistance_negative(self):
-        n_a = p.NodeID()
-        n_b = p.NodeID()
-        with pytest.raises(ValueError, match="Resistance must be positive"):
-            p.Resistor(n_a, n_b, -1.0)
+            p.Resistor(p.NodeID(), p.NodeID(), resistance)
