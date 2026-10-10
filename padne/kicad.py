@@ -446,8 +446,8 @@ class BaseLumpedSpec:
 
     # To be overridden by subclasses
     endpoint_names: ClassVar[dict[str, str]] = {}
-    value_names: ClassVar[dict[str, str]] = {}
-    lumped_type: ClassVar[type] = None
+    value_names: ClassVar[dict[str, str | None]] = {}
+    lumped_type: ClassVar[type | None] = None
     default_values: ClassVar[dict[str, float]] = {}
 
     @classmethod
@@ -477,7 +477,6 @@ class BaseLumpedSpec:
                 # Use default value if specified in the class
                 spec.values[name] = cls.default_values[name]
             else:
-                # A subclass can construct default values in the values dict
                 raise ValueError(f"Missing value parameter: {name} for {directive.name}")
 
         # Parse optional coupling parameter
@@ -716,19 +715,18 @@ class CurrentSourceSpec(BaseLumpedSpec):
     lumped_type = problem.CurrentSource
 
 
-@dataclass
 class RegulatorSpec(BaseLumpedSpec):
-    endpoint_names: ClassVar[dict[str, str]] = {
+    endpoint_names = {
         "p": "v_p",
         "n": "v_n",
         "f": "s_f",
         "t": "s_t",
     }
-    value_names: ClassVar[dict[str, str]] = {
+    value_names = {
         "v": "voltage",
         "gain": "gain",
     }
-    lumped_type: ClassVar[type] = problem.VoltageRegulator
+    lumped_type = problem.VoltageRegulator
 
 
 @dataclass
