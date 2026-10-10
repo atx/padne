@@ -1165,7 +1165,7 @@ class MeshViewer(QOpenGLWidget):
                          disconnected: Optional[dict[str, list[RenderedMesh.PreparedData]]] = None):
             missing = [
                 layer.name for layer in solution.problem.layers
-                if not getattr(layer, "thickness", None)
+                if layer.thickness is None
             ]
             self._sheet_fallback = bool(missing)
             if self._sheet_fallback:
@@ -1185,13 +1185,9 @@ class MeshViewer(QOpenGLWidget):
             Sheet fallback (any layer missing thickness): sqrt(conductance * P)
             (A/mm).
             """
-            conductance = float(layer.conductance)
             if self._sheet_fallback:
-                return float(np.sqrt(conductance))
-            thickness = getattr(layer, "thickness", None)
-            if not thickness:
-                return float(np.sqrt(conductance))
-            return float(np.sqrt(conductance) / thickness)
+                return float(np.sqrt(layer.conductance))
+            return float(np.sqrt(layer.conductance) / layer.thickness)
 
         def _build_spatial_indices(self):
             """Build spatial indices for fast face lookups."""
