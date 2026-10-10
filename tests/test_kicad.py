@@ -1268,3 +1268,13 @@ class TestLumpedSpecs:
             kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=NOPE.1 v=1V"))
         with pytest.raises(ValueError, match="Negative endpoints"):
             spec.construct(pad_index, layer_dict)
+
+    @pytest.mark.parametrize("spec_type, text", [
+        (kicad.ResistorSpec, "!padne RESISTANCE a=R99.1 b=R1.2 r=1"),
+        (kicad.CurrentSourceSpec, "!padne CURRENT f=R99.1 t=R1.2 i=1"),
+        (kicad.RegulatorSpec, "!padne REGULATOR p=R99.1 n=U1.2 f=U1.3 t=U1.4 v=3.3V gain=1"),
+    ])
+    def test_unresolved_endpoints(self, spec_type, text):
+        spec = spec_type.from_directive(kicad.Directive.parse(text))
+        with pytest.raises(ValueError, match="did not resolve to any pad"):
+            spec.construct(kicad.PadIndex(), {})

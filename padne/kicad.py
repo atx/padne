@@ -520,6 +520,8 @@ class BaseLumpedSpec:
             internal_arg_name = self.endpoint_names[directive_param_name]
 
             layerpoints = pad_index.find_by_endpoints(endpoints_list)
+            if not layerpoints:
+                raise ValueError(f"Endpoints of {directive_param_name} in {self.__class__.__name__} did not resolve to any pad")
 
             if len(layerpoints) == 1:
                 # Optimize by wiring directly to the internal node
