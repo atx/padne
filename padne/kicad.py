@@ -1,3 +1,6 @@
+"""
+Loading of KiCad projects and their conversion to our internal representation.
+"""
 
 import warnings
 
@@ -70,9 +73,6 @@ def find_pcbnew_module() -> Any:
 
 # Load pcbnew module using the fallback mechanism
 pcbnew = find_pcbnew_module()
-
-# This file is responsible for loading KiCad files and converting them to our
-# internal representation.
 
 # Copper conductivity in S/mm (not S/m!)
 COPPER_CONDUCTIVITY = 5.95e4
@@ -149,8 +149,7 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
 
     Args:
         board: KiCad board object
-        copper_conductivity: Optional custom copper conductivity in S/mm.
-                           If None, uses COPPER_CONDUCTIVITY constant.
+        copper_conductivity: Copper conductivity in S/mm
     """
     # Unfortunately, the Python pcbnew API does not support reading the stackup
     # directly. We need to parse the file manually...
@@ -172,11 +171,10 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
                    item and item[0] == sexpdata.Symbol('stackup')), None)
 
     if not stackup:
-        # TODO: Return verify that the board only has two layers
+        # TODO: Verify that the board only has two layers
         # I am not sure if it is possible to have no stackup section and
         # more than two layers. It seems KiCad generates the section
         # on every change in the stackup window...
-        # Use custom conductivity if provided, otherwise use default
         return Stackup(
             items=[
                 StackupItem(name="F.Cu", thickness=0.035, conductivity=copper_conductivity),
@@ -1225,13 +1223,8 @@ class PlottedGerberLayer:
 @stage_timer
 def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> list[PlottedGerberLayer]:
     """
-    Generate Gerber files from a KiCad PCB file and convert them to PlottedGerberLayer objects.
-
-    Args:
-        pcb_file_path: Path to the KiCad PCB file
-
-    Returns:
-        List of PlottedGerberLayer objects containing layer geometries
+    Plot the given layers of a KiCad board to Gerbers and convert them to
+    PlottedGerberLayer objects.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         # Plot gerbers and get paths to generated files
@@ -1249,18 +1242,7 @@ def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> 
 
 @stage_timer
 def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: Path):
-    """
-    Plot copper layers of a KiCad board to Gerber files.
-
-    Args:
-        board: KiCad board object
-        output_dir: Directory where Gerber files will be saved
-
-    Returns:
-        Dictionary mapping layer IDs to paths of generated Gerber files
-    """
-    # Create plot controller and options
-
+    """Plot a single layer of a KiCad board to a Gerber file at output_path."""
     # Unfortunately, we cannot direct the resulting gerber to a specific _file path_,
     # we can only specify the output directory and then acquire the file name
     # for the specific layer. The cleanest way to have nice API for this function
@@ -1554,16 +1536,7 @@ def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
 
 def verify_stackup_contains_all_layers(stackup: Stackup,
                                        plotted_layers: list[PlottedGerberLayer]) -> bool:
-    """
-    Verify that all plotted layers are contained within the stackup.
-
-    Args:
-        stackup: Stackup object containing layers
-        plotted_layers: List of PlottedGerberLayer objects
-
-    Raises:
-        ValueError: If any plotted layer is not found in the stackup
-    """
+    """Return whether all plotted layers are contained within the stackup."""
     for pl in plotted_layers:
         if not any(pl.name == stackup_item.name for stackup_item in stackup.items):
             return False
@@ -1572,15 +1545,7 @@ def verify_stackup_contains_all_layers(stackup: Stackup,
 
 def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
                          stackup: Stackup) -> dict[str, problem.Layer]:
-    """
-    Construct a dictionary mapping layer names to Layer objects.
-
-    Args:
-        plotted_layers: List of PlottedGerberLayer objects
-
-    Returns:
-        Dictionary mapping layer names to Layer objects
-    """
+    """Construct a dictionary mapping layer names to Layer objects."""
     layer_dict = {}
     for plotted_layer in plotted_layers:
         stackup_layer = next(
@@ -1633,7 +1598,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     Load a KiCad project and create a Problem object for PDN simulation.
 
     Args:
-        project: Either a path to the KiCad project file (*.kicad_pro) or a KiCadProject instance
+        pro_file_path: Path to the KiCad project file (*.kicad_pro)
 
     Returns:
         A Problem object containing layers and lumped elements
