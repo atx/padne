@@ -1426,3 +1426,21 @@ class TestErodeLayersByUndercut:
             geometry=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 2)]),
         )
         assert kicad.erode_layers_by_undercut([layer], 0.0) == [layer]
+
+
+class TestLumpedSpecs:
+
+    def test_voltage_source_unresolved_endpoints(self):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 10)]),
+            name="F.Cu",
+            conductance=1.0,
+        )
+        ep = kicad.Endpoint("U1", "1")
+        pad_index = kicad.PadIndex()
+        pad_index.mapping[ep] = [kicad.LayerPoint(layer="F.Cu", point=shapely.geometry.Point(3, 4))]
+
+        spec = kicad.VoltageSourceSpec.from_directive(
+            kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=NOPE.1 v=1V"))
+        with pytest.raises(ValueError, match="Negative endpoints"):
+            spec.construct(pad_index, {"F.Cu": layer})

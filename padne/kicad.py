@@ -621,6 +621,11 @@ class VoltageSourceSpec(BaseLumpedSpec):
                 conn = problem.Connection(layer=layer, point=lp.point)
                 connections.append(conn)
 
+        if not p_connections:
+            raise ValueError("Positive endpoints of voltage source did not resolve to any pad")
+        if not n_connections:
+            raise ValueError("Negative endpoints of voltage source did not resolve to any pad")
+
         return p_connections, n_connections
 
     def _construct_source(self,
