@@ -502,124 +502,57 @@ class TestViaSpecs:
 
 class TestDirectiveParse:
 
-    def test_basic_directive_parsing(self):
-        """Test parsing a simple directive with key-value pairs."""
-        directive_str = "!padne VOLTAGE v=12.0V p=R1.4 n=R13.1"
-        directive = kicad.Directive.parse(directive_str)
+    @pytest.mark.parametrize("text, name, params", [
+        ("!padne VOLTAGE v=12.0V p=R1.4 n=R13.1",
+         "VOLTAGE", {"v": "12.0V", "p": "R1.4", "n": "R13.1"}),
+        ("!padne RESISTANCE r=4.7k from=R5.1 to=R5.2",
+         "RESISTANCE", {"r": "4.7k", "from": "R5.1", "to": "R5.2"}),
+        ("!padne CURRENT i=500mA source=U1.OUT+ sink=GND.1",
+         "CURRENT", {"i": "500mA", "source": "U1.OUT+", "sink": "GND.1"}),
+        ("!padne DEBUG", "DEBUG", {}),
+        # Last duplicate key wins
+        ("!padne TEST key=value1 key=value2", "TEST", {"key": "value2"}),
+        # Simple quotes get eliminated, spaces inside quotes are not supported yet
+        ('!padne LABEL text="HelloWorld" position=R1.1',
+         "LABEL", {"text": "HelloWorld", "position": "R1.1"}),
+    ])
+    def test_parse_valid(self, text, name, params):
+        directive = kicad.Directive.parse(text)
 
-        assert directive.name == "VOLTAGE"
-        assert directive.params == {"v": "12.0V", "p": "R1.4", "n": "R13.1"}
+        assert directive.name == name
+        assert directive.params == params
 
-    def test_directive_with_numeric_values(self):
-        """Test parsing a directive with numeric values."""
-        directive_str = "!padne RESISTANCE r=4.7k from=R5.1 to=R5.2"
-        directive = kicad.Directive.parse(directive_str)
+    @pytest.mark.parametrize("text, match", [
+        ("VOLTAGE v=12V p=R1.1 n=R1.2", "Directive must start with '!padne'"),
+        ("!padne", "Directive must have a name"),
+        ("!padne VOLTAGE v12V p=R1.1 n=R1.2", "Invalid parameter format"),
+        ("!padne VOLTAGE =12V p=R1.1 n=R1.2", "Empty parameter key"),
+    ])
+    def test_parse_invalid(self, text, match):
+        with pytest.raises(ValueError, match=match):
+            kicad.Directive.parse(text)
 
-        assert directive.name == "RESISTANCE"
-        assert directive.params == {"r": "4.7k", "from": "R5.1", "to": "R5.2"}
-
-    def test_directive_with_special_characters(self):
-        """Test parsing a directive with special characters in values."""
-        directive_str = "!padne CURRENT i=500mA source=U1.OUT+ sink=GND.1"
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "CURRENT"
-        assert directive.params == {"i": "500mA", "source": "U1.OUT+", "sink": "GND.1"}
-
-    def test_directive_with_empty_params(self):
-        """Test parsing a directive with no parameters."""
-        directive_str = "!padne DEBUG"
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "DEBUG"
-        assert directive.params == {}
-
-    def test_directive_with_duplicate_keys(self):
-        """Test parsing a directive with duplicate keys (last one should win)."""
-        directive_str = "!padne TEST key=value1 key=value2"
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "TEST"
-        assert directive.params == {"key": "value2"}
-
-    def test_directive_with_simple_quotes(self):
-        """Test that simple quotes get eliminated. We do not yet support spaces, so that is undefined behavior for now."""
-        directive_str = '!padne LABEL text="HelloWorld" position=R1.1'
-
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "LABEL"
-        assert directive.params == {"text": "HelloWorld", "position": "R1.1"}
-
-    # Error case tests
-
-    def test_missing_padne_prefix(self):
-        """Test that a ValueError is raised when the !padne prefix is missing."""
-        with pytest.raises(ValueError, match="Directive must start with '!padne'"):
-            kicad.Directive.parse("VOLTAGE v=12V p=R1.1 n=R1.2")
-
-    def test_missing_directive_name(self):
-        """Test that a ValueError is raised when the directive name is missing."""
-        with pytest.raises(ValueError, match="Directive must have a name"):
-            kicad.Directive.parse("!padne")
-
-    def test_invalid_key_value_format(self):
-        """Test that a ValueError is raised when the key-value format is invalid."""
-        with pytest.raises(ValueError, match="Invalid parameter format"):
-            kicad.Directive.parse("!padne VOLTAGE v12V p=R1.1 n=R1.2")
-
-    def test_empty_key(self):
-        """Test that a ValueError is raised when a parameter has an empty key."""
-        with pytest.raises(ValueError, match="Empty parameter key"):
-            kicad.Directive.parse("!padne VOLTAGE =12V p=R1.1 n=R1.2")
-
-    def test_multiline_directive_parsing(self):
-        """Test parsing multiple directives from a single text block with newlines."""
-        text = '!padne VOLTAGE v=1.0V p=R2.1 n=R2.2\n!padne RESISTANCE r=0.01 a=R3.1 b=R3.2'
-
+    @pytest.mark.parametrize("text, expected", [
+        ('!padne VOLTAGE v=1.0V p=R2.1 n=R2.2\n!padne RESISTANCE r=0.01 a=R3.1 b=R3.2',
+         [("VOLTAGE", {'v': '1.0V', 'p': 'R2.1', 'n': 'R2.2'}),
+          ("RESISTANCE", {'r': '0.01', 'a': 'R3.1', 'b': 'R3.2'})]),
+        # Leading/trailing whitespace is stripped
+        ('  !padne VOLTAGE v=3.3V p=U1.VCC n=U1.GND  \n\t!padne CURRENT i=1.0A f=R1.1 t=R1.2\t',
+         [("VOLTAGE", {'v': '3.3V', 'p': 'U1.VCC', 'n': 'U1.GND'}),
+          ("CURRENT", {'i': '1.0A', 'f': 'R1.1', 't': 'R1.2'})]),
+        # Non-!padne lines are ignored
+        ('This is a comment\n!padne VOLTAGE v=5V p=VCC n=GND\nAnother comment\n!padne RESISTANCE r=10 a=R1.1 b=R1.2\n',
+         [("VOLTAGE", {'v': '5V', 'p': 'VCC', 'n': 'GND'}),
+          ("RESISTANCE", {'r': '10', 'a': 'R1.1', 'b': 'R1.2'})]),
+        # Empty lines are ignored
+        ('\n\n!padne VOLTAGE v=12V p=PWR n=GND\n\n\n!padne CURRENT i=2A f=J1.1 t=J1.2\n\n',
+         [("VOLTAGE", {'v': '12V', 'p': 'PWR', 'n': 'GND'}),
+          ("CURRENT", {'i': '2A', 'f': 'J1.1', 't': 'J1.2'})]),
+    ])
+    def test_extract_multiline_directives(self, text, expected):
         directives = kicad.extract_directives_from_text(text)
 
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '1.0V', 'p': 'R2.1', 'n': 'R2.2'}
-        assert directives[1].name == 'RESISTANCE'
-        assert directives[1].params == {'r': '0.01', 'a': 'R3.1', 'b': 'R3.2'}
-
-    def test_multiline_directive_with_whitespace(self):
-        """Test that directives with leading/trailing whitespace are properly stripped."""
-        text = '  !padne VOLTAGE v=3.3V p=U1.VCC n=U1.GND  \n\t!padne CURRENT i=1.0A f=R1.1 t=R1.2\t'
-
-        directives = kicad.extract_directives_from_text(text)
-
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '3.3V', 'p': 'U1.VCC', 'n': 'U1.GND'}
-        assert directives[1].name == 'CURRENT'
-        assert directives[1].params == {'i': '1.0A', 'f': 'R1.1', 't': 'R1.2'}
-
-    def test_multiline_directive_ignore_non_padne_lines(self):
-        """Test that non-!padne lines in multiline text blocks are ignored."""
-        text = 'This is a comment\n!padne VOLTAGE v=5V p=VCC n=GND\nAnother comment\n!padne RESISTANCE r=10 a=R1.1 b=R1.2\n'
-
-        directives = kicad.extract_directives_from_text(text)
-
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '5V', 'p': 'VCC', 'n': 'GND'}
-        assert directives[1].name == 'RESISTANCE'
-        assert directives[1].params == {'r': '10', 'a': 'R1.1', 'b': 'R1.2'}
-
-    def test_multiline_directive_empty_lines(self):
-        """Test that empty lines in multiline text blocks are ignored."""
-        text = '\n\n!padne VOLTAGE v=12V p=PWR n=GND\n\n\n!padne CURRENT i=2A f=J1.1 t=J1.2\n\n'
-
-        directives = kicad.extract_directives_from_text(text)
-
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '12V', 'p': 'PWR', 'n': 'GND'}
-        assert directives[1].name == 'CURRENT'
-        assert directives[1].params == {'i': '2A', 'f': 'J1.1', 't': 'J1.2'}
+        assert [(d.name, d.params) for d in directives] == expected
 
     def test_parse_directives_from_simple_geometry(self, kicad_test_projects):
         # Get the simple_geometry project's schematic file
