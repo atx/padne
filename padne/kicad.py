@@ -1302,7 +1302,7 @@ def extract_layers_from_gerbers(board,
     )
 
     plotted_layers = []
-    for (layer_id, gerber_path), geometry in zip(gerber_layers.items(), geometries):
+    for layer_id, geometry in zip(gerber_layers, geometries):
         if geometry is None:
             continue
 
