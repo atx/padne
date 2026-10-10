@@ -100,14 +100,19 @@ class Session:
             # Record even on exception so failing stages still show up.
             perf = time.perf_counter() - start_perf
             proc = time.process_time() - start_process
-            with self.durations as durations:
-                existing = durations.get(key)
-                if existing is None:
-                    durations[key] = Session.Duration(perf, proc, 1)
-                else:
-                    existing.perf_time += perf
-                    existing.process_time += proc
-                    existing.call_count += 1
+            with self.durations as d:
+                self._accumulate(d, key, Session.Duration(perf, proc, 1))
+
+    @staticmethod
+    def _accumulate(durations: dict[str, "Session.Duration"], key: str,
+                    duration: "Session.Duration") -> None:
+        existing = durations.get(key)
+        if existing is None:
+            durations[key] = replace(duration)
+            return
+        existing.perf_time += duration.perf_time
+        existing.process_time += duration.process_time
+        existing.call_count += duration.call_count
 
     def snapshot(self) -> dict[str, "Session.Duration"]:
         """Return an independent copy of the recorded durations. Used to
@@ -120,13 +125,7 @@ class Session:
         one. Times sum and call counts add, same as repeated stage entries."""
         with self.durations as d:
             for key, duration in snapshot.items():
-                existing = d.get(key)
-                if existing is None:
-                    d[key] = replace(duration)
-                else:
-                    existing.perf_time += duration.perf_time
-                    existing.process_time += duration.process_time
-                    existing.call_count += duration.call_count
+                self._accumulate(d, key, duration)
 
     def format_summary(self) -> str:
         """Return a tree-shaped table of recorded stages.
@@ -277,7 +276,6 @@ def stage_timer(arg):
 
     @contextlib.contextmanager
     def _deferred(key: str):
-        global _active
         # Session lookup deferred to enter-time so decorators bound at import
         # time still resolve to whatever session is active at *call* time.
         session = _active if _active is not None else _null_session
