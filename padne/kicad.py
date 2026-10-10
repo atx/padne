@@ -117,6 +117,9 @@ class Stackup:
             (i for i, item in enumerate(self.items) if item.name == name)
         )
 
+    def item_by_name(self, name: str) -> StackupItem:
+        return self.items[self.index_by_name(name)]
+
 
 def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
     """
@@ -1406,7 +1409,7 @@ def process_via_spec(via_spec: ViaSpec,
     radius = via_spec.drill_diameter / 2
 
     involved_copper_layers = [
-        stackup.items[stackup.index_by_name(layer_name)]
+        stackup.item_by_name(layer_name)
         for layer_name in via_spec.layer_names
     ]
 
@@ -1548,9 +1551,7 @@ def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
     """Construct a dictionary mapping layer names to Layer objects."""
     layer_dict = {}
     for plotted_layer in plotted_layers:
-        stackup_layer = next(
-            (item for item in stackup.items if item.name == plotted_layer.name)
-        )
+        stackup_layer = stackup.item_by_name(plotted_layer.name)
         layer = problem.Layer(
             shape=plotted_layer.geometry,
             name=plotted_layer.name,
