@@ -1861,6 +1861,17 @@ class TestMeshPickling:
         # Also check Euler characteristic for the unpickled mesh
         assert unpickled_mesh.euler_characteristic() == 1
 
+    def test_mismatched_array_lengths_rejected(self):
+        mesh = Mesh.from_triangle_soup(
+            [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0)], [(0, 1, 2)])
+        state = list(mesh.__getstate__())
+        # Drop one vertex_y entry so the vertex arrays disagree in length
+        state[1] = state[1][:-8]
+
+        restored = Mesh.__new__(Mesh)
+        with pytest.raises(ValueError, match="Corrupt mesh pickle data"):
+            restored.__setstate__(tuple(state))
+
     def test_references_preserved(self):
         """Test that if we pickle multiple objects simultaneously, the Vertex/HalfEdge/Face objects references get preserved"""
         points = [
