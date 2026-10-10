@@ -1638,39 +1638,30 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     if not verify_stackup_contains_all_layers(stackup, plotted_layers):
         raise ValueError("Stackup does not contain all plotted layers")
 
-    pad_index = PadIndex()
-
-    # Convert Spec objects to Network objects
-    networks = []
-
     log.info("Processing vias and through hole pads")
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
 
     plotted_layers = punch_via_holes(plotted_layers, via_specs)
-    layer_dict = construct_layer_dict(plotted_layers, stackup)
-
-    # Load SMD pads AFTER hole punching so we can validate against final geometry
-    pad_index.load_smd_pads(board, layer_dict)
-
-    pad_index.insert_via_specs(via_specs, layer_dict)
     # Note that we have to create the layer dict _after_ punching the holes,
     # since otherwise it would contain the original objects!
+    layer_dict = construct_layer_dict(plotted_layers, stackup)
+
+    pad_index = PadIndex()
+    # Load SMD pads AFTER hole punching so we can validate against final geometry
+    pad_index.load_smd_pads(board, layer_dict)
+    pad_index.insert_via_specs(via_specs, layer_dict)
+
+    networks = []
     for via_spec in via_specs:
         networks.extend(process_via_spec(via_spec, layer_dict, stackup, copper_spec.plating))
 
     log.info("Creating networks from specifications")
     for lumped_spec in directives.lumped_specs:
-        network = lumped_spec.construct(pad_index, layer_dict)
-        networks.append(network)
+        networks.append(lumped_spec.construct(pad_index, layer_dict))
 
     for probe_spec in directives.probe_specs:
         networks.extend(probe_spec.construct(pad_index, layer_dict))
 
-    # Get all layers as a list
-    layer_names_in_order = list(layer_dict.keys())
-    layer_names_in_order.sort(key=lambda name: stackup.index_by_name(name))
+    layers = [layer_dict[name] for name in sorted(layer_dict, key=stackup.index_by_name)]
 
-    layers = [layer_dict[name] for name in layer_names_in_order]
-
-    # Return the Problem object
     return problem.Problem(layers=layers, networks=networks, project_name=project.name)
