@@ -9,7 +9,7 @@ import warnings
 import OpenGL.GL as gl
 import time
 
-from typing import Optional, Callable
+from typing import Optional, Callable, ClassVar
 from dataclasses import dataclass, field
 
 import abc
@@ -833,6 +833,63 @@ class RenderedPoints:
             gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
 
 
+class SliderScale(abc.ABC):
+    """Maps a 0..1 slider fraction to a value in [lo, hi] and back."""
+
+    @abc.abstractmethod
+    def value_at(self, fraction: float, lo: float, hi: float) -> float:
+        ...
+
+    @abc.abstractmethod
+    def fraction_of(self, value: float, lo: float, hi: float) -> float:
+        ...
+
+
+@dataclass(frozen=True)
+class LinearScale(SliderScale):
+
+    def value_at(self, fraction: float, lo: float, hi: float) -> float:
+        return lo + (hi - lo) * fraction
+
+    def fraction_of(self, value: float, lo: float, hi: float) -> float:
+        if hi <= lo:
+            return 0.0
+        return (value - lo) / (hi - lo)
+
+
+@dataclass(frozen=True)
+class LogScale(SliderScale):
+    """
+    Fraction 0 is exactly `lo`, (0, 1] spans `decades` decades below `hi`
+    logarithmically, so one slider step is a constant ratio.
+    """
+    decades: float = 4.0
+
+    def value_at(self, fraction: float, lo: float, hi: float) -> float:
+        if fraction <= 0.0:
+            return lo
+        return hi * 10.0 ** (-self.decades * (1.0 - fraction))
+
+    def fraction_of(self, value: float, lo: float, hi: float) -> float:
+        if value <= hi * 10.0 ** -self.decades:
+            return 0.0
+        return 1.0 + math.log10(value / hi) / self.decades
+
+
+@dataclass(frozen=True)
+class ColorScaleState:
+    """Snapshot of a rendering mode's color scale, as shown by ColorScaleWidget."""
+    min_value: float
+    max_value: float
+    slider_lo: float
+    slider_hi: float
+    slider_scale: SliderScale
+    capped: bool
+    cap_percentile: float
+    unit: str
+    color_map: colormaps.UniformColorMap
+
+
 class MeshViewer(QOpenGLWidget):
 
     @dataclass
@@ -840,14 +897,18 @@ class MeshViewer(QOpenGLWidget):
         unit: str
         name: str
         color_map: colormaps.UniformColorMap
+        slider_scale: ClassVar[SliderScale] = LinearScale()
+        cap_percentile: ClassVar[float] = 99.9
+
+        # The color range, always kept within slider_range
         min_value: float = 0.0
         max_value: float = 1.0
-        # The autoscaled data range, kept separate from the (user-editable)
-        # min_value/max_value so the colour-scale sliders keep a stable mapping
-        # while the current range is edited. When the percentile cap is on,
-        # data_max_value is the current layer's percentile, not the global max.
-        data_min_value: float = 0.0
-        data_max_value: float = 1.0
+        # When capped, the top of the slider range is percentile_max
+        capped: bool = False
+        # Global (all layers) data range and cap_percentile of the values,
+        # fixed once the solution is set
+        data_range: tuple[float, float] = (0.0, 1.0)
+        percentile_max: float = 1.0
         solution: Optional[solver.Solution] = None
         spatial_indices: dict[str, BaseSpatialIndex] = field(default_factory=dict)
 
@@ -877,28 +938,57 @@ class MeshViewer(QOpenGLWidget):
 
             return min_val, max_val
 
-        def autoscale_values(self, solution: solver.Solution):
-            """Autoscale values for the rendering mode."""
-            self.min_value, self.max_value = self._compute_min_max()
-            self.data_min_value, self.data_max_value = self.min_value, self.max_value
+        def _compute_percentile_max(self) -> float:
+            """The cap_percentile of all values, falling back to the data max."""
+            values = [index.values for index in self.spatial_indices.values()]
+            data_min, data_max = self.data_range
+            if not any(len(v) for v in values):
+                return data_max
+            cap = float(np.percentile(np.concatenate(values), self.cap_percentile))
+            # A cap at the bottom of the range would collapse the slider range
+            return cap if cap > data_min else data_max
 
-        def values_for_layer(self, layer_name: str) -> np.ndarray:
-            """All data values this mode holds for `layer_name` (may be empty)."""
-            index = self.spatial_indices.get(layer_name)
-            return index.values if index is not None else np.empty(0)
+        @property
+        def slider_range(self) -> tuple[float, float]:
+            data_min, data_max = self.data_range
+            return data_min, self.percentile_max if self.capped else data_max
 
-        def cap_max_to_percentile(self, layer_name: str, percentile: float) -> bool:
-            """
-            Cap the colour maximum to `percentile` of the current layer's values
-            and return whether a cap was applied.
-            """
-            values = self.values_for_layer(layer_name)
-            if len(values) == 0:
-                return False
-            cap = float(np.percentile(values, percentile))
-            self.max_value = cap
-            self.data_max_value = cap
-            return True
+        def _clamp_to_slider_range(self, value: float) -> float:
+            lo, hi = self.slider_range
+            return min(max(value, lo), hi)
+
+        def autoscale(self) -> None:
+            """Set the color range to the whole slider range."""
+            self.min_value, self.max_value = self.slider_range
+
+        def set_min(self, value: float) -> None:
+            """Set the color minimum, pushing the maximum up if needed."""
+            self.min_value = self._clamp_to_slider_range(value)
+            self.max_value = max(self.max_value, self.min_value)
+
+        def set_max(self, value: float) -> None:
+            """Set the color maximum, pushing the minimum down if needed."""
+            self.max_value = self._clamp_to_slider_range(value)
+            self.min_value = min(self.min_value, self.max_value)
+
+        def set_capped(self, capped: bool) -> None:
+            """Toggle the cap; only clamps the color range, never rescales it."""
+            self.capped = capped
+            self.min_value = self._clamp_to_slider_range(self.min_value)
+            self.max_value = self._clamp_to_slider_range(self.max_value)
+
+        def color_scale_state(self) -> ColorScaleState:
+            return ColorScaleState(
+                min_value=self.min_value,
+                max_value=self.max_value,
+                slider_lo=self.slider_range[0],
+                slider_hi=self.slider_range[1],
+                slider_scale=self.slider_scale,
+                capped=self.capped,
+                cap_percentile=self.cap_percentile,
+                unit=self.unit,
+                color_map=self.color_map,
+            )
 
         def _build_spatial_indices(self):
             raise NotImplementedError("This method should be implemented in subclasses")
@@ -926,6 +1016,9 @@ class MeshViewer(QOpenGLWidget):
             }
 
             self._build_spatial_indices()
+            self.data_range = self._compute_min_max()
+            self.percentile_max = self._compute_percentile_max()
+            self.autoscale()
 
         def _prepare_rendered_meshes_for_layer(self, layer_name, geometries=None) -> list[RenderedMesh.PreparedData]:
             """Create RenderedMesh objects for a specific layer."""
@@ -1026,6 +1119,9 @@ class MeshViewer(QOpenGLWidget):
         unit: str = "W/mm²"
         name: str = "Power Density"
         color_map: colormaps.UniformColorMap = colormaps.INFERNO
+        slider_scale: ClassVar[SliderScale] = LogScale()
+        # The raw maximum is usually a near-singular hot spot
+        capped: bool = True
 
         def _compute_min_max(self) -> tuple[float, float]:
             _, max_val = super()._compute_min_max()
@@ -1128,21 +1224,14 @@ class MeshViewer(QOpenGLWidget):
                         msh, current_density, None if geometries is None else geometries[msh]))
             return prepared_meshes
 
-    # Signal to notify when the value range changes
-    valueRangeChanged = Signal(float, float)
-    # Signal to notify when the underlying data range (autoscale / percentile
-    # cap) changes, so the colour-scale sliders can re-map
-    dataRangeChanged = Signal(float, float)
+    # Signal to notify when the color scale (range, cap, unit, map) changes
+    colorScaleChanged = Signal(object)  # object is ColorScaleState
     # Signal to notify when the current layer changes
     currentLayerChanged = Signal(str)
     # Signal to notify when the list of available layers changes
     availableLayersChanged = Signal(list)
     # Signal to notify when the current rendering mode changes
     currentModeChanged = Signal(str)
-    # Signal to notify when the unit changes
-    unitChanged = Signal(str)
-    # Signal to notify when the color map changes
-    colorMapChanged = Signal(object)  # object is colormaps.UniformColorMap
     # Signals for tools
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
@@ -1173,10 +1262,6 @@ class MeshViewer(QOpenGLWidget):
         self.modes = self.default_modes()
         self.current_mode_index = 0  # Start with voltage mode
 
-        # When set, the colour maximum is capped to COLOR_SCALE_PERCENTILE of
-        # the values on the current layer (rather than the global autoscale).
-        self.percentile_cap = False
-
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
@@ -1187,9 +1272,6 @@ class MeshViewer(QOpenGLWidget):
 
         # Set focus policy to receive keyboard events
         self.setFocusPolicy(Qt.StrongFocus)
-
-        # The percentile cap is per-layer; re-apply when the layer changes.
-        self.currentLayerChanged.connect(self._onCurrentLayerChanged)
 
         # Layer management
         self.current_layer_index = 0
@@ -1270,37 +1352,24 @@ class MeshViewer(QOpenGLWidget):
 
     def autoscaleValue(self) -> None:
         """
-        Automatically adjust the min/max values for color scaling using the
-        current rendering mode, applying the percentile cap if enabled.
+        Automatically adjust the min/max values for color scaling using the current rendering mode.
         """
         if not self.solution or not self.solution.layer_solutions:
             return  # Nothing to scale if no solution is loaded
 
-        # Delegate to current rendering mode
-        self.current_rendering_mode.autoscale_values(self.solution)
-        self._emit_value_range()
+        self.current_rendering_mode.autoscale()
+        self._emitColorScale()
         self.update()
 
-    def _emit_value_range(self) -> None:
-        """Apply the percentile cap (if on) and emit the range signals."""
-        mode = self.current_rendering_mode
-        if self.percentile_cap:
-            mode.cap_max_to_percentile(self.current_layer_name,
-                                       COLOR_SCALE_PERCENTILE)
-        self.valueRangeChanged.emit(mode.min_value, mode.max_value)
-        self.dataRangeChanged.emit(mode.data_min_value, mode.data_max_value)
+    def _emitColorScale(self) -> None:
+        self.colorScaleChanged.emit(self.current_rendering_mode.color_scale_state())
 
     @Slot(bool)
-    def setPercentileCap(self, enabled: bool) -> None:
-        """Toggle capping the colour maximum to the current layer's percentile."""
-        self.percentile_cap = bool(enabled)
-        if self.solution is not None and self.solution.layer_solutions:
-            self.autoscaleValue()
-
-    def _onCurrentLayerChanged(self, _layer_name: str) -> None:
-        # The percentile, and hence the data range, is per-layer.
-        if self.percentile_cap and self.solution is not None:
-            self.autoscaleValue()
+    def setCapped(self, capped: bool) -> None:
+        """Toggle the percentile cap of the current rendering mode."""
+        self.current_rendering_mode.set_capped(capped)
+        self._emitColorScale()
+        self.update()
 
     def autoscaleXY(self) -> None:
         """
@@ -1362,9 +1431,7 @@ class MeshViewer(QOpenGLWidget):
 
         # Emit mode-related signals
         self.currentModeChanged.emit(current_mode.name)
-        self.unitChanged.emit(current_mode.unit)
-        self.colorMapChanged.emit(current_mode.color_map)
-        self._emit_value_range()
+        self._emitColorScale()
 
         # We can't just do autoscaleXY here, since we may be in some
         # semi-initialized state and the widget may not have reached a valid
@@ -1742,21 +1809,15 @@ class MeshViewer(QOpenGLWidget):
     @Slot(float)
     def setMinValue(self, value: float) -> None:
         """Sets the minimum of the color scale; clamps max upward if needed."""
-        self.current_rendering_mode.min_value = value
-        if value > self.current_rendering_mode.max_value:
-            self.current_rendering_mode.max_value = value
-
-        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
+        self.current_rendering_mode.set_min(value)
+        self._emitColorScale()
         self.update()
 
     @Slot(float)
     def setMaxValue(self, value: float) -> None:
         """Sets the maximum of the color scale; clamps min downward if needed."""
-        self.current_rendering_mode.max_value = value
-        if value < self.current_rendering_mode.min_value:
-            self.current_rendering_mode.min_value = value
-
-        self.valueRangeChanged.emit(self.current_rendering_mode.min_value, self.current_rendering_mode.max_value)
+        self.current_rendering_mode.set_max(value)
+        self._emitColorScale()
         self.update()
 
     def setMinValueFromWorldPoint(self, world_point: mesh.Point) -> None:
@@ -1926,9 +1987,7 @@ class MeshViewer(QOpenGLWidget):
 
             # Emit signals
             self.currentModeChanged.emit(mode.name)
-            self.unitChanged.emit(mode.unit)
-            self.colorMapChanged.emit(mode.color_map)
-            self._emit_value_range()
+            self._emitColorScale()
             self.update()
 
     def _updateShaderColorMap(self) -> None:
@@ -2020,77 +2079,24 @@ class EditableValueLabel(QLabel):
         self.show()
 
 
-# The colour-scale sliders span COLOR_SCALE_LOG_DECADES decades below the top
-# (one pixel is a constant ratio), and the optional cap clamps the maximum to
-# this percentile of the *current layer* only.
-COLOR_SCALE_LOG_DECADES = 4.0
-COLOR_SCALE_PERCENTILE = 99.9
-
-
-def color_scale_uses_log(data_min: float, data_max: float) -> bool:
-    """Log mapping for non-negative data; linear fallback for signed data."""
-    return data_min >= 0.0 and data_max > 0.0
-
-
-def color_scale_bounds(data_min: float, data_max: float) -> tuple[float, float]:
-    """The (lo, hi) value range the sliders map over."""
-    if color_scale_uses_log(data_min, data_max):
-        lo = data_max * 10.0 ** (-COLOR_SCALE_LOG_DECADES)
-        if data_min > 0.0:
-            lo = max(lo, data_min)
-        return lo, data_max
-    # Signed data: linear over the data range.
-    lo, hi = data_min, data_max
-    if hi <= lo:
-        hi = lo + 1.0
-    return lo, hi
-
-
-def color_scale_value_at(fraction: float,
-                         data_min: float,
-                         data_max: float) -> float:
-    """Map a 0..1 slider fraction to a value."""
-    lo, hi = color_scale_bounds(data_min, data_max)
-    fraction = min(max(fraction, 0.0), 1.0)
-    if color_scale_uses_log(data_min, data_max):
-        return lo * (hi / lo) ** fraction
-    return lo + (hi - lo) * fraction
-
-
-def color_scale_fraction_of(value: float,
-                            data_min: float,
-                            data_max: float) -> float:
-    """Map a value to a 0..1 slider fraction (clamped)."""
-    lo, hi = color_scale_bounds(data_min, data_max)
-    if hi <= lo:
-        return 0.0
-    value = min(max(value, lo), hi)
-    if color_scale_uses_log(data_min, data_max):
-        return math.log(value / lo) / math.log(hi / lo)
-    return (value - lo) / (hi - lo)
-
-
 class ColorScaleWidget(QWidget):
-    """Colour scale with a log min/max slider pair and an optional percentile cap."""
+    """Color scale with min/max sliders and a percentile cap toggle."""
 
     # Signal to notify when unit is changed manually
     unitChanged = Signal(str)
     minValueEdited = Signal(float)
     maxValueEdited = Signal(float)
-    percentileCapChanged = Signal(bool)
+    capToggled = Signal(bool)
 
     _SLIDER_STEPS = 1000
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.v_min = 0.0
-        self.v_max = 1.0
-        # Data range the sliders map over: the global autoscale, or the current
-        # layer's percentile when the cap is on (see setDataRange).
-        self.data_min = 0.0
-        self.data_max = 1.0
-        self.unit = "V"  # Default unit
-        self.color_map = colormaps.PLASMA  # Default color map
+        # Replaced by MeshViewer.colorScaleChanged once a solution is set
+        self.state = ColorScaleState(
+            min_value=0.0, max_value=1.0, slider_lo=0.0, slider_hi=1.0,
+            slider_scale=LinearScale(), capped=False, cap_percentile=99.9,
+            unit="V", color_map=colormaps.PLASMA)
 
         self.setMinimumWidth(110)
         self.setMinimumHeight(200)
@@ -2110,7 +2116,7 @@ class ColorScaleWidget(QWidget):
         layout.setSpacing(2)  # Add a little vertical spacing
 
         # Delta label at the top of the stretch area
-        self.delta_label = QLabel(f"Δ = 0 {self.unit}")
+        self.delta_label = QLabel(f"Δ = 0 {self.state.unit}")
         self.delta_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.delta_label)
 
@@ -2138,14 +2144,12 @@ class ColorScaleWidget(QWidget):
         self.min_label.valueEdited.connect(self.minValueEdited)
         layout.addWidget(self.min_label)
 
-        # Two log-mapped sliders, one for the colour minimum and one for the
-        # maximum, both mapping over the current data range (setDataRange).
         self.min_slider = QSlider(Qt.Horizontal, self)
         self.max_slider = QSlider(Qt.Horizontal, self)
         for slider, tip, slot in (
-            (self.min_slider, "Minimum colour-scale value",
+            (self.min_slider, "Minimum color-scale value",
              self._onMinSliderChanged),
-            (self.max_slider, "Maximum colour-scale value",
+            (self.max_slider, "Maximum color-scale value",
              self._onMaxSliderChanged),
         ):
             slider.setRange(0, self._SLIDER_STEPS)
@@ -2154,41 +2158,35 @@ class ColorScaleWidget(QWidget):
             slider.valueChanged.connect(slot)
             layout.addWidget(slider)
 
-        self.percentile_checkbox = QCheckBox(f"Cap {COLOR_SCALE_PERCENTILE:g}%", self)
-        self.percentile_checkbox.setChecked(False)
+        self.percentile_checkbox = QCheckBox(self)
         self.percentile_checkbox.setFocusPolicy(Qt.NoFocus)
-        self.percentile_checkbox.setToolTip(
-            "Cap the colour maximum to this percentile of the current layer")
-        self.percentile_checkbox.toggled.connect(self.percentileCapChanged)
+        self.percentile_checkbox.toggled.connect(self.capToggled)
         layout.addWidget(self.percentile_checkbox)
 
-    @Slot(float, float)
-    def setRange(self, v_min, v_max):
-        """Set the minimum and maximum values for the scale."""
-        self.v_min = v_min
-        self.v_max = v_max
+        self.setState(self.state)
+
+    @Slot(object)
+    def setState(self, state: ColorScaleState) -> None:
+        """Show `state`; does not re-emit any edit signals."""
+        self.state = state
         self.updateLabels()
-        self._syncSliders()
-        self.update()
 
-    @Slot(float, float)
-    def setDataRange(self, data_min: float, data_max: float) -> None:
-        """Set the data range the colour-scale sliders map over."""
-        self.data_min = data_min
-        self.data_max = data_max
-        self._syncSliders()
-        self.update()
-
-    def _syncSliders(self) -> None:
-        """Reflect v_min/v_max on the sliders without re-emitting."""
-        if self.min_slider is None or self.max_slider is None:
-            return
-        for slider, value in ((self.min_slider, self.v_min),
-                              (self.max_slider, self.v_max)):
-            fraction = color_scale_fraction_of(value, self.data_min, self.data_max)
+        for slider, value in ((self.min_slider, state.min_value),
+                              (self.max_slider, state.max_value)):
+            fraction = state.slider_scale.fraction_of(value, state.slider_lo, state.slider_hi)
+            fraction = min(max(fraction, 0.0), 1.0)
             slider.blockSignals(True)
-            slider.setValue(int(round(fraction * self._SLIDER_STEPS)))
+            slider.setValue(round(fraction * self._SLIDER_STEPS))
             slider.blockSignals(False)
+
+        self.percentile_checkbox.blockSignals(True)
+        self.percentile_checkbox.setChecked(state.capped)
+        self.percentile_checkbox.blockSignals(False)
+        self.percentile_checkbox.setText(f"Cap {state.cap_percentile:g}%")
+        self.percentile_checkbox.setToolTip(
+            f"Cap the sliders to the {state.cap_percentile:g}th percentile of all layers")
+
+        self.update()
 
     @Slot(int)
     def _onMinSliderChanged(self, position: int) -> None:
@@ -2199,29 +2197,18 @@ class ColorScaleWidget(QWidget):
         self.maxValueEdited.emit(self._value_for_position(position))
 
     def _value_for_position(self, position: int) -> float:
-        return color_scale_value_at(position / self._SLIDER_STEPS,
-                                    self.data_min, self.data_max)
-
-    @Slot(str)
-    def setUnit(self, unit):
-        """Set the unit for the scale."""
-        self.unit = unit
-        self.updateLabels()
-
-    @Slot(object)
-    def setColorMap(self, color_map):
-        """Set the color map for the scale."""
-        self.color_map = color_map
-        self.update()  # Trigger a repaint
+        return self.state.slider_scale.value_at(position / self._SLIDER_STEPS,
+                                                self.state.slider_lo, self.state.slider_hi)
 
     def updateLabels(self) -> None:
         """Update the delta and range labels."""
-        delta = self.v_max - self.v_min
-        delta_str = units.Value(delta, self.unit).pretty_format(decimal_places=2)
+        state = self.state
+        delta = state.max_value - state.min_value
+        delta_str = units.Value(delta, state.unit).pretty_format(decimal_places=2)
 
         self.delta_label.setText(f"Δ = {delta_str}")
-        self.max_label.setValue(self.v_max, self.unit)
-        self.min_label.setValue(self.v_min, self.unit)
+        self.max_label.setValue(state.max_value, state.unit)
+        self.min_label.setValue(state.min_value, state.unit)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         """Paint the color gradient scale."""
@@ -2259,7 +2246,7 @@ class ColorScaleWidget(QWidget):
         for i in range(gradient_rect.height()):
             # Map position to color
             t = 1.0 - (i / gradient_rect.height())
-            color = self.color_map(t)
+            color = self.state.color_map(t)
 
             # Convert to QColor
             qcolor = QColor(
@@ -2313,7 +2300,6 @@ def prepare_ui_data(solution: solver.Solution) -> PreparedUI:
     modes = MeshViewer.default_modes()
     for mode in modes:
         mode.set_solution(solution, geometries, disconnected)
-        mode.autoscale_values(solution)
     return PreparedUI(solution=solution, modes=modes)
 
 
@@ -2396,13 +2382,10 @@ class MainWindow(QMainWindow):
 
     def _connectSignals(self) -> None:
         # Connect the MeshViewer
-        self.mesh_viewer.valueRangeChanged.connect(self.color_scale.setRange)
-        self.mesh_viewer.dataRangeChanged.connect(self.color_scale.setDataRange)
-        self.mesh_viewer.unitChanged.connect(self.color_scale.setUnit)
-        self.mesh_viewer.colorMapChanged.connect(self.color_scale.setColorMap)
+        self.mesh_viewer.colorScaleChanged.connect(self.color_scale.setState)
         self.color_scale.minValueEdited.connect(self.mesh_viewer.setMinValue)
         self.color_scale.maxValueEdited.connect(self.mesh_viewer.setMaxValue)
-        self.color_scale.percentileCapChanged.connect(self.mesh_viewer.setPercentileCap)
+        self.color_scale.capToggled.connect(self.mesh_viewer.setCapped)
         self.mesh_viewer.currentLayerChanged.connect(self.updateCurrentLayer)
         self.mesh_viewer.availableLayersChanged.connect(self.app_toolbar.updateLayerSelectionMenu)
         self.mesh_viewer.currentLayerChanged.connect(self.app_toolbar.updateActiveLayerInMenu)

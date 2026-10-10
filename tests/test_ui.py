@@ -7,8 +7,7 @@ from dataclasses import fields
 from padne import mesh, problem, solver, parallel, ui
 from padne.ui import (
     VertexSpatialIndex, FaceSpatialIndex, RenderedMesh, MeshViewer,
-    color_scale_uses_log, color_scale_bounds, color_scale_value_at,
-    color_scale_fraction_of, prepare_ui_data,
+    LinearScale, LogScale, prepare_ui_data,
 )
 
 
@@ -195,85 +194,84 @@ class TestCurrentDensityUnit:
         assert self._unit_for(None) == "A/mm"
 
 
-class TestColorScaleMapping:
-    """The log/linear slider mapping and the percentile cap."""
+class TestSliderScale:
 
-    def test_non_negative_data_uses_log(self):
-        assert color_scale_uses_log(0.0, 10.0)
-        assert not color_scale_uses_log(-1.0, 10.0)
-        assert not color_scale_uses_log(0.0, 0.0)
+    def test_linear_round_trip(self):
+        scale = LinearScale()
+        assert scale.value_at(0.0, -1.0, 1.0) == pytest.approx(-1.0)
+        assert scale.value_at(0.5, -1.0, 1.0) == pytest.approx(0.0)
+        assert scale.value_at(1.0, -1.0, 1.0) == pytest.approx(1.0)
+        assert scale.fraction_of(0.0, -1.0, 1.0) == pytest.approx(0.5)
 
-    def test_log_bounds_span_the_configured_decades(self):
-        lo, hi = color_scale_bounds(0.0, 10.0)
-        assert hi == 10.0
-        assert lo == pytest.approx(10.0 * 10.0 ** -4.0)
+    def test_linear_degenerate_range(self):
+        assert LinearScale().fraction_of(5.0, 5.0, 5.0) == 0.0
 
-    def test_log_bounds_respect_a_positive_data_min(self):
-        lo, hi = color_scale_bounds(1.0, 10.0)
-        assert lo == pytest.approx(1.0)
+    def test_log_spans_the_decades_below_hi(self):
+        scale = LogScale(decades=4.0)
+        assert scale.value_at(1.0, 0.0, 10.0) == pytest.approx(10.0)
+        # Just above fraction 0 the value is ~decades below hi
+        assert scale.value_at(1e-9, 0.0, 10.0) == pytest.approx(10.0 * 1e-4)
+        # Constant ratio per unit fraction
+        assert scale.value_at(0.5, 0.0, 10.0) == pytest.approx(10.0 * 1e-2)
 
-    def test_log_value_and_fraction_round_trip(self):
+    def test_log_fraction_zero_is_lo(self):
+        scale = LogScale(decades=4.0)
+        assert scale.value_at(0.0, 0.0, 10.0) == 0.0
+        assert scale.fraction_of(0.0, 0.0, 10.0) == 0.0
+        assert scale.fraction_of(1e-6, 0.0, 10.0) == 0.0
+
+    def test_log_round_trip(self):
+        scale = LogScale(decades=4.0)
         for fraction in (0.0, 0.25, 0.5, 1.0):
-            value = color_scale_value_at(fraction, 0.0, 10.0)
-            assert color_scale_fraction_of(value, 0.0, 10.0) == pytest.approx(fraction)
-        # Constant ratio per unit fraction (the point of a log scale).
-        assert (color_scale_value_at(0.5, 0.0, 10.0)
-                == pytest.approx(np.sqrt(color_scale_value_at(0.0, 0.0, 10.0)
-                                         * color_scale_value_at(1.0, 0.0, 10.0))))
-
-    def test_signed_data_falls_back_to_linear(self):
-        assert color_scale_value_at(0.0, -1.0, 1.0) == pytest.approx(-1.0)
-        assert color_scale_value_at(0.5, -1.0, 1.0) == pytest.approx(0.0)
-        assert color_scale_value_at(1.0, -1.0, 1.0) == pytest.approx(1.0)
-        assert color_scale_fraction_of(0.0, -1.0, 1.0) == pytest.approx(0.5)
-
-    def test_degenerate_range_does_not_crash(self):
-        assert color_scale_value_at(0.5, 5.0, 5.0) == pytest.approx(5.0)
-        assert color_scale_fraction_of(5.0, 5.0, 5.0) == 0.0
+            value = scale.value_at(fraction, 0.0, 10.0)
+            assert scale.fraction_of(value, 0.0, 10.0) == pytest.approx(fraction)
 
 
-class TestPercentileCap:
-    """The 'cap to current layer percentile' rendering-mode helper."""
+class TestRenderingModeColorScale:
+    """Clamping and percentile cap rules of BaseRenderingMode."""
 
-    class _Index:
-        def __init__(self, values):
-            self.values = np.asarray(values, dtype=float)
+    def _mode(self, capped):
+        mode = MeshViewer.PowerDensityRenderingMode(capped=capped)
+        mode.data_range = (0.0, 100.0)
+        mode.percentile_max = 10.0
+        mode.autoscale()
+        return mode
 
-    def test_caps_max_to_the_layer_percentile(self):
-        mode = MeshViewer.PowerDensityRenderingMode()
-        mode.min_value, mode.max_value = 0.0, 1000.0
-        mode.data_min_value, mode.data_max_value = 0.0, 1000.0
-        mode.spatial_indices = {"F.Cu": self._Index(list(range(1, 1001)))}
+    def test_autoscale_respects_the_cap(self):
+        capped, uncapped = self._mode(capped=True), self._mode(capped=False)
+        assert (capped.min_value, capped.max_value) == (0.0, 10.0)
+        assert (uncapped.min_value, uncapped.max_value) == (0.0, 100.0)
 
-        assert mode.cap_max_to_percentile("F.Cu", 99.9) is True
-        expected = float(np.percentile(range(1, 1001), 99.9))
-        assert mode.max_value == pytest.approx(expected)
-        assert mode.data_max_value == pytest.approx(expected)
+    def test_edits_are_clamped_to_the_slider_range(self):
+        mode = self._mode(capped=True)
+        mode.set_max(50.0)
+        assert mode.max_value == 10.0
+        mode.set_min(-5.0)
+        assert mode.min_value == 0.0
 
-    def test_no_values_means_no_cap(self):
-        mode = MeshViewer.PowerDensityRenderingMode()
-        mode.spatial_indices = {}
-        assert mode.cap_max_to_percentile("F.Cu", 99.9) is False
+    def test_min_pushes_max_and_max_pushes_min(self):
+        mode = self._mode(capped=False)
+        mode.set_max(20.0)
+        mode.set_min(30.0)
+        assert (mode.min_value, mode.max_value) == (30.0, 30.0)
+        mode.set_max(5.0)
+        assert (mode.min_value, mode.max_value) == (5.0, 5.0)
 
+    def test_capping_clamps_without_rescaling(self):
+        mode = self._mode(capped=False)
+        mode.set_min(3.0)
+        mode.set_max(60.0)
+        mode.set_capped(True)
+        assert (mode.min_value, mode.max_value) == (3.0, 10.0)
+        mode.set_min(20.0)
+        assert (mode.min_value, mode.max_value) == (10.0, 10.0)
 
-class TestRenderingModeDataRange:
-    """Each mode tracks its autoscaled data range separately from the edit range."""
-
-    def test_autoscale_sets_the_data_range(self):
-        mode = MeshViewer.PowerDensityRenderingMode()
-        mode.spatial_indices = {"F.Cu": TestPercentileCap._Index([0.0, 2.0, 4.0])}
-        solution = solver.Solution(
-            problem=problem.Problem(layers=[], networks=[]),
-            layer_solutions=[],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0,
-                                          relative_residual=0.0),
-        )
-        mode.autoscale_values(solution)
-        assert (mode.data_min_value, mode.data_max_value) == (0.0, 4.0)
-        assert (mode.min_value, mode.max_value) == (0.0, 4.0)
-        # Editing the current range must not move the data range.
-        mode.min_value, mode.max_value = 1.0, 3.0
-        assert (mode.data_min_value, mode.data_max_value) == (0.0, 4.0)
+    def test_uncapping_keeps_the_values(self):
+        mode = self._mode(capped=True)
+        mode.set_min(2.0)
+        mode.set_capped(False)
+        assert (mode.min_value, mode.max_value) == (2.0, 10.0)
+        assert mode.slider_range == (0.0, 100.0)
 
 
 class TestPrepareUiData:
@@ -395,6 +393,18 @@ def _ui_solution():
         ))
     return solver.Solution(problem.Problem(layers, []), solutions,
                            solver.SolverInfo(0.0, 0.0, 0.0))
+
+
+def test_set_solution_precomputes_global_ranges():
+    prepared = prepare_ui_data(_ui_solution())
+    for mode in prepared.modes:
+        values = np.concatenate([index.values for index in mode.spatial_indices.values()])
+        assert mode.data_range[1] == pytest.approx(values.max())
+        assert mode.percentile_max == pytest.approx(np.percentile(values, mode.cap_percentile))
+        assert (mode.min_value, mode.max_value) == mode.slider_range
+    voltage, power, current = prepared.modes
+    assert not voltage.capped
+    assert power.capped and current.capped
 
 
 def test_bulk_spatial_indices_preserve_order_and_snapshot_values():
