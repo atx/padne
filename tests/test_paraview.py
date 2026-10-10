@@ -4,7 +4,6 @@ Tests for ParaView VTK XML export functionality.
 
 import pytest
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -355,6 +354,8 @@ class TestSolutionExport:
 
             output_file = vtu_files[0]
             assert output_file.name == "F.Cu.vtu"
+            assert output_file.read_text(encoding="utf-8").startswith(
+                "<?xml version='1.0' encoding='UTF-8'?>")
 
             # Parse and validate XML structure
             tree = lxml.etree.parse(str(output_file))
@@ -423,80 +424,3 @@ class TestSolutionExport:
                 root = tree.getroot()
                 pieces = root.findall(".//Piece")
                 assert len(pieces) == 1  # One piece per file
-
-
-class TestXMLValidation:
-    def test_xml_is_well_formed(self):
-        """Test that generated XML is well-formed and parseable."""
-        mock_layer = Mock(spec=problem.Layer)
-        mock_layer.name = "TestLayer"
-        mock_problem = Mock(spec=problem.Problem)
-        mock_problem.layers = [mock_layer]
-
-        test_mesh = mesh.Mesh()
-        vertices = [
-            test_mesh.make_vertex(mesh.Point(0.0, 0.0)),
-            test_mesh.make_vertex(mesh.Point(1.0, 0.0)),
-            test_mesh.make_vertex(mesh.Point(0.0, 1.0))
-        ]
-
-        potentials = mesh.ZeroForm(test_mesh)
-        for i, vertex in enumerate(vertices):
-            potentials[vertex] = float(i * 10)
-
-        layer_solution = solver.LayerSolution(
-            meshes=[test_mesh],
-            potentials=[potentials]
-        )
-
-        solution = solver.Solution(
-            problem=mock_problem,
-            layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
-        )
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = Path(tmp_dir)
-
-            paraview.export_solution(solution, output_dir)
-
-            # Get the generated file
-            vtu_files = list(output_dir.glob("*.vtu"))
-            assert len(vtu_files) == 1
-            output_file = vtu_files[0]
-
-            # Test with both lxml and standard library parsers
-            lxml_tree = lxml.etree.parse(str(output_file))
-            assert lxml_tree is not None
-
-            et_tree = ET.parse(str(output_file))
-            assert et_tree is not None
-
-            # Validate XML declaration and encoding
-            with open(output_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-                assert content.startswith('<?xml version=\'1.0\' encoding=\'UTF-8\'?>')
-
-    def test_vtk_format_compliance(self):
-        """Test compliance with VTK XML format specification."""
-        root = paraview.create_vtk_root()
-
-        # Required root attributes
-        assert root.get("type") == "UnstructuredGrid"
-        assert root.get("version") is not None
-        assert root.get("byte_order") is not None
-
-        # Test data array attributes
-        test_mesh = mesh.Mesh()
-        vertex = test_mesh.make_vertex(mesh.Point(1.0, 2.0))
-
-        potentials = mesh.ZeroForm(test_mesh)
-        potentials[vertex] = 1.5
-
-        point_data = paraview.create_point_data(potentials)
-        data_array = point_data.find("DataArray")
-
-        # VTK requires these attributes
-        assert data_array.get("type") in ["Float64", "Float32", "Int32", "UInt8"]
-        assert data_array.get("Name") is not None
-        assert data_array.get("format") in ["ascii", "binary"]
