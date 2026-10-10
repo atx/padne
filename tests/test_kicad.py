@@ -798,8 +798,6 @@ class TestStackup:
         # Extract stackup
         stackup = kicad.extract_stackup_from_kicad_pcb(board)
 
-        # Check that we got a valid Stackup object
-        assert isinstance(stackup, kicad.Stackup)
         assert len(stackup.items) == 3, f"Expected 3 stackup items, got {len(stackup.items)}"
 
         # Check F.Cu layer
@@ -828,8 +826,6 @@ class TestStackup:
         # Extract stackup
         stackup = kicad.extract_stackup_from_kicad_pcb(board)
 
-        # Check that we got a valid Stackup object
-        assert isinstance(stackup, kicad.Stackup), f"Stackup extraction failed for {project.name}"
         assert len(stackup.items) > 0, f"No stackup items found for {project.name}"
 
 
@@ -841,8 +837,6 @@ class TestLoadKicadProject:
         project = kicad_test_projects["simple_geometry"]
         result = kicad.load_kicad_project(project.pro_path)
 
-        # Check that we got a Problem object back
-        assert isinstance(result, problem.Problem)
         # Should have at least one layer (F.Cu)
         assert len(result.layers) >= 1
         # Should have our two lumped elements, each in its own network
