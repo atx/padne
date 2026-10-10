@@ -250,15 +250,10 @@ class VertexIndexer:
 
 def find_connected_layer_geom_indices(connectivity_graph: ConnectivityGraph
                                       ) -> set[tuple[int, int]]:
-    connected_nodes = connectivity_graph.compute_connected_nodes()
-
-    layer_mesh_pairs = set()
-    for node in connected_nodes:
-        layer_i = node.layer_i
-        geom_i = node.geom_i
-        layer_mesh_pairs.add((layer_i, geom_i))
-
-    return layer_mesh_pairs
+    return {
+        (node.layer_i, node.geom_i)
+        for node in connectivity_graph.compute_connected_nodes()
+    }
 
 
 @stage_timer
