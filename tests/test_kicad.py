@@ -858,13 +858,12 @@ class TestLoadKicadProject:
         assert isinstance(f_cu_layer.shape, shapely.geometry.MultiPolygon)
         assert not f_cu_layer.shape.is_empty
 
-    def test_conductance_vaguely_makes_sense(self, kicad_test_projects, monkeypatch):
-        """Test that custom resistivity is applied correctly."""
+    def test_conductance_vaguely_makes_sense(self, kicad_test_projects):
+        """Test that the default copper yields a plausible F.Cu sheet conductance."""
         project = kicad_test_projects["simple_geometry"]
 
         result = kicad.load_kicad_project(project.pro_path)
 
-        # F.Cu layer should have the custom resistivity
         f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
         assert 1900 < f_cu_layer.conductance < 2300
 
