@@ -3129,3 +3129,24 @@ class TestVariableDensityMeshing:
             mock_cgal_mesh.assert_called_once()
             args, kwargs = mock_cgal_mesh.call_args
             assert args[4] is mock_distance_map_instance
+
+    def test_variable_density_triangle_sizes(self):
+        """Triangles grow away from the boundary but stay within the scaled bound."""
+        size = 0.5
+        factor = 3.0
+        config = Mesher.Config(maximum_size=size,
+                               variable_size_maximum_factor=factor,
+                               distance_map_quantization=0.1)
+        mesh = Mesher(config).poly_to_mesh(shapely.geometry.box(0, 0, 20, 20))
+
+        corners = mesh.positions()[mesh.triangles()]
+        longest_edge = np.linalg.norm(
+            corners - np.roll(corners, 1, axis=1), axis=2).max(axis=1)
+        centroids = corners.mean(axis=1)
+        boundary_distance = np.minimum(centroids, 20 - centroids).min(axis=1)
+
+        near_boundary = boundary_distance < 0.25
+        assert near_boundary.any()
+        assert np.all(longest_edge[near_boundary] <= size + 1e-9)
+        assert np.all(longest_edge <= size * factor + 1e-9)
+        assert np.any(longest_edge[boundary_distance > config.variable_density_max_distance] > size)
