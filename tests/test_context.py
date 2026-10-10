@@ -348,6 +348,8 @@ class TestLockedObject:
         first_inside = threading.Event()
         second_attempted = threading.Event()
         second_acquired = threading.Event()
+        # Assertions inside a thread cannot fail the test, so record instead.
+        result = {}
 
         def first():
             with wrapped:
@@ -356,7 +358,7 @@ class TestLockedObject:
                 second_attempted.wait()
                 # Brief pause to give second thread a chance to race in
                 time.sleep(0.05)
-                assert not second_acquired.is_set()
+                result["second_acquired_while_held"] = second_acquired.is_set()
 
         def second():
             first_inside.wait()
@@ -370,6 +372,7 @@ class TestLockedObject:
         t2.start()
         t1.join()
         t2.join()
+        assert not result["second_acquired_while_held"]
         assert second_acquired.is_set()  # eventually got it after t1 released
 
     def test_released_on_exception(self):
