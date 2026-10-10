@@ -316,6 +316,9 @@ class PadIndex:
         # simulations.
         return self.mapping.get(ep, [])
 
+    def find_by_endpoints(self, eps: Iterable[Endpoint]) -> list[LayerPoint]:
+        return [lp for ep in eps for lp in self.find_by_endpoint(ep)]
+
     def load_smd_pads(self, board: pcbnew.BOARD, layer_dict: dict[str, problem.Layer]) -> None:
         """
         Load all SMD pads from the given PCB board into the mapping.
@@ -516,11 +519,7 @@ class BaseLumpedSpec:
 
             internal_arg_name = self.endpoint_names[directive_param_name]
 
-            layerpoints = [
-                lp
-                for ep in endpoints_list
-                for lp in pad_index.find_by_endpoint(ep)
-            ]
+            layerpoints = pad_index.find_by_endpoints(endpoints_list)
 
             if len(layerpoints) == 1:
                 # Optimize by wiring directly to the internal node
@@ -617,13 +616,7 @@ class VoltageSourceSpec(BaseLumpedSpec):
         n_connections = []
         for endpoints, connections in zip([p_endpoints, n_endpoints],
                                           [p_connections, n_connections]):
-            layerpoints = [
-                lp
-                for ep in endpoints
-                for lp in pad_index.find_by_endpoint(ep)
-            ]
-
-            for lp in layerpoints:
+            for lp in pad_index.find_by_endpoints(endpoints):
                 layer = layer_dict[lp.layer]
                 conn = problem.Connection(layer=layer, point=lp.point)
                 connections.append(conn)
