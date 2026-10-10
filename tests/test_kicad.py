@@ -1446,17 +1446,44 @@ class TestProcessDirectives:
 
 class TestLumpedSpecs:
 
-    def test_voltage_source_unresolved_endpoints(self):
+    @staticmethod
+    def single_layer_with_pads(endpoints):
+        """A square F.Cu layer with one pad per endpoint, spaced along x."""
         layer = problem.Layer(
             shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 10)]),
             name="F.Cu",
             conductance=1.0,
         )
-        ep = kicad.Endpoint("U1", "1")
         pad_index = kicad.PadIndex()
-        pad_index.mapping[ep] = [kicad.LayerPoint(layer="F.Cu", point=shapely.geometry.Point(3, 4))]
+        for i, ep in enumerate(endpoints):
+            pad_index.mapping[ep] = [
+                kicad.LayerPoint(layer="F.Cu", point=shapely.geometry.Point(1 + i, 5))
+            ]
+        return {"F.Cu": layer}, pad_index
+
+    def test_from_directive_missing_endpoint(self):
+        with pytest.raises(ValueError, match="Missing endpoint parameter: b"):
+            kicad.ResistorSpec.from_directive(
+                kicad.Directive.parse("!padne RESISTANCE a=R1.1 r=1"))
+
+    def test_from_directive_missing_value(self):
+        with pytest.raises(ValueError, match="Missing value parameter: r"):
+            kicad.ResistorSpec.from_directive(
+                kicad.Directive.parse("!padne RESISTANCE a=R1.1 b=R1.2"))
+
+    def test_from_directive_default_value(self):
+        spec = kicad.VoltageSourceSpec.from_directive(
+            kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=U1.2 v=5V"))
+        assert spec.values == {"v": 5.0, "esr": 0.0}
+
+        spec = kicad.VoltageSourceSpec.from_directive(
+            kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=U1.2 v=5V esr=10m"))
+        assert spec.values["esr"] == pytest.approx(0.01)
+
+    def test_voltage_source_unresolved_endpoints(self):
+        layer_dict, pad_index = self.single_layer_with_pads([kicad.Endpoint("U1", "1")])
 
         spec = kicad.VoltageSourceSpec.from_directive(
             kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=NOPE.1 v=1V"))
         with pytest.raises(ValueError, match="Negative endpoints"):
-            spec.construct(pad_index, {"F.Cu": layer})
+            spec.construct(pad_index, layer_dict)
