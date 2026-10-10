@@ -2,17 +2,11 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
-#include <iostream>
-#include <iterator>
 #include <cmath>
 #include <algorithm>
 #include <limits>
-#include <streambuf>
 #include <unordered_map>
 #include <utility>
-
-
-//#define CGAL_USE_BASIC_VIEWER
 
 #include <CGAL/version.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
@@ -28,11 +22,6 @@
 
 #include "ndarray_util.h"
 
-#ifdef CGAL_USE_BASIC_VIEWER
-#include <CGAL/draw_triangulation_2.h>
-#include <CGAL/draw_constrained_triangulation_2.h>
-#endif
-
 namespace nb = nanobind;
 using namespace nb::literals;
 
@@ -46,9 +35,6 @@ typedef CGAL::Triangulation_data_structure_2<Vb, Fb> Tds;
 typedef CGAL::Constrained_Delaunay_triangulation_2<K, Tds> CDT;
 typedef K::Point_2 Point;
 typedef K::Segment_2 Segment_2;
-
-// Helper macro (often used with version info passed from CMake)
-#define MACRO_STRINGIFY(x) #x
 
 // CGALPolygon class - wraps CGAL::Polygon_with_holes_2 for Python interface
 class CGALPolygon {
@@ -79,7 +65,6 @@ private:
 
     // Coordinate transformation methods
     std::pair<double, double> world_to_grid(double world_x, double world_y) const;
-    std::pair<double, double> grid_to_world(double grid_x, double grid_y) const;
     int grid_to_index(int grid_i, int grid_j) const;
 
 public:
@@ -127,8 +112,6 @@ public:
 
     inline double size_bound() const { return sizebound; }
 
-    inline void set_size_bound(const double sb) { sizebound = sb; }
-
     // Simple struct with public members for size and sine
     struct Quality {
       double sine;
@@ -152,11 +135,6 @@ public:
               }
           }
           return sine < q.sine;
-      }
-
-      std::ostream& operator<<(std::ostream& out) const {
-          return out << "(size=" << size
-                     << ", sine=" << sine << ")";
       }
     };
 
@@ -194,7 +172,6 @@ public:
 
         CGAL::Mesh_2::Face_badness operator()(const typename CDT::Face_handle& fh,
                                               Quality& q) const {
-            typedef typename CDT::Geom_traits Geom_traits;
             typedef typename Geom_traits::Compute_area_2 Compute_area_2;
             typedef typename Geom_traits::Compute_squared_distance_2
               Compute_squared_distance_2;
@@ -599,12 +576,6 @@ std::pair<double, double> PolyBoundaryDistanceMap::world_to_grid(double world_x,
     return std::make_pair(grid_x, grid_y);
 }
 
-std::pair<double, double> PolyBoundaryDistanceMap::grid_to_world(double grid_x, double grid_y) const {
-    double world_x = min_x + grid_x * quantization;
-    double world_y = min_y + grid_y * quantization;
-    return std::make_pair(world_x, world_y);
-}
-
 int PolyBoundaryDistanceMap::grid_to_index(int grid_i, int grid_j) const {
     return grid_j * width + grid_i;
 }
@@ -709,11 +680,7 @@ double CGALPolygon::distance_to_boundary(double x, double y) const {
     return std::sqrt(min_squared_dist);
 }
 
-// NB_MODULE defines the module initialization function.
-// The first argument ("_cgal") MUST match the first argument of nanobind_add_module in CMakeLists.txt.
-// The 'm' variable is the module object.
 NB_MODULE(_cgal, m) {
-    // Optional: Add a docstring to the module.
     m.doc() = R"pbdoc(
         Padne internal libcgal wrapper
         ------------------------------
@@ -763,11 +730,4 @@ NB_MODULE(_cgal, m) {
         .def_prop_ro("height", &PolyBoundaryDistanceMap::get_height);
 
     m.attr("cgal_version") = CGAL_VERSION_STR;
-
-#ifdef VERSION_INFO
-    // Add version information if defined (usually via CMake)
-    m.attr("__version__") = MACRO_STRINGIFY(VERSION_INFO);
-#else
-    m.attr("__version__") = "dev";
-#endif
 }
