@@ -1428,6 +1428,22 @@ class TestErodeLayersByUndercut:
         assert kicad.erode_layers_by_undercut([layer], 0.0) == [layer]
 
 
+class TestProcessDirectives:
+
+    def test_unknown_directive_warns(self):
+        with pytest.warns(UserWarning, match="Unknown directive: BOGUS"):
+            directives = kicad.process_directives([kicad.Directive.parse("!padne BOGUS x=1")])
+        assert directives.lumped_specs == []
+
+    def test_multiple_copper_directives_first_wins(self):
+        with pytest.warns(UserWarning, match="Multiple COPPER directives"):
+            directives = kicad.process_directives([
+                kicad.Directive.parse("!padne COPPER conductivity=5e7"),
+                kicad.Directive.parse("!padne COPPER conductivity=1e7"),
+            ])
+        assert directives.copper_spec.conductivity == pytest.approx(5e4)
+
+
 class TestLumpedSpecs:
 
     def test_voltage_source_unresolved_endpoints(self):
