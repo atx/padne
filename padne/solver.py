@@ -1,5 +1,3 @@
-
-
 import collections
 import enum
 import itertools
@@ -15,7 +13,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import problem, mesh, context, parallel
+from . import problem, mesh, parallel
 from .context import stage_timer
 
 log = logging.getLogger(__name__)
@@ -150,9 +148,9 @@ class ConnectivityGraph:
     @classmethod
     def create_from_problem(cls,
                             problem: problem.Problem) -> "ConnectivityGraph":
-        # First, we construct Node objects for ever layer geometry in the layers
+        # First, we construct Node objects for every layer geometry in the layers
         # that is, a list nodes_by_layers[layer_i][geom_i] gives us the
-        # Node that coresponds to the layer_i-th layers geom_i-th geometry
+        # Node that corresponds to the layer_i-th layers geom_i-th geometry
         # object.
         nodes_by_layers = []
         for layer_i, layer in enumerate(problem.layers):
@@ -161,7 +159,7 @@ class ConnectivityGraph:
                  for geom_i, geom in enumerate(layer.geoms)]
             )
 
-        # And finally, we walk through each of the networks, figure out
+        # Then, we walk through each of the networks, figure out
         # which Nodes are connected to each of the Connection and then
         # consider those Nodes connected to each other.
         conn_locations = locate_connection_points(problem)
@@ -284,11 +282,6 @@ def generate_meshes_for_problem(prob: problem.Problem,
                                 mesher: mesh.Mesher,
                                 connected_layer_mesh_pairs: set[tuple[int, int]]
                                 ) -> tuple[list[mesh.Mesh], list[int]]:
-    # Collect the independent per-region meshing jobs first, then mesh them
-    # concurrently. poly_to_mesh's heavy work -- the distance-map
-    # rasterization, the Delaunay refinement and the half-edge build --
-    # releases the GIL (see _cgal and _mesh), so threads parallelize it.
-    #
     # Beware! We are only including seed points that are _on the interior_
     # of the geometry ("contains" excludes boundaries). This is because otherwise
     # the mesher may attempt to fill in holes due to a seed point being on the
@@ -322,8 +315,6 @@ def generate_meshes_for_problem(prob: problem.Problem,
             mesh_jobs.append((geom, geom_to_seed_points[(layer_i, geom_i)]))
             mesh_index_to_layer_index.append(layer_i)
 
-    # Mesh the regions concurrently. thread_map runs serially in-thread when
-    # jobs == 1, so single-job runs keep clean tracebacks and full coverage.
     meshes = parallel.thread_map(
         lambda job: mesher.poly_to_mesh(job[0], job[1]),
         mesh_jobs,
@@ -350,9 +341,6 @@ def generate_disconnected_meshes(prob: problem.Problem,
     relaxed_mesher = mesh.Mesher(mesh.Mesher.Config.RELAXED)
     disconnected_meshes_by_layer: list[list[mesh.Mesh]] = [[] for _ in prob.layers]
 
-    # Collect the disconnected regions first, then triangulate them
-    # concurrently; poly_to_mesh releases the GIL for the CGAL and
-    # topology-building work.
     jobs = [
         (layer_i, layer.geoms[geom_i])
         for layer_i, layer in enumerate(prob.layers)
@@ -709,11 +697,8 @@ def filter_dead_networks(prob: problem.Problem,
                          connected_layer_mesh_pairs: set[tuple[int, int]]
                          ) -> list[problem.Network]:
     """
-    Drop networks whose connections all lie on disconnected copper.
-
-    A network with at least one connection on dead copper would contribute
-    rows that cannot be solved meaningfully, so it is excluded from the
-    system. See `network_has_a_dead_terminal` for the per-network check.
+    Drop networks with any connection on disconnected copper. See
+    `network_has_a_dead_terminal` for the per-network check.
     """
     conn_locations = locate_connection_points(prob)
     return [
@@ -875,7 +860,7 @@ def solve(prob: problem.Problem,
     Solve the given PCB problem to find voltage and current distribution.
 
     Args:
-        problem: The Problem object containing layers and lumped elements
+        prob: The Problem object containing layers and lumped elements
         mesher_config: Configuration for mesh generation, uses defaults if None
         backend: Sparse direct solver to use, None picks the default (SciPy)
 
@@ -914,10 +899,10 @@ def solve(prob: problem.Problem,
     filtered_networks = filter_dead_networks(prob, connected_layer_mesh_pairs)
     log.info(f"Filtered networks: {len(filtered_networks)}/{len(prob.networks)}")
 
-    # Next, we construct the _internal_ system of equations for each of the
-    # network.
+    # Next, we assign global indices to the network nodes and the extra
+    # variables of voltage sources and regulators.
     log.info("Constructing node index for networks")
-    with context.stage_timer("node_indexing"):
+    with stage_timer("node_indexing"):
         node_indexer = NodeIndexer.create(
             prob, meshes, mesh_index_to_layer_index, vindex, filtered_networks
         )
