@@ -3,8 +3,6 @@ Tests for ParaView VTK XML export functionality.
 """
 
 import pytest
-import tempfile
-from pathlib import Path
 from unittest.mock import Mock
 
 import lxml.etree
@@ -241,35 +239,12 @@ class TestCellsCreation:
 
 class TestPieceCreation:
     def test_create_piece_basic_structure(self):
-        # Create a minimal mesh with proper triangle structure
-        test_mesh = mesh.Mesh()
-
-        # Add three vertices for a triangle
-        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
-        v1 = test_mesh.make_vertex(mesh.Point(1.0, 0.0))
-        v2 = test_mesh.make_vertex(mesh.Point(0.0, 1.0))
-
-        # Create face and half-edges forming a triangle
-        face = test_mesh.make_face()
-        e0 = test_mesh.connect_vertices(v0, v1)
-        e1 = test_mesh.connect_vertices(v1, v2)
-        e2 = test_mesh.connect_vertices(v2, v0)
-
-        # Connect the edges in a loop
-        mesh.HalfEdge.connect(e0, e1)
-        mesh.HalfEdge.connect(e1, e2)
-        mesh.HalfEdge.connect(e2, e0)
-
-        # Associate edges with face
-        e0.face = face
-        e1.face = face
-        e2.face = face
-        face.edge = e0
+        test_mesh = mesh.Mesh.from_triangle_soup(
+            [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+            [(0, 1, 2)])
 
         potentials = mesh.ZeroForm(test_mesh)
-        potentials[v0] = 1.0
-        potentials[v1] = 2.0
-        potentials[v2] = 3.0
+        potentials.values[:] = [1.0, 2.0, 3.0]
 
         piece = paraview.create_piece(test_mesh, potentials)
 
@@ -288,111 +263,85 @@ class TestPieceCreation:
         assert cells is not None
 
 
-class TestSolutionExport:
-    def test_export_solution_file_creation(self):
-        # Create mock problem with layer names
+def _single_vertex_potentials(point, value):
+    test_mesh = mesh.Mesh()
+    vertex = test_mesh.make_vertex(point)
+    potentials = mesh.ZeroForm(test_mesh)
+    potentials[vertex] = value
+    return potentials
+
+
+def _solution(layers):
+    """Build a Solution from (layer name, ZeroForm) pairs, one mesh per layer."""
+    mock_layers = []
+    for name, _ in layers:
         mock_layer = Mock(spec=problem.Layer)
-        mock_layer.name = "F.Cu"
-        mock_problem = Mock(spec=problem.Problem)
-        mock_problem.layers = [mock_layer]
+        mock_layer.name = name
+        mock_layers.append(mock_layer)
+    mock_problem = Mock(spec=problem.Problem)
+    mock_problem.layers = mock_layers
 
-        # Create minimal mesh and potentials
-        test_mesh = mesh.Mesh()
-        vertex = test_mesh.make_vertex(mesh.Point(1.0, 2.0))
+    return solver.Solution(
+        problem=mock_problem,
+        layer_solutions=[
+            solver.LayerSolution(meshes=[potentials.mesh], potentials=[potentials])
+            for _, potentials in layers
+        ],
+        solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
+    )
 
-        potentials = mesh.ZeroForm(test_mesh)
-        potentials[vertex] = 3.3
 
-        layer_solution = solver.LayerSolution(
-            meshes=[test_mesh],
-            potentials=[potentials]
-        )
+class TestSolutionExport:
+    def test_export_solution_file_creation(self, tmp_path):
+        solution = _solution([("F.Cu", _single_vertex_potentials(mesh.Point(1.0, 2.0), 3.3))])
+        output_dir = tmp_path / "out"
 
-        solution = solver.Solution(
-            problem=mock_problem,
-            layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
-        )
+        paraview.export_solution(solution, output_dir)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = Path(tmp_dir)
+        # Verify directory was created and file exists
+        assert output_dir.exists()
+        vtu_files = list(output_dir.glob("*.vtu"))
+        assert len(vtu_files) == 1
 
-            paraview.export_solution(solution, output_dir)
+        output_file = vtu_files[0]
+        assert output_file.name == "F.Cu.vtu"
+        assert output_file.read_text(encoding="utf-8").startswith(
+            "<?xml version='1.0' encoding='UTF-8'?>")
 
-            # Verify directory was created and file exists
-            assert output_dir.exists()
-            vtu_files = list(output_dir.glob("*.vtu"))
-            assert len(vtu_files) == 1
+        # Parse and validate XML structure
+        tree = lxml.etree.parse(str(output_file))
+        root = tree.getroot()
 
-            output_file = vtu_files[0]
-            assert output_file.name == "F.Cu.vtu"
-            assert output_file.read_text(encoding="utf-8").startswith(
-                "<?xml version='1.0' encoding='UTF-8'?>")
+        assert root.tag == "VTKFile"
+        assert root.get("type") == "UnstructuredGrid"
 
-            # Parse and validate XML structure
-            tree = lxml.etree.parse(str(output_file))
+        unstructured_grid = root.find("UnstructuredGrid")
+        assert unstructured_grid is not None
+
+        pieces = unstructured_grid.findall("Piece")
+        assert len(pieces) == 1
+
+        piece = pieces[0]
+        assert piece.get("NumberOfPoints") == "1"
+
+    def test_export_solution_multiple_layers(self, tmp_path):
+        solution = _solution([
+            ("F.Cu", _single_vertex_potentials(mesh.Point(0.0, 0.0), 1.0)),
+            ("B.Cu", _single_vertex_potentials(mesh.Point(1.0, 0.0), 2.0)),
+        ])
+
+        paraview.export_solution(solution, tmp_path)
+
+        # Verify two separate files were created
+        vtu_files = list(tmp_path.glob("*.vtu"))
+        assert len(vtu_files) == 2
+
+        filenames = {f.name for f in vtu_files}
+        assert filenames == {"F.Cu.vtu", "B.Cu.vtu"}
+
+        # Verify each file contains one piece
+        for vtu_file in vtu_files:
+            tree = lxml.etree.parse(str(vtu_file))
             root = tree.getroot()
-
-            assert root.tag == "VTKFile"
-            assert root.get("type") == "UnstructuredGrid"
-
-            unstructured_grid = root.find("UnstructuredGrid")
-            assert unstructured_grid is not None
-
-            pieces = unstructured_grid.findall("Piece")
-            assert len(pieces) == 1
-
-            piece = pieces[0]
-            assert piece.get("NumberOfPoints") == "1"
-
-    def test_export_solution_multiple_layers(self):
-        # Create mock problem with multiple layer names
-        layer_names = ["F.Cu", "B.Cu"]
-        mock_layers = []
-        for name in layer_names:
-            mock_layer = Mock(spec=problem.Layer)
-            mock_layer.name = name
-            mock_layers.append(mock_layer)
-
-        mock_problem = Mock(spec=problem.Problem)
-        mock_problem.layers = mock_layers
-
-        # Create two layers with different meshes
-        layer_solutions = []
-        for layer_idx in range(2):
-            test_mesh = mesh.Mesh()
-            vertex = test_mesh.make_vertex(mesh.Point(float(layer_idx), 0.0))
-
-            potentials = mesh.ZeroForm(test_mesh)
-            potentials[vertex] = float(layer_idx + 1)
-
-            layer_solution = solver.LayerSolution(
-                meshes=[test_mesh],
-                potentials=[potentials]
-            )
-            layer_solutions.append(layer_solution)
-
-        solution = solver.Solution(
-            problem=mock_problem,
-            layer_solutions=layer_solutions,
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
-        )
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = Path(tmp_dir)
-
-            paraview.export_solution(solution, output_dir)
-
-            # Verify two separate files were created
-            vtu_files = list(output_dir.glob("*.vtu"))
-            assert len(vtu_files) == 2
-
-            filenames = {f.name for f in vtu_files}
-            assert filenames == {"F.Cu.vtu", "B.Cu.vtu"}
-
-            # Verify each file contains one piece
-            for vtu_file in vtu_files:
-                tree = lxml.etree.parse(str(vtu_file))
-                root = tree.getroot()
-                pieces = root.findall(".//Piece")
-                assert len(pieces) == 1  # One piece per file
+            pieces = root.findall(".//Piece")
+            assert len(pieces) == 1  # One piece per file
