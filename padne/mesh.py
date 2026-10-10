@@ -344,7 +344,7 @@ class MeshingException(RuntimeError):
 class Mesher:
     """
     This class is responsible for generating a mesh from a Shapely polygon.
-    Works through the triangle library.
+    Works through CGAL.
     """
 
     @dataclass(frozen=True)
@@ -402,8 +402,6 @@ class Mesher:
         Returns:
             Tuple of (vertices, segments, seeds) for CGAL functions
         """
-        # This serves to deduplicate vertices.
-        # In theory, deduplication should not be needed
         vertices = []
         segments = []
         seeds = [
@@ -416,7 +414,6 @@ class Mesher:
             assert ring.is_closed
             if not ring.is_ccw:
                 ring = shapely.geometry.LinearRing(reversed(ring.coords))
-            # Add the first point
             i_first = len(vertices)
 
             for p in ring.coords[:-1]:
@@ -446,8 +443,6 @@ class Mesher:
         Returns:
             A Mesh object representing the triangulated polygon
         """
-        import padne._cgal as cgal
-
         vertices, segments, seeds = self._prepare_polygon_for_cgal(poly, seed_points)
 
         try:

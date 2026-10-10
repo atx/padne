@@ -305,9 +305,7 @@ static void setup_cdt(CDT& cdt,
         cdt.insert_constraint(start_vh, end_vh);
     }
 
-    // Insert the seed points into the CDT
-    // We do this before creating the Mesher object, but I am not sure
-    // if that is needed
+    // Seeds become mesh vertices so connection points land exactly on a vertex
     for (const auto& seed : seeds) {
         cdt.insert(Point(seed.first, seed.second));
     }
@@ -548,7 +546,8 @@ double PolyBoundaryDistanceMap::query(double x, double y) const {
     int j0 = static_cast<int>(std::floor(gy));
     int j1 = j0 + 1;
 
-    // Clamp to valid ranges (should not be needed now due to bounds check)
+    // The half-cell shift can push points near the bounds outside the sample
+    // grid (index -1 or width/height), clamp them to the border samples
     i0 = std::clamp(i0, 0, width-1);
     i1 = std::clamp(i1, 0, width-1);
     j0 = std::clamp(j0, 0, height-1);

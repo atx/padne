@@ -323,9 +323,6 @@ NB_MODULE(_mesh, m) {
                 check_same_mesh(h.m, *face);
                 h.m->he_face[h.i] = encode_face(*face);
             })
-        // Cotangent weight of this edge: sums |cot(opposite angle)| / 2 over
-        // the two adjacent triangles, skipping any side that is a boundary
-        // face. Mirrors the former pure-Python HalfEdge.cotan.
         .def("cotan", [](const HalfEdgeRef &h) {
             return h.m->cotan_weight(h.i);
         })
