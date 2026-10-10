@@ -1113,7 +1113,7 @@ class MeshViewer(QOpenGLWidget):
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
     keyPressedInMesh = Signal(mesh.Point, int, Qt.KeyboardModifiers)
-    # Signal for mouse position and voltage probing
+    # Signal for mouse position and probed value
     mousePositionChanged = Signal(mesh.Point, object)  # object can be float or None
     # Signal for visibility changes
     visibilityChanged = Signal()
@@ -1279,18 +1279,11 @@ class MeshViewer(QOpenGLWidget):
         self.visible_layers = [layer.name for layer in self.solution.problem.layers]
         self.current_layer_index = 0
 
-        # Emit signal with available layers
         if self.visible_layers:
             self.availableLayersChanged.emit(self.visible_layers)
-
-        # Emit signal with initial layer
-        if self.visible_layers:
             self.currentLayerChanged.emit(self.current_layer_name)
 
-        # Initialize all modes and emit mode signals
         current_mode = self.current_rendering_mode
-
-        # Emit mode-related signals
         self.currentModeChanged.emit(current_mode.name)
         self._emitColorScale()
 
@@ -1582,8 +1575,8 @@ class MeshViewer(QOpenGLWidget):
 
         # Always emit mouse position for status bar updates
         world_point = self._screenToWorld(event.position())
-        voltage = self._getNearestValue(world_point.x, world_point.y)
-        self.mousePositionChanged.emit(world_point, voltage)
+        value = self._getNearestValue(world_point.x, world_point.y)
+        self.mousePositionChanged.emit(world_point, value)
         self.last_mouse_position_change_ts = time.monotonic()
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -2096,7 +2089,7 @@ class PreparedUI:
     """GL-free UI preparation for a solution (see `prepare_ui_data`)."""
 
     solution: solver.Solution
-    modes: list
+    modes: list["MeshViewer.BaseRenderingMode"]
 
 
 @stage_timer
@@ -2237,19 +2230,19 @@ class MainWindow(QMainWindow):
         self.x_position_label.setText(f"X: {world_point.x:.3f}")
         self.y_position_label.setText(f"Y: {world_point.y:.3f}")
 
-        if value is not None:
-            current_unit = self.mesh_viewer.current_rendering_mode.unit
-            value_str = units.Value(value, current_unit).pretty_format(3)
-            self.value_label.setText(f"{current_unit}: {value_str}")
-
-            # Calculate delta from the minimum value of the color scale
-            delta_value = value - self.mesh_viewer.current_rendering_mode.min_value
-            delta_str = units.Value(delta_value, current_unit).pretty_format(3)
-            self.delta_label.setText(f"Δ: {delta_str}")
-        else:
-            current_unit = self.mesh_viewer.current_rendering_mode.unit
+        current_unit = self.mesh_viewer.current_rendering_mode.unit
+        if value is None:
             self.value_label.setText(f"{current_unit}: ?")
             self.delta_label.setText("Δ: ?")
+            return
+
+        value_str = units.Value(value, current_unit).pretty_format(3)
+        self.value_label.setText(f"{current_unit}: {value_str}")
+
+        # Calculate delta from the minimum value of the color scale
+        delta_value = value - self.mesh_viewer.current_rendering_mode.min_value
+        delta_str = units.Value(delta_value, current_unit).pretty_format(3)
+        self.delta_label.setText(f"Δ: {delta_str}")
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         """Override showEvent to display warnings after window is visible."""
@@ -2295,9 +2288,6 @@ def main(prepared: PreparedUI,
     """
     # Configure OpenGL
     configure_opengl()
-
-    if warnings_list is None:
-        warnings_list = []
 
     app = QApplication(sys.argv)
     window = MainWindow(prepared, warnings_list)
