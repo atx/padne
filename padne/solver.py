@@ -727,7 +727,7 @@ def find_best_ground_node_index(prob: problem.Problem, node_indexer: NodeIndexer
 
 
 @stage_timer
-def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.TwoForm:
+def compute_power_density(voltage: mesh.ZeroForm, conductance: float) -> mesh.TwoForm:
     """
     Compute the power density at the mesh faces.
     """
@@ -750,7 +750,7 @@ def compute_power_density(voltage: mesh.ZeroForm, conductivity: float) -> mesh.T
     e_x = (f21 * d3[:, 1] - f31 * d2[:, 1]) / det
     e_y = (-f21 * d3[:, 0] + f31 * d2[:, 0]) / det
 
-    power_density.values[:] = conductivity * (e_x * e_x + e_y * e_y)
+    power_density.values[:] = conductance * (e_x * e_x + e_y * e_y)
     return power_density
 
 
