@@ -306,8 +306,6 @@ class SetMinValueTool(PanTool):
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
             self.mesh_viewer.setMinValueFromWorldPoint(world_point)
-            # Optional: Switch back to Pan tool after action
-            # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
 
     def on_shortcut_press(self, world_point: mesh.Point):
         log.debug(f"SetMinValueTool: Shortcut pressed at {world_point}")
@@ -330,8 +328,6 @@ class SetMaxValueTool(PanTool):
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
             self.mesh_viewer.setMaxValueFromWorldPoint(world_point)
-            # Optional: Switch back to Pan tool after action
-            # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
 
     def on_shortcut_press(self, world_point: mesh.Point):
         log.debug(f"SetMaxValueTool: Shortcut pressed at {world_point}")
@@ -1249,8 +1245,6 @@ class MeshViewer(QOpenGLWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.solution: None | solver.Solution = None
-        # Layer name -> RenderedMesh
-        self.rendered_meshes: dict[str, list] = {}
         self.rendered_connection_points: dict[str, RenderedPoints] = {}
         self.connection_points_visible: bool = True
 
@@ -1708,7 +1702,6 @@ class MeshViewer(QOpenGLWidget):
         aspect = self.aspect_ratio
 
         # Inverse transformation based on the projection and view matrices
-        # These formulas were implicitly used in _getValueFromCursor and worked for picking.
         world_x = (ndc_x * aspect / self.scale) - self.offset_x
         world_y = (ndc_y / self.scale) - self.offset_y
 
@@ -1903,14 +1896,6 @@ class MeshViewer(QOpenGLWidget):
 
         # Refresh the display
         self.update()
-
-    def switchToNextLayer(self) -> None:
-        """Switch to the next layer in the cycle."""
-        self.switchLayerBy(1)
-
-    def switchToPreviousLayer(self) -> None:
-        """Switch to the previous layer in the cycle."""
-        self.switchLayerBy(-1)
 
     @Slot(bool)
     def setEdgesVisible(self, visible: bool):
