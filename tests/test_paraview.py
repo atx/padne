@@ -13,35 +13,19 @@ from padne import mesh, solver, problem, paraview
 
 
 class TestFilenameSanitization:
-    def test_sanitize_filename_basic(self):
+    @pytest.mark.parametrize("name, expected", [
+        ("F.Cu", "F.Cu"),
+        ("Power Plane", "Power_Plane"),
+        ("Layer/Name?!@", "Layer_Name"),
+        ("", "layer"),
+        ("   ", "layer"),
+        ("Test___Name", "Test_Name"),
+        ("In1-Cu.2", "In1-Cu.2"),
+    ])
+    def test_sanitize_filename(self, name, expected):
         used_names = set()
-        result = paraview._sanitize_filename("F.Cu", used_names)
-        assert result == "F.Cu"
-        assert "F.Cu" in used_names
-
-    def test_sanitize_filename_with_spaces(self):
-        used_names = set()
-        result = paraview._sanitize_filename("Power Plane", used_names)
-        assert result == "Power_Plane"
-        assert "Power_Plane" in used_names
-
-    def test_sanitize_filename_special_chars(self):
-        used_names = set()
-        result = paraview._sanitize_filename("Layer/Name?!@", used_names)
-        assert result == "Layer_Name"
-        assert "Layer_Name" in used_names
-
-    def test_sanitize_filename_empty(self):
-        used_names = set()
-        result = paraview._sanitize_filename("", used_names)
-        assert result == "layer"
-        assert "layer" in used_names
-
-    def test_sanitize_filename_whitespace_only(self):
-        used_names = set()
-        result = paraview._sanitize_filename("   ", used_names)
-        assert result == "layer"
-        assert "layer" in used_names
+        assert paraview._sanitize_filename(name, used_names) == expected
+        assert used_names == {expected}
 
     def test_sanitize_filename_duplicates(self):
         used_names = set()
@@ -51,18 +35,6 @@ class TestFilenameSanitization:
         assert result1 == "F.Cu"
         assert result2 == "F.Cu_2"
         assert {"F.Cu", "F.Cu_2"} == used_names
-
-    def test_sanitize_filename_multiple_underscores(self):
-        used_names = set()
-        result = paraview._sanitize_filename("Test___Name", used_names)
-        assert result == "Test_Name"
-        assert "Test_Name" in used_names
-
-    def test_sanitize_filename_preserves_dots_and_hyphens(self):
-        used_names = set()
-        result = paraview._sanitize_filename("In1-Cu.2", used_names)
-        assert result == "In1-Cu.2"
-        assert "In1-Cu.2" in used_names
 
 
 class TestDataArrayCreation:
