@@ -128,12 +128,7 @@ def _(self) -> Iterator["HalfEdge"]:
 @_extend(Face, "edges")
 @property
 def _(self):
-    edge = self.edge
-    while True:
-        yield edge
-        edge = edge.next
-        if edge == self.edge:
-            break
+    return self.edge.walk()
 
 
 @_extend(Face, "vertices")
