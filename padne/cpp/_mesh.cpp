@@ -189,13 +189,6 @@ Py_hash_t mix_hash(const Mesh *m, uint32_t i, uint32_t salt) {
     return result;
 }
 
-// Resolves a half-edge index for `__contains__`-style checks: false for
-// objects of the wrong type or from a different mesh.
-template <typename Ref>
-bool try_ref(nb::object obj, Ref &out) {
-    return nb::try_cast<Ref>(obj, out, false);
-}
-
 // Object stores exposed as mesh.vertices/halfedges/faces/boundaries. These
 // provide the read-only parts of the original IndexStore API; objects are
 // created through the Mesh methods instead of IndexStore.add().
@@ -278,7 +271,7 @@ NB_MODULE(_mesh, m) {
             })
         .def("__eq__", [](const VertexRef &a, nb::object obj) {
             VertexRef b;
-            return try_ref(obj, b) && a.m == b.m && a.i == b.i;
+            return nb::try_cast(obj, b, false) && a.m == b.m && a.i == b.i;
         })
         .def("__hash__", [](const VertexRef &v) { return mix_hash(v.m, v.i, 1); })
         .def("__getstate__", [](const VertexRef &v) {
@@ -328,7 +321,7 @@ NB_MODULE(_mesh, m) {
         })
         .def("__eq__", [](const HalfEdgeRef &a, nb::object obj) {
             HalfEdgeRef b;
-            return try_ref(obj, b) && a.m == b.m && a.i == b.i;
+            return nb::try_cast(obj, b, false) && a.m == b.m && a.i == b.i;
         })
         .def("__hash__", [](const HalfEdgeRef &h) { return mix_hash(h.m, h.i, 2); })
         .def("__getstate__", [](const HalfEdgeRef &h) {
@@ -353,7 +346,7 @@ NB_MODULE(_mesh, m) {
             })
         .def("__eq__", [](const FaceRef &a, nb::object obj) {
             FaceRef b;
-            return try_ref(obj, b) && a.m == b.m && a.i == b.i
+            return nb::try_cast(obj, b, false) && a.m == b.m && a.i == b.i
                 && a.is_boundary == b.is_boundary;
         })
         .def("__hash__", [](const FaceRef &f) {
@@ -397,7 +390,7 @@ NB_MODULE(_mesh, m) {
         .def("__iter__", [](const VertexStore &s) { return VertexIter{s.owner, s.m}; })
         .def("__contains__", [](const VertexStore &s, nb::object obj) {
             VertexRef v;
-            return try_ref(obj, v) && v.m == s.m;
+            return nb::try_cast(obj, v, false) && v.m == s.m;
         })
         .def("to_index", [](const VertexStore &, const VertexRef &v) { return v.i; })
         .def("to_object", [](const VertexStore &s, int64_t idx) {
@@ -416,7 +409,7 @@ NB_MODULE(_mesh, m) {
         .def("__iter__", [](const HalfEdgeStore &s) { return HalfEdgeIter{s.owner, s.m}; })
         .def("__contains__", [](const HalfEdgeStore &s, nb::object obj) {
             HalfEdgeRef h;
-            return try_ref(obj, h) && h.m == s.m;
+            return nb::try_cast(obj, h, false) && h.m == s.m;
         })
         .def("to_index", [](const HalfEdgeStore &, const HalfEdgeRef &h) { return h.i; })
         .def("to_object", [](const HalfEdgeStore &s, int64_t idx) {
@@ -435,7 +428,7 @@ NB_MODULE(_mesh, m) {
         .def("__iter__", [](const FaceStore &s) { return FaceIter{s.owner, s.m, s.boundary}; })
         .def("__contains__", [](const FaceStore &s, nb::object obj) {
             FaceRef f;
-            return try_ref(obj, f) && f.m == s.m && f.is_boundary == s.boundary;
+            return nb::try_cast(obj, f, false) && f.m == s.m && f.is_boundary == s.boundary;
         })
         .def("to_index", [](const FaceStore &, const FaceRef &f) { return f.i; })
         .def("to_object", [](const FaceStore &s, int64_t idx) {
