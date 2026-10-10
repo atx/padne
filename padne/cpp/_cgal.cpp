@@ -26,6 +26,8 @@
 #include <CGAL/squared_distance_2.h>
 #include <CGAL/enum.h>
 
+#include "ndarray_util.h"
+
 #ifdef CGAL_USE_BASIC_VIEWER
 #include <CGAL/draw_triangulation_2.h>
 #include <CGAL/draw_constrained_triangulation_2.h>
@@ -373,17 +375,6 @@ static void extract_meshing_result(CDT &cdt, MeshingResult &result)
     }
 }
 
-template <typename T>
-static nb::ndarray<nb::numpy, T> vector_to_numpy(std::vector<T> &&v, size_t cols)
-{
-    auto *buf = new std::vector<T>(std::move(v));
-    nb::capsule owner(buf, [](void *p) noexcept {
-        delete static_cast<std::vector<T> *>(p);
-    });
-    return nb::ndarray<nb::numpy, T>(buf->data(), {buf->size() / cols, cols}, owner);
-}
-
-
 nb::dict mesh(const nb::object& py_config,
               const std::vector<std::pair<double, double>>& vertices,
               const std::vector<std::pair<int, int>>& segments,
@@ -425,8 +416,10 @@ nb::dict mesh(const nb::object& py_config,
     // result["vertices"] is an (N, 2) float64 array of vertex coordinates,
     // result["triangles"] an (M, 3) uint32 array of vertex indices.
     nb::dict py_result;
-    py_result["vertices"] = vector_to_numpy(std::move(result.vertices), 2);
-    py_result["triangles"] = vector_to_numpy(std::move(result.triangles), 3);
+    py_result["vertices"] = vector_to_numpy(std::move(result.vertices),
+                                            {result.vertices.size() / 2, 2});
+    py_result["triangles"] = vector_to_numpy(std::move(result.triangles),
+                                             {result.triangles.size() / 3, 3});
     return py_result;
 }
 
