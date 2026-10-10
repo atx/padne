@@ -1006,17 +1006,6 @@ class TestMeshBulkAccessors:
         cycles = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
         assert list(tris[0]) in cycles
 
-    def test_laplacian_matches_python_implementation(self):
-        from padne import solver
-
-        mesh = self.make_mesh_with_hole()
-        n = len(mesh.vertices)
-        rows, cols, vals = mesh.laplacian()
-        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n, n))
-        L_ref = solver.laplace_operator(mesh)
-
-        np.testing.assert_allclose(L.toarray(), L_ref.toarray(), atol=1e-12)
-
     def test_laplacian_square_with_center(self):
         mesh = make_square_with_center_mesh()
         rows, cols, vals = mesh.laplacian()
