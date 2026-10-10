@@ -5,7 +5,7 @@ import padne._cgal as cgal
 import padne._mesh as _mesh
 
 from dataclasses import dataclass, field
-from typing import Optional, Iterator, TypeVar
+from typing import Optional, Iterator, Sequence, TypeVar
 
 # The purpose of this module is to generate triangular meshes from Shapely
 # (multi)polygons
@@ -321,19 +321,7 @@ CGALPolygon = cgal.CGALPolygon
 
 
 class MeshingException(RuntimeError):
-    """
-    Exception raised when CGAL mesh generation fails due to invalid geometry.
-
-    This includes cases such as:
-    - Self-intersecting polygons with unauthorized constraint intersections
-    - Degenerate edges that are too short (near-duplicate vertices)
-    - Other geometric degeneracies that prevent mesh generation
-
-    With CGAL_DEBUG enabled, these issues are detected early through CGAL's
-    internal precondition checking, preventing crashes and providing clear
-    error messages.
-    """
-    pass
+    """Raised when CGAL fails to mesh a polygon due to degenerate geometry."""
 
 
 class Mesher:
@@ -386,7 +374,7 @@ class Mesher:
 
     def _prepare_polygon_for_cgal(self,
                                   poly: shapely.geometry.Polygon,
-                                  seed_points: list[Point | shapely.geometry.Point] = []) -> tuple[list, list, list]:
+                                  seed_points: Sequence[Point | shapely.geometry.Point] = ()) -> tuple[list, list, list]:
         """
         Convert a Shapely polygon to vertices, segments, and seeds for CGAL.
 
@@ -428,7 +416,7 @@ class Mesher:
 
     def poly_to_mesh(self,
                      poly: shapely.geometry.Polygon,
-                     seed_points: list[Point | shapely.geometry.Point] = []) -> Mesh:
+                     seed_points: Sequence[Point | shapely.geometry.Point] = ()) -> Mesh:
         """
         Convert a Shapely polygon to a triangular mesh.
 
