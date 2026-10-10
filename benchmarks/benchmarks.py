@@ -178,7 +178,7 @@ class MesherSuite:
 
         def sizeof_indexmap(indexmap):
             total = sys.getsizeof(indexmap)
-            for key, value in indexmap.items():
+            for key, value in enumerate(indexmap):
                 total += sys.getsizeof(key)
                 total += sys.getsizeof(value)
             return total

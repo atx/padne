@@ -1067,14 +1067,6 @@ class TestMeshStores:
         assert v2.i == index_type(1)
         assert v3.i == index_type(2)
 
-    def test_to_index(self):
-        mesh = Mesh()
-        v1 = mesh.make_vertex(Point(1.0, 2.0))
-        v2 = mesh.make_vertex(Point(3.0, 4.0))
-
-        assert mesh.vertices.to_index(v1) == index_type(0)
-        assert mesh.vertices.to_index(v2) == index_type(1)
-
     def test_to_object(self):
         mesh = Mesh()
         v1 = mesh.make_vertex(Point(1.0, 2.0))
@@ -1087,17 +1079,6 @@ class TestMeshStores:
 
         with pytest.raises(IndexError):
             mesh.vertices.to_object(2)
-
-    def test_items(self):
-        mesh = Mesh()
-        vertices = [mesh.make_vertex(Point(float(i), float(i))) for i in range(3)]
-
-        items = list(mesh.vertices.items())
-        assert len(items) == 3
-
-        for i, (idx, obj) in enumerate(items):
-            assert idx == index_type(i)
-            assert obj == vertices[i]
 
     def test_contains_added_object(self):
         mesh = Mesh()
@@ -1123,16 +1104,6 @@ class TestMeshStores:
         assert face not in mesh.boundaries
         assert boundary in mesh.boundaries
         assert boundary not in mesh.faces
-
-    def test_next_index(self):
-        mesh = Mesh()
-        assert mesh.vertices.next_index == index_type(0)
-
-        mesh.make_vertex(Point(1.0, 2.0))
-        assert mesh.vertices.next_index == index_type(1)
-
-        mesh.make_vertex(Point(3.0, 4.0))
-        assert mesh.vertices.next_index == index_type(2)
 
     def test_iteration(self):
         mesh = Mesh()
@@ -1163,7 +1134,7 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         assert v1.p == v2.p  # Point data
         if v1.out is not None:
             assert v2.out is not None
-            assert mesh1.halfedges.to_index(v1.out) == mesh2.halfedges.to_index(v2.out)
+            assert v1.out.i == v2.out.i
         else:
             assert v2.out is None
 
@@ -1172,24 +1143,24 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         h1 = mesh1.halfedges.to_object(i)
         h2 = mesh2.halfedges.to_object(i)
 
-        assert mesh1.vertices.to_index(h1.origin) == mesh2.vertices.to_index(h2.origin)
+        assert h1.origin.i == h2.origin.i
 
         assert h1.twin is not None and h2.twin is not None
-        assert mesh1.halfedges.to_index(h1.twin) == mesh2.halfedges.to_index(h2.twin)
+        assert h1.twin.i == h2.twin.i
 
         assert h1.next is not None and h2.next is not None
-        assert mesh1.halfedges.to_index(h1.next) == mesh2.halfedges.to_index(h2.next)
+        assert h1.next.i == h2.next.i
 
         assert h1.prev is not None and h2.prev is not None
-        assert mesh1.halfedges.to_index(h1.prev) == mesh2.halfedges.to_index(h2.prev)
+        assert h1.prev.i == h2.prev.i
 
         if h1.face is not None:
             assert h2.face is not None
             assert h1.face.is_boundary == h2.face.is_boundary
             if h1.face.is_boundary:
-                assert mesh1.boundaries.to_index(h1.face) == mesh2.boundaries.to_index(h2.face)
+                assert h1.face.i == h2.face.i
             else:
-                assert mesh1.faces.to_index(h1.face) == mesh2.faces.to_index(h2.face)
+                assert h1.face.i == h2.face.i
         else:
             assert h2.face is None
 
@@ -1201,7 +1172,7 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         assert not f1.is_boundary
         if f1.edge is not None:
             assert f2.edge is not None
-            assert mesh1.halfedges.to_index(f1.edge) == mesh2.halfedges.to_index(f2.edge)
+            assert f1.edge.i == f2.edge.i
         else:
             assert f2.edge is None
 
@@ -1213,13 +1184,13 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         assert b1.is_boundary
         if b1.edge is not None:
             assert b2.edge is not None
-            assert mesh1.halfedges.to_index(b1.edge) == mesh2.halfedges.to_index(b2.edge)
+            assert b1.edge.i == b2.edge.i
         else:
             assert b2.edge is None
 
     # Compare _edge_map by converting HalfEdge values to their indices
-    edge_map1_indexed = {key: mesh1.halfedges.to_index(value) for key, value in mesh1._edge_map.items()}
-    edge_map2_indexed = {key: mesh2.halfedges.to_index(value) for key, value in mesh2._edge_map.items()}
+    edge_map1_indexed = {key: value.i for key, value in mesh1._edge_map.items()}
+    edge_map2_indexed = {key: value.i for key, value in mesh2._edge_map.items()}
     assert edge_map1_indexed == edge_map2_indexed
 
     # Final validation of the unpickled mesh structure
@@ -1487,7 +1458,7 @@ class TestMesher:
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
         # Check that all vertices are within the polygon bounds
-        for _, vertex in mesh.vertices.items():
+        for vertex in mesh.vertices:
             x, y = vertex.p.x, vertex.p.y
             assert 0 <= x <= 1
             assert 0 <= y <= 1
@@ -1515,7 +1486,7 @@ class TestMesher:
         assert len(mesh.faces) >= 4
 
         # All vertices should be within the polygon
-        for _, vertex in mesh.vertices.items():
+        for vertex in mesh.vertices:
             point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
             assert polygon.contains(point) or polygon.boundary.contains(point)
 
@@ -1535,7 +1506,7 @@ class TestMesher:
         assert len(mesh.faces) > 0
 
         # All vertices should be within the polygon (but not in the hole)
-        for _, vertex in mesh.vertices.items():
+        for vertex in mesh.vertices:
             point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
             assert polygon.contains(point) or polygon.boundary.contains(point)
 
