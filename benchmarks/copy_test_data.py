@@ -6,7 +6,6 @@ to the checked-out commit directory, but only if they don't already exist.
 This allows benchmarks to run on legacy commits that don't have newer test projects.
 """
 
-import os
 import sys
 import shutil
 from pathlib import Path
@@ -45,11 +44,8 @@ def main():
 
         # Only copy if destination doesn't exist
         if not dst_project.exists():
-            try:
-                shutil.copytree(src_project, dst_project)
-                copied_projects.append(project_name)
-            except Exception as e:
-                print(f"Error copying {project_name}: {e}", file=sys.stderr)
+            shutil.copytree(src_project, dst_project)
+            copied_projects.append(project_name)
 
     # Log what was copied
     if copied_projects:
