@@ -5,7 +5,10 @@ import threading
 from dataclasses import fields
 
 from padne import mesh, problem, solver, parallel, ui
-from padne.ui import VertexSpatialIndex, FaceSpatialIndex, RenderedMesh, prepare_ui_data
+from padne.ui import (
+    VertexSpatialIndex, FaceSpatialIndex, RenderedMesh, MeshViewer,
+    LinearScale, LogScale, prepare_ui_data,
+)
 
 
 class TestSpatialIndex:
@@ -165,6 +168,112 @@ class TestSpatialIndex:
         assert value_corner == pytest.approx(1.0, abs=2.0)
 
 
+class TestCurrentDensityUnit:
+    """The current-density mode's unit must match the quantity it shows."""
+
+    def _unit_for(self, thickness):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 1, 1)]),
+            name="F.Cu", conductance=2082.0, thickness=thickness)
+        layer_solution = solver.LayerSolution(
+            meshes=[], potentials=[], power_densities=[], disconnected_meshes=[])
+        solution = solver.Solution(
+            problem=problem.Problem(layers=[layer], networks=[]),
+            layer_solutions=[layer_solution],
+            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0,
+                                          relative_residual=0.0),
+        )
+        mode = MeshViewer.CurrentDensityRenderingMode()
+        mode.set_solution(solution)
+        return mode.unit
+
+    def test_unit_a_per_mm2_with_thickness(self):
+        assert self._unit_for(0.035) == "A/mm²"
+
+    def test_unit_a_per_mm_without_thickness(self):
+        assert self._unit_for(None) == "A/mm"
+
+
+class TestSliderScale:
+
+    def test_linear_round_trip(self):
+        scale = LinearScale()
+        assert scale.value_at(0.0, -1.0, 1.0) == pytest.approx(-1.0)
+        assert scale.value_at(0.5, -1.0, 1.0) == pytest.approx(0.0)
+        assert scale.value_at(1.0, -1.0, 1.0) == pytest.approx(1.0)
+        assert scale.fraction_of(0.0, -1.0, 1.0) == pytest.approx(0.5)
+
+    def test_linear_degenerate_range(self):
+        assert LinearScale().fraction_of(5.0, 5.0, 5.0) == 0.0
+
+    def test_log_spans_the_decades_below_hi(self):
+        scale = LogScale(decades=4.0)
+        assert scale.value_at(1.0, 0.0, 10.0) == pytest.approx(10.0)
+        # Just above fraction 0 the value is ~decades below hi
+        assert scale.value_at(1e-9, 0.0, 10.0) == pytest.approx(10.0 * 1e-4)
+        # Constant ratio per unit fraction
+        assert scale.value_at(0.5, 0.0, 10.0) == pytest.approx(10.0 * 1e-2)
+
+    def test_log_fraction_zero_is_lo(self):
+        scale = LogScale(decades=4.0)
+        assert scale.value_at(0.0, 0.0, 10.0) == 0.0
+        assert scale.fraction_of(0.0, 0.0, 10.0) == 0.0
+        assert scale.fraction_of(1e-6, 0.0, 10.0) == 0.0
+
+    def test_log_round_trip(self):
+        scale = LogScale(decades=4.0)
+        for fraction in (0.0, 0.25, 0.5, 1.0):
+            value = scale.value_at(fraction, 0.0, 10.0)
+            assert scale.fraction_of(value, 0.0, 10.0) == pytest.approx(fraction)
+
+
+class TestRenderingModeColorScale:
+    """Clamping and percentile cap rules of BaseRenderingMode."""
+
+    def _mode(self, capped):
+        mode = MeshViewer.PowerDensityRenderingMode(capped=capped)
+        mode.data_range = (0.0, 100.0)
+        mode.percentile_max = 10.0
+        mode.autoscale()
+        return mode
+
+    def test_autoscale_respects_the_cap(self):
+        capped, uncapped = self._mode(capped=True), self._mode(capped=False)
+        assert (capped.min_value, capped.max_value) == (0.0, 10.0)
+        assert (uncapped.min_value, uncapped.max_value) == (0.0, 100.0)
+
+    def test_edits_are_clamped_to_the_slider_range(self):
+        mode = self._mode(capped=True)
+        mode.set_max(50.0)
+        assert mode.max_value == 10.0
+        mode.set_min(-5.0)
+        assert mode.min_value == 0.0
+
+    def test_min_pushes_max_and_max_pushes_min(self):
+        mode = self._mode(capped=False)
+        mode.set_max(20.0)
+        mode.set_min(30.0)
+        assert (mode.min_value, mode.max_value) == (30.0, 30.0)
+        mode.set_max(5.0)
+        assert (mode.min_value, mode.max_value) == (5.0, 5.0)
+
+    def test_capping_clamps_without_rescaling(self):
+        mode = self._mode(capped=False)
+        mode.set_min(3.0)
+        mode.set_max(60.0)
+        mode.set_capped(True)
+        assert (mode.min_value, mode.max_value) == (3.0, 10.0)
+        mode.set_min(20.0)
+        assert (mode.min_value, mode.max_value) == (10.0, 10.0)
+
+    def test_uncapping_keeps_the_values(self):
+        mode = self._mode(capped=True)
+        mode.set_min(2.0)
+        mode.set_capped(False)
+        assert (mode.min_value, mode.max_value) == (2.0, 10.0)
+        assert mode.slider_range == (0.0, 100.0)
+
+
 class TestPrepareUiData:
     """The GL-free UI preparation builds modes/indices without Qt or OpenGL."""
 
@@ -286,6 +395,18 @@ def _ui_solution():
                            solver.SolverInfo(0.0, 0.0, 0.0))
 
 
+def test_set_solution_precomputes_global_ranges():
+    prepared = prepare_ui_data(_ui_solution())
+    for mode in prepared.modes:
+        values = np.concatenate([index.values for index in mode.spatial_indices.values()])
+        assert mode.data_range[1] == pytest.approx(values.max())
+        assert mode.percentile_max == pytest.approx(np.percentile(values, mode.cap_percentile))
+        assert (mode.min_value, mode.max_value) == mode.slider_range
+    voltage, power, current = prepared.modes
+    assert not voltage.capped
+    assert power.capped and current.capped
+
+
 def test_bulk_spatial_indices_preserve_order_and_snapshot_values():
     sol = _ui_solution()
     layer, ls = sol.problem.layers[0], sol.layer_solutions[0]
@@ -334,7 +455,7 @@ def test_parallel_ui_matches_serial_and_shares_geometry(monkeypatch):
     monkeypatch.setattr(parallel, "thread_map", observed_map)
     monkeypatch.setattr(parallel, "_default", parallel.Parallel(parallel.Config(jobs=4)))
     threaded = prepare_ui_data(sol)
-    assert len(calls) == 3  # Geometry plus vertex and face spatial indexes.
+    assert len(calls) == 4  # Geometry plus vertex, power and current density indexes.
     assert all(ids and threading.get_ident() not in ids for ids in calls)
     for a, b in zip(serial.modes, threaded.modes):
         assert (a.min_value, a.max_value) == (b.min_value, b.max_value)
@@ -349,13 +470,14 @@ def test_parallel_ui_matches_serial_and_shares_geometry(monkeypatch):
             for attr in ["_prepared_rendered_meshes", "_prepared_disconnected_rendered_meshes"]:
                 for expected, actual in zip(getattr(a, attr)[name], getattr(b, attr)[name]):
                     _assert_render_equal(actual, expected)
-    voltage, power = threaded.modes
-    assert voltage._prepared_disconnected_rendered_meshes is power._prepared_disconnected_rendered_meshes
-    for a, b in zip(voltage._prepared_rendered_meshes["F.Cu"],
-                    power._prepared_rendered_meshes["F.Cu"]):
-        for name in ["triangle_vertices", "edge_vertices", "edge_colors",
-                     "boundary_vertices", "boundary_colors"]:
-            assert getattr(a, name) is getattr(b, name)
-            assert not getattr(a, name).flags.writeable
-    assert voltage.spatial_indices["empty"].tree is None
-    assert power.spatial_indices["empty"].tree is None
+    voltage, power, current = threaded.modes
+    for other in [power, current]:
+        assert voltage._prepared_disconnected_rendered_meshes is other._prepared_disconnected_rendered_meshes
+        for a, b in zip(voltage._prepared_rendered_meshes["F.Cu"],
+                        other._prepared_rendered_meshes["F.Cu"]):
+            for name in ["triangle_vertices", "edge_vertices", "edge_colors",
+                         "boundary_vertices", "boundary_colors"]:
+                assert getattr(a, name) is getattr(b, name)
+                assert not getattr(a, name).flags.writeable
+    for mode in threaded.modes:
+        assert mode.spatial_indices["empty"].tree is None
