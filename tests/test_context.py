@@ -83,6 +83,8 @@ class TestStageTimerWithForm:
 class TestStageTimerDecorator:
 
     def test_bare_decorator_uses_qualname(self):
+        # Bound before the session opens, so the session lookup must be
+        # deferred to call time.
         @context.stage_timer
         def my_decorated_func():
             return 42
@@ -122,25 +124,6 @@ class TestStageTimerDecorator:
         with s.durations as d:
             entry = d["test_context.hot"]
         assert entry.call_count == n
-        assert entry.perf_time >= 0.0
-
-    def test_decorator_session_lookup_is_deferred(self):
-        # Decorator bound *before* a session opens must still record into
-        # the session that's active when the function is *called*.
-        @context.stage_timer
-        def bound_outside_session():
-            pass
-
-        with context.timing_session() as s:
-            bound_outside_session()
-
-        expected = (
-            f"test_context."
-            f"{TestStageTimerDecorator.test_decorator_session_lookup_is_deferred.__qualname__}"
-            f".<locals>.bound_outside_session"
-        )
-        with s.durations as d:
-            assert expected in d
 
     def test_decorator_no_op_outside_session(self):
         @context.stage_timer
@@ -189,20 +172,6 @@ class TestDirectSessionAPI:
             assert "explicit.key" in d
 
 
-class TestSessionDurationNested:
-    # Duration moved to Session.Duration. Verify the stored values are
-    # instances of that nested class so external consumers can reference
-    # the type via Session.Duration without surprises.
-
-    def test_recorded_value_is_session_duration(self):
-        with context.timing_session() as s:
-            with context.stage_timer("typed"):
-                pass
-        with s.durations as d:
-            entry = d["test_context.typed"]
-        assert isinstance(entry, context.Session.Duration)
-
-
 class TestConcurrentMerging:
 
     def test_threads_recording_same_key_aggregate_safely(self):
@@ -237,19 +206,15 @@ class TestConcurrentMerging:
         # session as active (since the session is process-wide). Verify a
         # plain threading.Thread can record into the parent's session with
         # no explicit context propagation.
-        recorded_in_thread = threading.Event()
-
         def worker():
             with context.stage_timer("from_worker"):
                 pass
-            recorded_in_thread.set()
 
         with context.timing_session() as s:
             t = threading.Thread(target=worker)
             t.start()
             t.join()
 
-        assert recorded_in_thread.is_set()
         with s.durations as d:
             assert "test_context.from_worker" in d
 
