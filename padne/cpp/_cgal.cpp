@@ -186,11 +186,7 @@ public:
             // Compute triangle centroid using helper method
             auto [cx, cy] = compute_triangle_centroid(pa, pb, pc);
 
-            // Compute distance to polygon boundary using distance map
-            double boundary_distance = distance_map_ptr ? distance_map_ptr->query(cx, cy) : 0.0;
-
-            // Compute effective size bound using piecewise linear scaling
-            double effective_size_bound = compute_effective_size_bound(boundary_distance);
+            double effective_size_bound = compute_effective_size_bound(cx, cy);
             double squared_size_bound = effective_size_bound * effective_size_bound;
 
             double a = CGAL::to_double(squared_distance(pb, pc));
@@ -250,12 +246,13 @@ public:
             return std::make_pair(cx, cy);
         }
 
-        // Helper method for piecewise linear scaling
-        double compute_effective_size_bound(double boundary_distance) const {
+        // Piecewise linear scaling by the distance of (x, y) to the polygon boundary
+        double compute_effective_size_bound(double x, double y) const {
             // If no distance map, use uniform sizing
             if (!distance_map_ptr) {
                 return base_size_bound;
             }
+            double boundary_distance = distance_map_ptr->query(x, y);
             if (boundary_distance <= min_distance) {
                 return base_size_bound;
             } else if (boundary_distance >= max_distance) {
