@@ -347,6 +347,39 @@ class TestConnectivityGraph:
         assert len([n for n in connected if n.layer_i == 1]) == 2
 
 
+class TestFilterDeadNetworks:
+
+    def test_any_dead_terminal_drops_network(self):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([
+                shapely.geometry.box(0, 0, 10, 10),
+                shapely.geometry.box(20, 0, 30, 10),
+            ]),
+            name="top", conductance=1.0)
+
+        def network(*points):
+            return problem.Network(
+                connections=[
+                    problem.Connection(layer=layer, point=shapely.geometry.Point(*p))
+                    for p in points
+                ],
+                elements=[],
+            )
+
+        live = network((5, 5), (6, 6))
+        mixed = network((5, 5), (25, 5))
+        off_copper = network((5, 5), (100, 100))
+        prob = problem.Problem(layers=[layer], networks=[live, mixed, off_copper])
+
+        # Only geometry 0 is connected; a connection matching no geometry at
+        # all does not count as dead
+        filtered = solver.filter_dead_networks(prob, {(0, 0)})
+
+        assert len(filtered) == 2
+        assert filtered[0] is live
+        assert filtered[1] is off_copper
+
+
 class TestSolverMeshLayer:
     def test_generate_meshes_for_problem_simple_geometry(self, kicad_test_projects):
         """Test that generate_meshes_for_problem correctly meshes layers from the simple_geometry project."""
