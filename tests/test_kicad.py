@@ -120,6 +120,27 @@ class Utils:
         return found_elements[0]
 
     @staticmethod
+    def classify_resistors(network):
+        """
+        Split the resistors of a via network into vertical (different layers)
+        and lateral (same layer) ones, returned as (resistor, conn_a, conn_b).
+        """
+        conns = {c.node_id: c for c in network.connections}
+        vertical, lateral = [], []
+        for element in network.elements:
+            if not isinstance(element, problem.Resistor):
+                continue
+            # Lumped resistors from directives may hang on internal nodes
+            if element.a not in conns or element.b not in conns:
+                continue
+            conn_a, conn_b = conns[element.a], conns[element.b]
+            if conn_a.layer is conn_b.layer:
+                lateral.append((element, conn_a, conn_b))
+            else:
+                vertical.append((element, conn_a, conn_b))
+        return vertical, lateral
+
+    @staticmethod
     def assert_one_1v_source_and_one_10mohm_resistor(kicad_problem):
         elements = [e for network in kicad_problem.networks for e in network.elements]
         voltage_source, = [e for e in elements if isinstance(e, problem.VoltageSource)]
@@ -274,27 +295,6 @@ class TestViaSpecs:
         return (math.pi / 2) * kicad.COPPER_CONDUCTIVITY * plating * math.tanh(dead_end_height / radius)
 
     @staticmethod
-    def classify_resistors(network):
-        """
-        Split the resistors of a via network into vertical (different layers)
-        and lateral (same layer) ones, returned as (resistor, conn_a, conn_b).
-        """
-        conns = {c.node_id: c for c in network.connections}
-        vertical, lateral = [], []
-        for element in network.elements:
-            if not isinstance(element, problem.Resistor):
-                continue
-            # Lumped resistors from directives may hang on internal nodes
-            if element.a not in conns or element.b not in conns:
-                continue
-            conn_a, conn_b = conns[element.a], conns[element.b]
-            if conn_a.layer is conn_b.layer:
-                lateral.append((element, conn_a, conn_b))
-            else:
-                vertical.append((element, conn_a, conn_b))
-        return vertical, lateral
-
-    @staticmethod
     def load_simple_via(kicad_test_projects):
         board = pcbnew.LoadBoard(str(kicad_test_projects["simple_via"].pcb_path))
         layer_dict, _ = Utils.setup_layer_dict_and_pad_index(board)
@@ -393,50 +393,29 @@ class TestViaSpecs:
         # connecting the layers F.Cu - In1.Cu - In2.Cu - B.Cu have been created
         result = kicad.load_kicad_project(project.pro_path)
         via_center = shapely.geometry.Point(118.8, 105.9)
-        drill_diameter = 0.3  # mm (assuming same as simple via)
-        expected_radius = drill_diameter / 2
-        tolerance = expected_radius * 0.1  # 10% tolerance
+        radius = 0.15
 
-        expected_layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        def on_rim(conn):
+            return abs(via_center.distance(conn.point) - radius) < 0.1 * radius
 
-        # Find all resistors at this via boundary and on these layers
-        found_layers = set()
-        for network in result.networks:
-            for element in network.elements:
-                if isinstance(element, problem.Resistor):
-                    # Find the connections associated with this resistor within this network
-                    conn_a = next((c for c in network.connections if c.node_id == element.a), None)
-                    conn_b = next((c for c in network.connections if c.node_id == element.b), None)
+        found_pairs = {
+            tuple(sorted([conn_a.layer.name, conn_b.layer.name]))
+            for network in result.networks
+            for _, conn_a, conn_b in Utils.classify_resistors(network)[0]
+            if on_rim(conn_a) and on_rim(conn_b)
+        }
 
-                    if not conn_a or not conn_b:
-                        continue
-
-                    # Check if both endpoints are on the via boundary (within 10% of expected radius)
-                    dist_a = via_center.distance(conn_a.point)
-                    dist_b = via_center.distance(conn_b.point)
-                    points_on_boundary = (
-                        abs(dist_a - expected_radius) < tolerance and
-                        abs(dist_b - expected_radius) < tolerance
-                    )
-
-                    if points_on_boundary:
-                        # Record the pair of layers this resistor connects
-                        found_layers.add(tuple(sorted([conn_a.layer.name, conn_b.layer.name])))
-
-        # The expected resistor stack is between each adjacent pair of layers
-        expected_pairs = [
-            tuple(sorted([expected_layers[i], expected_layers[i+1]]))
-            for i in range(len(expected_layers)-1)
-        ]
-        for pair in expected_pairs:
-            assert pair in found_layers, f"Missing resistor between layers {pair} at via {via_center}"
+        layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        for pair in zip(layers, layers[1:]):
+            assert tuple(sorted(pair)) in found_pairs, \
+                f"Missing resistor between layers {pair} at via {via_center}"
 
     @pytest.mark.parametrize("plating", [0.025, 0.010])
     def test_via_barrel_resistance_uses_plating_thickness(self, kicad_test_projects, plating):
         via_spec, layer_dict, stackup = self.load_simple_via(kicad_test_projects)
 
         network, = kicad.process_via_spec(via_spec, layer_dict, stackup, plating)
-        vertical, _ = self.classify_resistors(network)
+        vertical, _ = Utils.classify_resistors(network)
 
         assert len(vertical) == 16
         parallel_resistance = 1 / sum(1 / r.resistance for r, _, _ in vertical)
@@ -450,7 +429,7 @@ class TestViaSpecs:
         vertical = [
             r
             for network in result.networks
-            for r, _, _ in self.classify_resistors(network)[0]
+            for r, _, _ in Utils.classify_resistors(network)[0]
         ]
         assert len(vertical) == 16
         parallel_resistance = 1 / sum(1 / r.resistance for r in vertical)
@@ -466,7 +445,7 @@ class TestViaSpecs:
 
         lateral_by_layer = {}
         for network in result.networks:
-            for r, conn_a, conn_b in self.classify_resistors(network)[1]:
+            for r, conn_a, conn_b in Utils.classify_resistors(network)[1]:
                 lateral_by_layer.setdefault(conn_a.layer.name, []).append((r, conn_a, conn_b))
 
         assert set(lateral_by_layer) == {"F.Cu", "B.Cu"}
@@ -492,7 +471,7 @@ class TestViaSpecs:
         conductance_by_layer = {}
         count_by_layer = {}
         for network in result.networks:
-            for r, conn_a, _ in self.classify_resistors(network)[1]:
+            for r, conn_a, _ in Utils.classify_resistors(network)[1]:
                 if via_center.distance(conn_a.point) > 2 * radius:
                     continue
                 name = conn_a.layer.name
