@@ -128,6 +128,18 @@ def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
         yield layer_id
 
 
+def _copper_layer_names(board: pcbnew.BOARD, layer_set: pcbnew.LSET) -> list[str]:
+    return [
+        board.GetLayerName(layer_id)
+        for layer_id in copper_layers(board)
+        if layer_set.Contains(layer_id)
+    ]
+
+
+def _position_to_point(pos: pcbnew.VECTOR2I) -> shapely.geometry.Point:
+    return shapely.geometry.Point(nm_to_mm(pos.x), nm_to_mm(pos.y))
+
+
 @stage_timer
 def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
                                    copper_conductivity: float = COPPER_CONDUCTIVITY
@@ -323,10 +335,7 @@ class PadIndex:
                 pad_name = pad_obj.GetName()
                 endpoint = Endpoint(designator=designator, pad=pad_name)
 
-                # Get pad position and convert from nm to mm
-                position = pad_obj.GetPosition()
-                x_mm = nm_to_mm(position.x)
-                y_mm = nm_to_mm(position.y)
+                point = _position_to_point(pad_obj.GetPosition())
 
                 # Get the layer for SMD pads
                 layer_id = pad_obj.GetLayer()
@@ -343,7 +352,6 @@ class PadIndex:
                             raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
 
                 layer_name = board.GetLayerName(layer_id)
-                point = shapely.geometry.Point(x_mm, y_mm)
 
                 # Validate that the point falls within the layer geometry
                 layer = layer_dict.get(layer_name)
@@ -358,7 +366,7 @@ class PadIndex:
                 if not layer.shape.intersects(point):
                     # At the moment, we just reject those pads
                     log.warning(
-                        f"SMD pad {endpoint} connection point at ({x_mm}, {y_mm}) "
+                        f"SMD pad {endpoint} connection point at ({point.x}, {point.y}) "
                         f"on layer {layer_name} falls outside the layer geometry (likely in a hole). "
                         f"Skipping this connection point."
                     )
@@ -908,25 +916,10 @@ def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
         # Get the via drill diameter (convert from nm to mm)
         drill_diameter = nm_to_mm(via.GetDrillValue())
 
-        # Get the layers this via connects
-        layer_names = []
-        layer_set = via.GetLayerSet()
-
-        for layer_id in copper_layers(board):
-            if not layer_set.Contains(layer_id):
-                continue
-            layer_names.append(board.GetLayerName(layer_id))
-
-        # Get the via's position (convert from KiCad internal units - nanometers to mm)
-        pos_x = nm_to_mm(via.GetPosition().x)
-        pos_y = nm_to_mm(via.GetPosition().y)
-        via_point = shapely.geometry.Point(pos_x, pos_y)
-
-        # Create a ViaSpec object
         via_spec = ViaSpec(
-            point=via_point,
+            point=_position_to_point(via.GetPosition()),
             drill_diameter=drill_diameter,
-            layer_names=layer_names
+            layer_names=_copper_layer_names(board, via.GetLayerSet())
         )
 
         via_specs.append(via_spec)
@@ -953,23 +946,9 @@ def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
             # Check if the pad is through-hole type
             if pad.GetAttribute() != pcbnew.PAD_ATTRIB_PTH:
                 continue
-            # Get the pad position and convert from nm to mm
-            pos_x = nm_to_mm(pad.GetPosition().x)
-            pos_y = nm_to_mm(pad.GetPosition().y)
-            pad_point = shapely.geometry.Point(pos_x, pos_y)
-
             # Get the drill diameter
             # For oval/slot drills, use average of width and height as an approximation
             drill_diameter = nm_to_mm((pad.GetDrillSize().x + pad.GetDrillSize().y) / 2)
-
-            # Determine which layers this pad connects
-            layer_names = []
-            layer_set = pad.GetLayerSet()
-
-            for layer_id in copper_layers(board):
-                if not layer_set.Contains(layer_id):
-                    continue
-                layer_names.append(board.GetLayerName(layer_id))
 
             endpoint = Endpoint(
                 designator=footprint.GetReference(),
@@ -978,9 +957,9 @@ def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
 
             # Create a ViaSpec object for this through-hole pad
             tht_spec = ViaSpec(
-                point=pad_point,
+                point=_position_to_point(pad.GetPosition()),
                 drill_diameter=drill_diameter,
-                layer_names=layer_names,
+                layer_names=_copper_layer_names(board, pad.GetLayerSet()),
                 endpoint=endpoint
             )
 
