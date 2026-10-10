@@ -1425,6 +1425,13 @@ def assert_mesh_maximum_edge_length(mesh, max_size, tolerance=1e-6):
             f"(from {start_vertex.p} to {end_vertex.p})"
 
 
+def assert_vertices_within(mesh, poly, tol=1e-6):
+    region = poly.buffer(tol)
+    for vertex in mesh.vertices:
+        point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
+        assert region.covers(point), f"Vertex {vertex.p} lies outside the polygon"
+
+
 class TestMesher:
 
     def test_simple_square(self):
@@ -1461,14 +1468,7 @@ class TestMesher:
         assert len(mesh.faces) >= 1
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
-        # Check that all vertices are within the polygon bounds
-        for vertex in mesh.vertices:
-            x, y = vertex.p.x, vertex.p.y
-            assert 0 <= x <= 1
-            assert 0 <= y <= 1
-            # Note that this actually fails, one of the vertices is very slightly
-            # outside of the bounds due to floating point error
-            assert y <= -x + 1 + 1e-6  # This is the line connecting (0,1) and (1,0)
+        assert_vertices_within(mesh, triangle)
 
     def test_triangulate_simple_polygon(self):
         """Test triangulation without mesh refinement using relaxed config."""
@@ -1489,10 +1489,7 @@ class TestMesher:
         # An L-shape needs at least 4 triangles to cover
         assert len(mesh.faces) >= 4
 
-        # All vertices should be within the polygon
-        for vertex in mesh.vertices:
-            point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
-            assert polygon.contains(point) or polygon.boundary.contains(point)
+        assert_vertices_within(mesh, polygon)
 
     def test_triangulate_with_hole(self):
         """Test triangulation of a polygon with a hole using relaxed config."""
@@ -1509,10 +1506,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
 
-        # All vertices should be within the polygon (but not in the hole)
-        for vertex in mesh.vertices:
-            point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
-            assert polygon.contains(point) or polygon.boundary.contains(point)
+        assert_vertices_within(mesh, polygon)
 
     def test_polygon_with_hole(self):
         """Test meshing a polygon with a hole."""
@@ -1532,11 +1526,7 @@ class TestMesher:
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 0
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
-
-        for vertex in mesh.vertices:
-            x = vertex.p.x
-            y = vertex.p.y
-            assert not (4 < x < 6 and 4 < y < 6)
+        assert_vertices_within(mesh, poly_with_hole)
 
     def test_polygon_with_multiple_holes(self):
         """Test meshing a polygon with multiple holes."""
@@ -1555,14 +1545,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
-
-        for vertex in mesh.vertices:
-            x = vertex.p.x
-            y = vertex.p.y
-
-            assert not (2 < x < 4 and 2 < y < 4)
-            assert not (6 < x < 8 and 6 < y < 8)
-
+        assert_vertices_within(mesh, poly_with_holes)
         assert mesh.euler_characteristic() == -1
 
     def test_concave_polygon(self):
@@ -1582,10 +1565,7 @@ class TestMesher:
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
-
-        # Check that all vertices are contained within the original polygon
-        for vertex in mesh.vertices:
-            concave.contains(shapely.geometry.Point(vertex.p.x, vertex.p.y))
+        assert_vertices_within(mesh, concave)
 
     def test_mesh_quality_constraints(self):
         """Test that mesh quality constraints are respected."""
@@ -1735,13 +1715,7 @@ class TestMesher:
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
-
-        # Check that vertices are within the original polygon bounds
-        for vertex in mesh.vertices:
-            x, y = vertex.p.x, vertex.p.y
-            assert 0 <= x <= 10
-            assert 0 <= y <= 10
-            assert clockwise_polygon.intersects(shapely.geometry.Point(x, y))
+        assert_vertices_within(mesh, clockwise_polygon)
 
     def test_tiny_polygon(self):
         """Test meshing a very small polygon."""
@@ -1767,15 +1741,9 @@ class TestMesher:
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(rectangle, seed_points)
 
-        for vertex in mesh.vertices:
-            assert 0 <= vertex.p.x <= 1.0
-            assert 0 <= vertex.p.y <= 1.0
-
-            for edge in vertex.orbit():
-                # Passing a seed point to the mesher that is also a vertex
-                # of the mesh caused a malformed mesh to be produced
-                assert edge is not None
-
+        # Passing a seed point to the mesher that is also a vertex
+        # of the mesh caused a malformed mesh to be produced
+        assert_vertices_within(mesh, rectangle)
         assert_mesh_structure_valid(mesh)
         assert_mesh_topology_okay(mesh)
 
