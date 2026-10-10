@@ -587,6 +587,26 @@ class AppToolBar(QToolBar):
             action.setChecked(action.text() == active_mode_name)
 
 
+def _create_vao(vertices: np.ndarray, colors: np.ndarray, color_components: int) -> int:
+    """Create a VAO with a 2D vertex VBO (attribute 0) and a color VBO (attribute 1)."""
+    vao = gl.glGenVertexArrays(1)
+    gl.glBindVertexArray(vao)
+
+    vbo_vertices = gl.glGenBuffers(1)
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_vertices)
+    gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices, gl.GL_STATIC_DRAW)
+    gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+    gl.glEnableVertexAttribArray(0)
+
+    vbo_colors = gl.glGenBuffers(1)
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_colors)
+    gl.glBufferData(gl.GL_ARRAY_BUFFER, colors, gl.GL_STATIC_DRAW)
+    gl.glVertexAttribPointer(1, color_components, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+    gl.glEnableVertexAttribArray(1)
+
+    return vao
+
+
 @dataclass
 class ShaderProgram:
     shader_program: QOpenGLShaderProgram = field(default_factory=QOpenGLShaderProgram)
@@ -629,68 +649,17 @@ class RenderedMesh:
 
     @classmethod
     def from_prepared_data(cls, data: 'RenderedMesh.PreparedData') -> 'RenderedMesh':
-        # TODO: Fold this into _from_common, it should never get called anyway
-        # after I am done
-        return cls._from_common(
-            data.triangle_vertices,
-            data.triangle_colors,
-            data.edge_vertices,
-            data.edge_colors,
-            data.boundary_vertices,
-            data.boundary_colors
-        )
-
-    @classmethod
-    def _from_common(cls,
-                     triangle_vertices: np.ndarray[np.float32],
-                     triangle_colors: np.ndarray[np.float32],
-                     edge_vertices: np.ndarray[np.float32],
-                     edge_colors: np.ndarray[np.float32],
-                     boundary_vertices: np.ndarray[np.float32],
-                     boundary_colors: np.ndarray[np.float32]) -> 'RenderedMesh':
-
-        def create_vao(vertices: np.ndarray[np.float32], colors: np.ndarray[np.float32], color_components: int) -> int:
-            """Create a VAO with vertex and color VBOs."""
-            vao = gl.glGenVertexArrays(1)
-            gl.glBindVertexArray(vao)
-
-            # VBO for vertices (attribute 0, 2D coordinates)
-            vbo_vertices = gl.glGenBuffers(1)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_vertices)
-            gl.glBufferData(
-                gl.GL_ARRAY_BUFFER,
-                vertices,
-                gl.GL_STATIC_DRAW
-            )
-            gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glEnableVertexAttribArray(0)
-
-            # VBO for colors (attribute 1, 1D or 3D components)
-            vbo_colors = gl.glGenBuffers(1)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_colors)
-            gl.glBufferData(
-                gl.GL_ARRAY_BUFFER,
-                colors,
-                gl.GL_STATIC_DRAW
-            )
-            gl.glVertexAttribPointer(1, color_components, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glEnableVertexAttribArray(1)
-
-            return vao
-
-        # Create VAOs for each mesh component
-        vao_triangles = create_vao(triangle_vertices, triangle_colors, 1)
-        vao_edges = create_vao(edge_vertices, edge_colors, 3)
-        vao_boundary = create_vao(boundary_vertices, boundary_colors, 3)
-
+        vao_triangles = _create_vao(data.triangle_vertices, data.triangle_colors, 1)
+        vao_edges = _create_vao(data.edge_vertices, data.edge_colors, 3)
+        vao_boundary = _create_vao(data.boundary_vertices, data.boundary_colors, 3)
         gl.glBindVertexArray(0)
 
         return cls(vao_triangles,
-                   len(triangle_vertices) // 2,
+                   len(data.triangle_vertices) // 2,
                    vao_edges,
-                   len(edge_vertices) // 2,
+                   len(data.edge_vertices) // 2,
                    vao_boundary,
-                   len(boundary_vertices) // 2)
+                   len(data.boundary_vertices) // 2)
 
     @dataclass(frozen=True)
     class PreparedGeometry:
@@ -782,51 +751,15 @@ class RenderedPoints:
 
     @classmethod
     def from_points(cls, points_data: list[tuple[tuple[float, float], tuple[float, float, float]]]):
-        if not points_data:
-            # Handle empty list to avoid errors with glBufferData
-            vao_points = gl.glGenVertexArrays(1)
-            # No need to create VBOs if there's no data
-            return cls(vao_points, 0)
-
-        flat_points_coords = []
-        flat_points_colors = []
-        for (p_x, p_y), (r, g, b) in points_data:
-            flat_points_coords.extend([p_x, p_y])
-            flat_points_colors.extend([r, g, b])
-
-        vao_points = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao_points)
-
-        # VBO for point coordinates
-        vbo_point_coords = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_point_coords)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(flat_points_coords, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-
-        # VBO for point colors
-        vbo_point_colors = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_point_colors)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(flat_points_colors, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(1)
-
+        coords = np.array([p for p, _ in points_data], dtype=np.float32).reshape(-1)
+        colors = np.array([c for _, c in points_data], dtype=np.float32).reshape(-1)
+        vao_points = _create_vao(coords, colors, 3)
         gl.glBindVertexArray(0)
-        # The number of points is the length of the original points_data list
         return cls(vao_points, len(points_data))
 
     def render(self):
-        if self.point_count > 0:
-            gl.glBindVertexArray(self.vao_points)
-            gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
+        gl.glBindVertexArray(self.vao_points)
+        gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
 
 
 class SliderScale(abc.ABC):
@@ -1464,8 +1397,6 @@ class MeshViewer(QOpenGLWidget):
                 points_by_layer[layer_name].append((point_coords, color))
 
         for layer_name, collected_points_data in points_by_layer.items():
-            if not collected_points_data:
-                continue
             # We want to render the _red_ points over the gray ones,
             # so we draw them _last_. This is a hack to order them, it
             # depends on the fact that (1.0, 0.0, 0.0) > (0.5, 0.5, 0.5)
@@ -1636,9 +1567,6 @@ class MeshViewer(QOpenGLWidget):
     def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: RenderedPoints) -> None:
         """Renders the connection points for the current layer."""
         if not self.connection_points_visible or not self.points_shader:
-            return
-
-        if rendered_points_obj.point_count == 0:
             return
 
         with self.points_shader.use():
