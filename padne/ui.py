@@ -386,27 +386,29 @@ class AppToolBar(QToolBar):
         self.addSeparator()
         self._setupViewControlActions()
 
+    def _makeAction(self, text: str, tip: str, slot, checked: Optional[bool] = None) -> QAction:
+        action = QAction(text, self)
+        action.setStatusTip(tip)
+        action.setToolTip(tip)
+        if checked is not None:
+            action.setCheckable(True)
+            action.setChecked(checked)
+        action.triggered.connect(slot)
+        return action
+
     def _setupToolActions(self):
         """Setup tool selection actions."""
         tool_action_group = QActionGroup(self)
         tool_action_group.setExclusive(True)
 
         for tool_instance in self.tool_manager.available_tools:
-            action = QAction(tool_instance.name, self)
-            action.setStatusTip(tool_instance.status_tip)
-            action.setToolTip(tool_instance.status_tip)
-            action.setCheckable(True)
-
-            action.triggered.connect(
-                lambda checked, t=tool_instance: self.tool_manager.activate_tool(t)
+            action = self._makeAction(
+                tool_instance.name, tool_instance.status_tip,
+                lambda checked, t=tool_instance: self.tool_manager.activate_tool(t),
+                checked=self.tool_manager.active_tool == tool_instance,
             )
-
             self.addAction(action)
             tool_action_group.addAction(action)
-
-            # Set the default tool as checked
-            if self.tool_manager.active_tool == tool_instance:
-                action.setChecked(True)
 
     def _setupViewMenu(self):
         """Setup the View menu with visibility toggles."""
@@ -419,31 +421,17 @@ class AppToolBar(QToolBar):
         # Create the menu that will be shown by the QToolButton
         view_menu = QMenu(view_menu_button)
 
-        # Create "Show Edges" action for the menu
-        self.show_edges_action = QAction("Show Edges", self)
-        self.show_edges_action.setStatusTip("Toggle visibility of mesh edges (E)")
-        self.show_edges_action.setToolTip("Toggle visibility of mesh edges (E)")
-        self.show_edges_action.setCheckable(True)
-        self.show_edges_action.setChecked(True)  # Default to visible
-        self.show_edges_action.triggered.connect(self.mesh_viewer.setEdgesVisible)
+        self.show_edges_action = self._makeAction(
+            "Show Edges", "Toggle visibility of mesh edges (E)",
+            self.mesh_viewer.setEdgesVisible, checked=True)
+        self.show_outline_action = self._makeAction(
+            "Show Outline", "Toggle visibility of mesh outline (Shift+E)",
+            self.mesh_viewer.setOutlineVisible, checked=True)
+        self.show_connection_points_action = self._makeAction(
+            "Show Connection Points", "Toggle visibility of connection points (C)",
+            self.mesh_viewer.setConnectionPointsVisible, checked=True)
         view_menu.addAction(self.show_edges_action)
-
-        # Create "Show Outline" action for the menu
-        self.show_outline_action = QAction("Show Outline", self)
-        self.show_outline_action.setStatusTip("Toggle visibility of mesh outline (Shift+E)")
-        self.show_outline_action.setToolTip("Toggle visibility of mesh outline (Shift+E)")
-        self.show_outline_action.setCheckable(True)
-        self.show_outline_action.setChecked(True)  # Default to visible
-        self.show_outline_action.triggered.connect(self.mesh_viewer.setOutlineVisible)
         view_menu.addAction(self.show_outline_action)
-
-        # Create "Show Connection Points" action for the menu
-        self.show_connection_points_action = QAction("Show Connection Points", self)
-        self.show_connection_points_action.setStatusTip("Toggle visibility of connection points (C)")
-        self.show_connection_points_action.setToolTip("Toggle visibility of connection points (C)")
-        self.show_connection_points_action.setCheckable(True)
-        self.show_connection_points_action.setChecked(True)  # Default to visible
-        self.show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
         view_menu.addAction(self.show_connection_points_action)
 
         # Set the menu for the QToolButton
@@ -500,19 +488,10 @@ class AppToolBar(QToolBar):
 
     def _setupViewControlActions(self):
         """Setup view control actions (Reset View, Full Scale)."""
-        # Add Reset View button
-        fit_view_action = QAction("Reset View", self)
-        fit_view_action.setStatusTip("Reset view to fit all content (F)")
-        fit_view_action.setToolTip("Reset view to fit all content (F)")
-        fit_view_action.triggered.connect(self.mesh_viewer.autoscaleXY)
-        self.addAction(fit_view_action)
-
-        # Add Full Scale button
-        full_scale_action = QAction("Full Scale", self)
-        full_scale_action.setStatusTip("Reset color scale to full range (A)")
-        full_scale_action.setToolTip("Reset color scale to full range (A)")
-        full_scale_action.triggered.connect(self.mesh_viewer.autoscaleValue)
-        self.addAction(full_scale_action)
+        self.addAction(self._makeAction(
+            "Reset View", "Reset view to fit all content (F)", self.mesh_viewer.autoscaleXY))
+        self.addAction(self._makeAction(
+            "Full Scale", "Reset color scale to full range (A)", self.mesh_viewer.autoscaleValue))
 
     def _syncViewMenuCheckboxes(self):
         """Sync View menu checkbox states with MeshViewer visibility states."""
