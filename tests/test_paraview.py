@@ -223,56 +223,6 @@ class TestPointsCreation:
         assert data_array.text == expected_coords
 
 
-class TestTriangleConnectivity:
-    def test_extract_triangle_connectivity_single_triangle(self):
-        # Create a mesh with one triangle
-        test_mesh = mesh.Mesh()
-
-        # Add vertices
-        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
-        v1 = test_mesh.make_vertex(mesh.Point(1.0, 0.0))
-        v2 = test_mesh.make_vertex(mesh.Point(0.0, 1.0))
-
-        # Create face and half-edges forming a triangle
-        face = test_mesh.make_face()
-        e0 = test_mesh.connect_vertices(v0, v1)
-        e1 = test_mesh.connect_vertices(v1, v2)
-        e2 = test_mesh.connect_vertices(v2, v0)
-
-        # Connect the edges in a loop
-        mesh.HalfEdge.connect(e0, e1)
-        mesh.HalfEdge.connect(e1, e2)
-        mesh.HalfEdge.connect(e2, e0)
-
-        # Associate edges with face
-        e0.face = face
-        e1.face = face
-        e2.face = face
-        face.edge = e0
-
-        triangles = paraview._extract_triangle_connectivity(test_mesh)
-
-        assert len(triangles) == 1
-        triangle = triangles[0]
-        assert len(triangle) == 3
-        # Vertices should be indices 0, 1, 2 in some order
-        assert set(triangle) == {0, 1, 2}
-
-    def test_extract_triangle_connectivity_boundary_face_skipped(self):
-        test_mesh = mesh.Mesh()
-
-        # Add vertices
-        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
-
-        # Create boundary face (lives in the boundaries store, not faces)
-        test_mesh.make_face(is_boundary=True)
-
-        triangles = paraview._extract_triangle_connectivity(test_mesh)
-
-        # Boundary faces should be skipped
-        assert len(triangles) == 0
-
-
 class TestCellsCreation:
     def test_create_cells_empty_mesh(self):
         test_mesh = mesh.Mesh()
@@ -299,32 +249,23 @@ class TestCellsCreation:
         assert types.get("type") == "UInt8"
         assert types.text == ""
 
-    def test_create_cells_mock_triangle(self):
-        # Mock triangle connectivity extraction
-        import padne.paraview
-        original_extract = padne.paraview._extract_triangle_connectivity
+    def test_create_cells_two_triangles(self):
+        test_mesh = mesh.Mesh.from_triangle_soup(
+            [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0),
+             mesh.Point(0.0, 1.0), mesh.Point(1.0, 1.0)],
+            [(0, 1, 2), (1, 3, 2)])
 
-        def mock_extract(mesh_obj):
-            return [(0, 1, 2), (1, 2, 3)]  # Two triangles
+        cells = paraview.create_cells(test_mesh)
 
-        padne.paraview._extract_triangle_connectivity = mock_extract
+        connectivity = [int(v) for v in cells.find("DataArray[@Name='connectivity']").text.split()]
+        triangles = [set(connectivity[i:i + 3]) for i in range(0, len(connectivity), 3)]
+        assert sorted(triangles, key=sorted) == [{0, 1, 2}, {1, 2, 3}]
 
-        try:
-            test_mesh = mesh.Mesh()
-            cells = paraview.create_cells(test_mesh)
+        offsets = cells.find("DataArray[@Name='offsets']")
+        assert offsets.text == "3 6"
 
-            connectivity = cells.find("DataArray[@Name='connectivity']")
-            assert connectivity.text == "0 1 2 1 2 3"
-
-            offsets = cells.find("DataArray[@Name='offsets']")
-            assert offsets.text == "3 6"
-
-            types = cells.find("DataArray[@Name='types']")
-            assert types.text == "5 5"
-
-        finally:
-            # Restore original function
-            padne.paraview._extract_triangle_connectivity = original_extract
+        types = cells.find("DataArray[@Name='types']")
+        assert types.text == "5 5"
 
 
 class TestPieceCreation:

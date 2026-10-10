@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable, List, Set, Tuple
 
 import lxml.etree
+import numpy as np
 from lxml.etree import Element, SubElement
 
 from . import mesh, solver
@@ -118,10 +119,7 @@ def create_point_data(potentials: mesh.ZeroForm) -> Element:
     point_data = Element("PointData")
     point_data.set("Scalars", "voltage")
 
-    # Extract values in vertex index order
-    vertex_values = [potentials[vertex] for vertex in potentials.mesh.vertices]
-
-    create_data_array(point_data, "Float64", vertex_values, name="voltage")
+    create_data_array(point_data, "Float64", potentials.values.tolist(), name="voltage")
     return point_data
 
 
@@ -137,44 +135,10 @@ def create_points(mesh_obj: mesh.Mesh) -> Element:
     """
     points = Element("Points")
 
-    # Extract coordinates in vertex index order with Y-axis negated
-    coordinates = []
-    for vertex in mesh_obj.vertices:
-        coordinates.extend([vertex.p.x, -vertex.p.y, 0.0])
-
-    create_data_array(points, "Float64", coordinates, number_of_components=3)
+    pos = mesh_obj.positions()
+    coordinates = np.column_stack([pos[:, 0], -pos[:, 1], np.zeros(len(pos))])
+    create_data_array(points, "Float64", coordinates.ravel().tolist(), number_of_components=3)
     return points
-
-
-def _extract_triangle_connectivity(mesh_obj: mesh.Mesh) -> List[Tuple[int, int, int]]:
-    """Extract triangle connectivity from mesh face structure.
-
-    Args:
-        mesh_obj: Mesh object with half-edge topology
-
-    Returns:
-        List of triangles as (v0, v1, v2) vertex index tuples
-    """
-    triangles = []
-    vertex_to_index = {vertex: i for i, vertex in enumerate(mesh_obj.vertices)}
-
-    for face in mesh_obj.faces:
-        if face.is_boundary:
-            continue
-
-        # Extract vertices from face edges
-        face_vertices = []
-        for edge in face.edges:
-            vertex_idx = vertex_to_index[edge.origin]
-            face_vertices.append(vertex_idx)
-
-        # Ensure we have exactly 3 vertices for a triangle
-        if len(face_vertices) == 3:
-            triangles.append(tuple(face_vertices))
-        else:
-            log.warning(f"Non-triangular face with {len(face_vertices)} vertices, skipping")
-
-    return triangles
 
 
 def create_cells(mesh_obj: mesh.Mesh) -> Element:
@@ -187,15 +151,9 @@ def create_cells(mesh_obj: mesh.Mesh) -> Element:
         Cells element with connectivity, offsets, and types arrays
     """
     cells = Element("Cells")
-    triangles = _extract_triangle_connectivity(mesh_obj)
+    triangles = mesh_obj.triangles()
 
-    # Connectivity array
-    connectivity_values = []
-    for tri in triangles:
-        connectivity_values.extend([tri[0], tri[1], tri[2]])
-    create_data_array(cells, "Int32", connectivity_values, name="connectivity")
-
-    # Offsets array
+    create_data_array(cells, "Int32", triangles.ravel().tolist(), name="connectivity")
     offset_values = [3 * (i + 1) for i in range(len(triangles))]
     create_data_array(cells, "Int32", offset_values, name="offsets")
 
@@ -217,7 +175,7 @@ def create_piece(mesh_obj: mesh.Mesh, potentials: mesh.ZeroForm) -> Element:
         Piece element containing mesh geometry and voltage field
     """
     num_points = len(mesh_obj.vertices)
-    num_cells = len([f for f in mesh_obj.faces if not f.is_boundary])
+    num_cells = len(mesh_obj.faces)
 
     piece = Element("Piece")
     piece.set("NumberOfPoints", str(num_points))
