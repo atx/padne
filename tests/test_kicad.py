@@ -1159,30 +1159,15 @@ class TestCopperDirective:
         assert copper_spec.undercut == pytest.approx(0.030)
         assert copper_spec.plating == pytest.approx(0.020)
 
-    def test_copper_directive_negative_undercut(self):
-        directive = kicad.Directive.parse("!padne COPPER undercut=-1u")
-        with pytest.raises(ValueError, match="Undercut must be non-negative"):
-            kicad.CopperSpec.from_directive(directive)
-
-    def test_copper_directive_zero_plating(self):
-        directive = kicad.Directive.parse("!padne COPPER plating=0")
-        with pytest.raises(ValueError, match="Plating thickness must be positive"):
-            kicad.CopperSpec.from_directive(directive)
-
-    def test_copper_directive_negative_conductivity(self):
-        """Test error when conductivity is negative."""
-        directive_text = "!padne COPPER conductivity=-1000"
-        directive = kicad.Directive.parse(directive_text)
-
-        with pytest.raises(ValueError, match="Conductivity must be positive"):
-            kicad.CopperSpec.from_directive(directive)
-
-    def test_copper_directive_zero_conductivity(self):
-        """Test error when conductivity is zero."""
-        directive_text = "!padne COPPER conductivity=0"
-        directive = kicad.Directive.parse(directive_text)
-
-        with pytest.raises(ValueError, match="Conductivity must be positive"):
+    @pytest.mark.parametrize("text, match", [
+        ("!padne COPPER undercut=-1u", "Undercut must be non-negative"),
+        ("!padne COPPER plating=0", "Plating thickness must be positive"),
+        ("!padne COPPER conductivity=-1000", "Conductivity must be positive"),
+        ("!padne COPPER conductivity=0", "Conductivity must be positive"),
+    ])
+    def test_copper_directive_invalid(self, text, match):
+        directive = kicad.Directive.parse(text)
+        with pytest.raises(ValueError, match=match):
             kicad.CopperSpec.from_directive(directive)
 
 
