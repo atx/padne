@@ -311,6 +311,23 @@ class TestPrepareUiData:
             assert mode.max_value >= mode.min_value
 
 
+
+@pytest.mark.parametrize("mode_cls, layer_values, expected", [
+    (ui.MeshViewer.VoltageRenderingMode, [], (0.0, 1.0)),
+    (ui.MeshViewer.VoltageRenderingMode, [[]], (0.0, 1.0)),
+    (ui.MeshViewer.VoltageRenderingMode, [[2.0, 2.0]], (2.0, 3.0)),
+    (ui.MeshViewer.VoltageRenderingMode, [[5.0, 7.0], [], [-1.0]], (-1.0, 7.0)),
+    (ui.MeshViewer.PowerDensityRenderingMode, [[5.0, 7.0]], (0.0, 7.0)),
+])
+def test_compute_min_max(mode_cls, layer_values, expected):
+    shape = shapely.geometry.MultiPolygon()
+    mode = mode_cls(spatial_indices={
+        f"L{i}": ui.BaseSpatialIndex(None, np.array(values), shape)
+        for i, values in enumerate(layer_values)
+    })
+    assert mode._compute_min_max() == expected
+
+
 def _ring_mesh():
     # An exterior boundary, a hole, and shared interior edges. Face traversal
     # starts at the mesh's face.edge, which need not be the soup's first vertex.
