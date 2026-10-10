@@ -240,22 +240,14 @@ class BaseTool(abc.ABC):
         self.tool_manager = tool_manager
 
     @property
+    @abc.abstractmethod
     def name(self) -> str:
         """Returns the display name of the tool."""
-        pass
 
     @property
+    @abc.abstractmethod
     def status_tip(self) -> str:
         """Returns the status tip for the tool."""
-        pass
-
-    def on_activate(self):
-        """Called when the tool becomes active."""
-        pass
-
-    def on_deactivate(self):
-        """Called when the tool becomes inactive."""
-        pass
 
     @property
     def shortcut(self) -> Optional[tuple[Qt.Key, Qt.KeyboardModifier]]:
@@ -306,8 +298,6 @@ class SetMinValueTool(PanTool):
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
             self.mesh_viewer.setMinValueFromWorldPoint(world_point)
-            # Optional: Switch back to Pan tool after action
-            # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
 
     def on_shortcut_press(self, world_point: mesh.Point):
         log.debug(f"SetMinValueTool: Shortcut pressed at {world_point}")
@@ -330,8 +320,6 @@ class SetMaxValueTool(PanTool):
     def on_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
         if event.button() == Qt.LeftButton:
             self.mesh_viewer.setMaxValueFromWorldPoint(world_point)
-            # Optional: Switch back to Pan tool after action
-            # self.tool_manager.activate_tool(self.tool_manager.available_tools[0]) # Assuming Pan is first
 
     def on_shortcut_press(self, world_point: mesh.Point):
         log.debug(f"SetMaxValueTool: Shortcut pressed at {world_point}")
@@ -349,41 +337,20 @@ class ToolManager(QtCore.QObject):
             SetMaxValueTool(self.mesh_viewer, self)
         ]
 
-        # Activate the first tool by default, but don't call on_activate yet
-        # as the tool might not be fully ready (e.g. UI elements)
-        # on_activate will be called by the first explicit activate_tool call
-        self.active_tool: Optional[BaseTool] = self.available_tools[0]
+        self.active_tool: BaseTool = self.available_tools[0]
 
     @Slot(BaseTool)
-    def activate_tool(self, tool_to_activate: Optional[BaseTool]):
-        if self.active_tool == tool_to_activate:
-            return
-
-        # At the moment, there should always be an active tool we are switching
-        # away from. But let's be safe and check.
-        if self.active_tool:
-            log.debug(f"Deactivating Tool: {self.active_tool.name}")
-            self.active_tool.on_deactivate()
-
+    def activate_tool(self, tool_to_activate: BaseTool):
+        log.debug(f"Activating Tool: {tool_to_activate.name}")
         self.active_tool = tool_to_activate
-
-        if self.active_tool:
-            log.debug(f"Activating Tool: {self.active_tool.name}")
-            self.active_tool.on_activate()
 
     @Slot(object, QtGui.QMouseEvent)
     def handle_mesh_click(self, world_point: mesh.Point, event: QtGui.QMouseEvent):
-        if not self.active_tool:
-            return
-
         log.debug(f"ToolManager: Mesh clicked at {world_point} with tool {self.active_tool.name}. Button: {event.button()}")
         self.active_tool.on_mesh_click(world_point, event)
 
     @Slot(float, float, QtGui.QMouseEvent)
     def handle_screen_drag(self, dx: float, dy: float, event: QtGui.QMouseEvent):
-        if not self.active_tool:
-            return
-
         log.debug(f"ToolManager: Screen dragged by ({dx}, {dy}) with tool {self.active_tool.name}. Buttons: {event.buttons()}")
         self.active_tool.on_screen_drag(dx, dy, event)
 
@@ -419,27 +386,29 @@ class AppToolBar(QToolBar):
         self.addSeparator()
         self._setupViewControlActions()
 
+    def _makeAction(self, text: str, tip: str, slot, checked: Optional[bool] = None) -> QAction:
+        action = QAction(text, self)
+        action.setStatusTip(tip)
+        action.setToolTip(tip)
+        if checked is not None:
+            action.setCheckable(True)
+            action.setChecked(checked)
+        action.triggered.connect(slot)
+        return action
+
     def _setupToolActions(self):
         """Setup tool selection actions."""
         tool_action_group = QActionGroup(self)
         tool_action_group.setExclusive(True)
 
         for tool_instance in self.tool_manager.available_tools:
-            action = QAction(tool_instance.name, self)
-            action.setStatusTip(tool_instance.status_tip)
-            action.setToolTip(tool_instance.status_tip)
-            action.setCheckable(True)
-
-            action.triggered.connect(
-                lambda checked, t=tool_instance: self.tool_manager.activate_tool(t)
+            action = self._makeAction(
+                tool_instance.name, tool_instance.status_tip,
+                lambda checked, t=tool_instance: self.tool_manager.activate_tool(t),
+                checked=self.tool_manager.active_tool == tool_instance,
             )
-
             self.addAction(action)
             tool_action_group.addAction(action)
-
-            # Set the default tool as checked
-            if self.tool_manager.active_tool == tool_instance:
-                action.setChecked(True)
 
     def _setupViewMenu(self):
         """Setup the View menu with visibility toggles."""
@@ -452,31 +421,17 @@ class AppToolBar(QToolBar):
         # Create the menu that will be shown by the QToolButton
         view_menu = QMenu(view_menu_button)
 
-        # Create "Show Edges" action for the menu
-        self.show_edges_action = QAction("Show Edges", self)
-        self.show_edges_action.setStatusTip("Toggle visibility of mesh edges (E)")
-        self.show_edges_action.setToolTip("Toggle visibility of mesh edges (E)")
-        self.show_edges_action.setCheckable(True)
-        self.show_edges_action.setChecked(True)  # Default to visible
-        self.show_edges_action.triggered.connect(self.mesh_viewer.setEdgesVisible)
+        self.show_edges_action = self._makeAction(
+            "Show Edges", "Toggle visibility of mesh edges (E)",
+            self.mesh_viewer.setEdgesVisible, checked=True)
+        self.show_outline_action = self._makeAction(
+            "Show Outline", "Toggle visibility of mesh outline (Shift+E)",
+            self.mesh_viewer.setOutlineVisible, checked=True)
+        self.show_connection_points_action = self._makeAction(
+            "Show Connection Points", "Toggle visibility of connection points (C)",
+            self.mesh_viewer.setConnectionPointsVisible, checked=True)
         view_menu.addAction(self.show_edges_action)
-
-        # Create "Show Outline" action for the menu
-        self.show_outline_action = QAction("Show Outline", self)
-        self.show_outline_action.setStatusTip("Toggle visibility of mesh outline (Shift+E)")
-        self.show_outline_action.setToolTip("Toggle visibility of mesh outline (Shift+E)")
-        self.show_outline_action.setCheckable(True)
-        self.show_outline_action.setChecked(True)  # Default to visible
-        self.show_outline_action.triggered.connect(self.mesh_viewer.setOutlineVisible)
         view_menu.addAction(self.show_outline_action)
-
-        # Create "Show Connection Points" action for the menu
-        self.show_connection_points_action = QAction("Show Connection Points", self)
-        self.show_connection_points_action.setStatusTip("Toggle visibility of connection points (C)")
-        self.show_connection_points_action.setToolTip("Toggle visibility of connection points (C)")
-        self.show_connection_points_action.setCheckable(True)
-        self.show_connection_points_action.setChecked(True)  # Default to visible
-        self.show_connection_points_action.triggered.connect(self.mesh_viewer.setConnectionPointsVisible)
         view_menu.addAction(self.show_connection_points_action)
 
         # Set the menu for the QToolButton
@@ -533,19 +488,10 @@ class AppToolBar(QToolBar):
 
     def _setupViewControlActions(self):
         """Setup view control actions (Reset View, Full Scale)."""
-        # Add Reset View button
-        fit_view_action = QAction("Reset View", self)
-        fit_view_action.setStatusTip("Reset view to fit all content (F)")
-        fit_view_action.setToolTip("Reset view to fit all content (F)")
-        fit_view_action.triggered.connect(self.mesh_viewer.autoscaleXY)
-        self.addAction(fit_view_action)
-
-        # Add Full Scale button
-        full_scale_action = QAction("Full Scale", self)
-        full_scale_action.setStatusTip("Reset color scale to full range (A)")
-        full_scale_action.setToolTip("Reset color scale to full range (A)")
-        full_scale_action.triggered.connect(self.mesh_viewer.autoscaleValue)
-        self.addAction(full_scale_action)
+        self.addAction(self._makeAction(
+            "Reset View", "Reset view to fit all content (F)", self.mesh_viewer.autoscaleXY))
+        self.addAction(self._makeAction(
+            "Full Scale", "Reset color scale to full range (A)", self.mesh_viewer.autoscaleValue))
 
     def _syncViewMenuCheckboxes(self):
         """Sync View menu checkbox states with MeshViewer visibility states."""
@@ -591,20 +537,42 @@ class AppToolBar(QToolBar):
             action.setChecked(action.text() == active_mode_name)
 
 
+def _create_vao(vertices: np.ndarray, colors: np.ndarray, color_components: int) -> int:
+    """Create a VAO with a 2D vertex VBO (attribute 0) and a color VBO (attribute 1)."""
+    vao = gl.glGenVertexArrays(1)
+    gl.glBindVertexArray(vao)
+
+    vbo_vertices = gl.glGenBuffers(1)
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_vertices)
+    gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices, gl.GL_STATIC_DRAW)
+    gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+    gl.glEnableVertexAttribArray(0)
+
+    vbo_colors = gl.glGenBuffers(1)
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_colors)
+    gl.glBufferData(gl.GL_ARRAY_BUFFER, colors, gl.GL_STATIC_DRAW)
+    gl.glVertexAttribPointer(1, color_components, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+    gl.glEnableVertexAttribArray(1)
+
+    return vao
+
+
 @dataclass
 class ShaderProgram:
-    shader_program: QOpenGLShaderProgram = field(default_factory=QOpenGLShaderProgram)
+    shader_program: QOpenGLShaderProgram
 
     @classmethod
     def from_source(cls, vertex_source, fragment_source):
         shader_program = QOpenGLShaderProgram()
-        shader_program.addShaderFromSourceCode(QOpenGLShader.Vertex, vertex_source)
-        shader_program.addShaderFromSourceCode(QOpenGLShader.Fragment, fragment_source)
-        linked = shader_program.link()
-        if not linked:
-            raise Exception("Failed to link shader program")
+        if not (shader_program.addShaderFromSourceCode(QOpenGLShader.Vertex, vertex_source)
+                and shader_program.addShaderFromSourceCode(QOpenGLShader.Fragment, fragment_source)
+                and shader_program.link()):
+            raise RuntimeError(f"Failed to build shader program: {shader_program.log()}")
 
         return cls(shader_program)
+
+    def set_mvp(self, mvp: np.ndarray):
+        gl.glUniformMatrix4fv(self.shader_program.uniformLocation("mvp"), 1, gl.GL_TRUE, mvp.flatten())
 
     @contextlib.contextmanager
     def use(self):
@@ -633,68 +601,17 @@ class RenderedMesh:
 
     @classmethod
     def from_prepared_data(cls, data: 'RenderedMesh.PreparedData') -> 'RenderedMesh':
-        # TODO: Fold this into _from_common, it should never get called anyway
-        # after I am done
-        return cls._from_common(
-            data.triangle_vertices,
-            data.triangle_colors,
-            data.edge_vertices,
-            data.edge_colors,
-            data.boundary_vertices,
-            data.boundary_colors
-        )
-
-    @classmethod
-    def _from_common(cls,
-                     triangle_vertices: np.ndarray[np.float32],
-                     triangle_colors: np.ndarray[np.float32],
-                     edge_vertices: np.ndarray[np.float32],
-                     edge_colors: np.ndarray[np.float32],
-                     boundary_vertices: np.ndarray[np.float32],
-                     boundary_colors: np.ndarray[np.float32]) -> 'RenderedMesh':
-
-        def create_vao(vertices: np.ndarray[np.float32], colors: np.ndarray[np.float32], color_components: int) -> int:
-            """Create a VAO with vertex and color VBOs."""
-            vao = gl.glGenVertexArrays(1)
-            gl.glBindVertexArray(vao)
-
-            # VBO for vertices (attribute 0, 2D coordinates)
-            vbo_vertices = gl.glGenBuffers(1)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_vertices)
-            gl.glBufferData(
-                gl.GL_ARRAY_BUFFER,
-                vertices,
-                gl.GL_STATIC_DRAW
-            )
-            gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glEnableVertexAttribArray(0)
-
-            # VBO for colors (attribute 1, 1D or 3D components)
-            vbo_colors = gl.glGenBuffers(1)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_colors)
-            gl.glBufferData(
-                gl.GL_ARRAY_BUFFER,
-                colors,
-                gl.GL_STATIC_DRAW
-            )
-            gl.glVertexAttribPointer(1, color_components, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glEnableVertexAttribArray(1)
-
-            return vao
-
-        # Create VAOs for each mesh component
-        vao_triangles = create_vao(triangle_vertices, triangle_colors, 1)
-        vao_edges = create_vao(edge_vertices, edge_colors, 3)
-        vao_boundary = create_vao(boundary_vertices, boundary_colors, 3)
-
+        vao_triangles = _create_vao(data.triangle_vertices, data.triangle_colors, 1)
+        vao_edges = _create_vao(data.edge_vertices, data.edge_colors, 3)
+        vao_boundary = _create_vao(data.boundary_vertices, data.boundary_colors, 3)
         gl.glBindVertexArray(0)
 
         return cls(vao_triangles,
-                   len(triangle_vertices) // 2,
+                   len(data.triangle_vertices) // 2,
                    vao_edges,
-                   len(edge_vertices) // 2,
+                   len(data.edge_vertices) // 2,
                    vao_boundary,
-                   len(boundary_vertices) // 2)
+                   len(data.boundary_vertices) // 2)
 
     @dataclass(frozen=True)
     class PreparedGeometry:
@@ -786,51 +703,15 @@ class RenderedPoints:
 
     @classmethod
     def from_points(cls, points_data: list[tuple[tuple[float, float], tuple[float, float, float]]]):
-        if not points_data:
-            # Handle empty list to avoid errors with glBufferData
-            vao_points = gl.glGenVertexArrays(1)
-            # No need to create VBOs if there's no data
-            return cls(vao_points, 0)
-
-        flat_points_coords = []
-        flat_points_colors = []
-        for (p_x, p_y), (r, g, b) in points_data:
-            flat_points_coords.extend([p_x, p_y])
-            flat_points_colors.extend([r, g, b])
-
-        vao_points = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao_points)
-
-        # VBO for point coordinates
-        vbo_point_coords = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_point_coords)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(flat_points_coords, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-
-        # VBO for point colors
-        vbo_point_colors = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo_point_colors)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            np.array(flat_points_colors, dtype=np.float32),
-            gl.GL_STATIC_DRAW
-        )
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(1)
-
+        coords = np.array([p for p, _ in points_data], dtype=np.float32).reshape(-1)
+        colors = np.array([c for _, c in points_data], dtype=np.float32).reshape(-1)
+        vao_points = _create_vao(coords, colors, 3)
         gl.glBindVertexArray(0)
-        # The number of points is the length of the original points_data list
         return cls(vao_points, len(points_data))
 
     def render(self):
-        if self.point_count > 0:
-            gl.glBindVertexArray(self.vao_points)
-            gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
+        gl.glBindVertexArray(self.vao_points)
+        gl.glDrawArrays(gl.GL_POINTS, 0, self.point_count)
 
 
 class SliderScale(abc.ABC):
@@ -1232,7 +1113,7 @@ class MeshViewer(QOpenGLWidget):
     meshClicked = Signal(mesh.Point, QtGui.QMouseEvent)
     screenDragged = Signal(float, float, QtGui.QMouseEvent)
     keyPressedInMesh = Signal(mesh.Point, int, Qt.KeyboardModifiers)
-    # Signal for mouse position and voltage probing
+    # Signal for mouse position and probed value
     mousePositionChanged = Signal(mesh.Point, object)  # object can be float or None
     # Signal for visibility changes
     visibilityChanged = Signal()
@@ -1249,8 +1130,6 @@ class MeshViewer(QOpenGLWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.solution: None | solver.Solution = None
-        # Layer name -> RenderedMesh
-        self.rendered_meshes: dict[str, list] = {}
         self.rendered_connection_points: dict[str, RenderedPoints] = {}
         self.connection_points_visible: bool = True
 
@@ -1275,6 +1154,7 @@ class MeshViewer(QOpenGLWidget):
 
         # OpenGL objects
         self.mesh_shader = None
+        self.disconnected_shader = None
         self.edge_shader = None
         self.points_shader = None
 
@@ -1297,32 +1177,17 @@ class MeshViewer(QOpenGLWidget):
         return self.width() / self.height() if self.height() > 0 else 1.0
 
     def _compute_mesh_bounds(self) -> tuple[float, float, float, float] | None:
-        """
-        Compute the bounding box of all meshes across all layers.
-
-        Returns:
-            A tuple of (min_x, min_y, max_x, max_y) or None if no vertices found.
-        """
-        if not self.solution or not self.solution.layer_solutions:
+        """Bounding box (min_x, min_y, max_x, max_y) of all meshes, or None if there are no vertices."""
+        if not self.solution:
             return None
 
-        min_x, min_y = float('inf'), float('inf')
-        max_x, max_y = float('-inf'), float('-inf')
-
-        for layer_solution in self.solution.layer_solutions:
-            for msh in layer_solution.meshes:
-                for vertex in msh.vertices:
-                    x, y = vertex.p.x, vertex.p.y
-                    min_x = min(min_x, x)
-                    min_y = min(min_y, y)
-                    max_x = max(max_x, x)
-                    max_y = max(max_y, y)
-
-        # Check if we found any vertices
-        if min_x == float('inf'):
+        positions = [msh.positions() for ls in self.solution.layer_solutions for msh in ls.meshes]
+        pts = np.concatenate(positions) if positions else np.empty((0, 2))
+        if len(pts) == 0:
             return None
 
-        return min_x, min_y, max_x, max_y
+        (min_x, min_y), (max_x, max_y) = pts.min(axis=0), pts.max(axis=0)
+        return float(min_x), float(min_y), float(max_x), float(max_y)
 
     def _getNearestValue(self, world_x: float, world_y: float) -> Optional[float]:
         """
@@ -1414,18 +1279,11 @@ class MeshViewer(QOpenGLWidget):
         self.visible_layers = [layer.name for layer in self.solution.problem.layers]
         self.current_layer_index = 0
 
-        # Emit signal with available layers
         if self.visible_layers:
             self.availableLayersChanged.emit(self.visible_layers)
-
-        # Emit signal with initial layer
-        if self.visible_layers:
             self.currentLayerChanged.emit(self.current_layer_name)
 
-        # Initialize all modes and emit mode signals
         current_mode = self.current_rendering_mode
-
-        # Emit mode-related signals
         self.currentModeChanged.emit(current_mode.name)
         self._emitColorScale()
 
@@ -1470,8 +1328,6 @@ class MeshViewer(QOpenGLWidget):
                 points_by_layer[layer_name].append((point_coords, color))
 
         for layer_name, collected_points_data in points_by_layer.items():
-            if not collected_points_data:
-                continue
             # We want to render the _red_ points over the gray ones,
             # so we draw them _last_. This is a hack to order them, it
             # depends on the fact that (1.0, 0.0, 0.0) > (0.5, 0.5, 0.5)
@@ -1567,11 +1423,7 @@ class MeshViewer(QOpenGLWidget):
     def _renderMeshTriangles(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the triangles of the meshes for the current layer."""
         with self.mesh_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.mesh_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.mesh_shader.set_mvp(mvp)
 
             # Set the min/max value uniforms for color scaling
             gl.glUniform1f(
@@ -1589,15 +1441,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderMeshEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the edges of the meshes for the current layer."""
-        if not self.edges_visible or not self.edge_shader:
+        if not self.edges_visible:
             return
 
         with self.edge_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.edge_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.edge_shader.set_mvp(mvp)
 
             # Draw edges for current layer only
             for rmesh in rendered_mesh_list:
@@ -1605,15 +1453,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderBoundaryEdges(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders the boundary edges of the meshes for the current layer."""
-        if not self.outline_visible or not self.edge_shader:
+        if not self.outline_visible:
             return
 
         with self.edge_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.edge_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.edge_shader.set_mvp(mvp)
 
             # Draw boundary edges for current layer only
             for rmesh in rendered_mesh_list:
@@ -1621,15 +1465,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderDisconnectedMeshes(self, mvp: np.ndarray, rendered_mesh_list: list[RenderedMesh]) -> None:
         """Renders disconnected copper meshes in gray."""
-        if not self.disconnected_shader or not rendered_mesh_list:
+        if not rendered_mesh_list:
             return
 
         with self.disconnected_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.disconnected_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.disconnected_shader.set_mvp(mvp)
 
             # Draw triangles for disconnected meshes
             for rmesh in rendered_mesh_list:
@@ -1641,18 +1481,11 @@ class MeshViewer(QOpenGLWidget):
 
     def _renderConnectionPoints(self, mvp: np.ndarray, rendered_points_obj: RenderedPoints) -> None:
         """Renders the connection points for the current layer."""
-        if not self.connection_points_visible or not self.points_shader:
-            return
-
-        if rendered_points_obj.point_count == 0:
+        if not self.connection_points_visible:
             return
 
         with self.points_shader.use():
-            # Set the MVP uniform
-            gl.glUniformMatrix4fv(
-                self.points_shader.shader_program.uniformLocation("mvp"),
-                1, gl.GL_TRUE, mvp.flatten()
-            )
+            self.points_shader.set_mvp(mvp)
 
             gl.glEnable(gl.GL_PROGRAM_POINT_SIZE)
             rendered_points_obj.render()
@@ -1708,7 +1541,6 @@ class MeshViewer(QOpenGLWidget):
         aspect = self.aspect_ratio
 
         # Inverse transformation based on the projection and view matrices
-        # These formulas were implicitly used in _getValueFromCursor and worked for picking.
         world_x = (ndc_x * aspect / self.scale) - self.offset_x
         world_y = (ndc_y / self.scale) - self.offset_y
 
@@ -1743,8 +1575,8 @@ class MeshViewer(QOpenGLWidget):
 
         # Always emit mouse position for status bar updates
         world_point = self._screenToWorld(event.position())
-        voltage = self._getNearestValue(world_point.x, world_point.y)
-        self.mousePositionChanged.emit(world_point, voltage)
+        value = self._getNearestValue(world_point.x, world_point.y)
+        self.mousePositionChanged.emit(world_point, value)
         self.last_mouse_position_change_ts = time.monotonic()
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -1903,14 +1735,6 @@ class MeshViewer(QOpenGLWidget):
 
         # Refresh the display
         self.update()
-
-    def switchToNextLayer(self) -> None:
-        """Switch to the next layer in the cycle."""
-        self.switchLayerBy(1)
-
-    def switchToPreviousLayer(self) -> None:
-        """Switch to the previous layer in the cycle."""
-        self.switchLayerBy(-1)
 
     @Slot(bool)
     def setEdgesVisible(self, visible: bool):
@@ -2265,7 +2089,7 @@ class PreparedUI:
     """GL-free UI preparation for a solution (see `prepare_ui_data`)."""
 
     solution: solver.Solution
-    modes: list
+    modes: list["MeshViewer.BaseRenderingMode"]
 
 
 @stage_timer
@@ -2406,19 +2230,19 @@ class MainWindow(QMainWindow):
         self.x_position_label.setText(f"X: {world_point.x:.3f}")
         self.y_position_label.setText(f"Y: {world_point.y:.3f}")
 
-        if value is not None:
-            current_unit = self.mesh_viewer.current_rendering_mode.unit
-            value_str = units.Value(value, current_unit).pretty_format(3)
-            self.value_label.setText(f"{current_unit}: {value_str}")
-
-            # Calculate delta from the minimum value of the color scale
-            delta_value = value - self.mesh_viewer.current_rendering_mode.min_value
-            delta_str = units.Value(delta_value, current_unit).pretty_format(3)
-            self.delta_label.setText(f"Δ: {delta_str}")
-        else:
-            current_unit = self.mesh_viewer.current_rendering_mode.unit
+        current_unit = self.mesh_viewer.current_rendering_mode.unit
+        if value is None:
             self.value_label.setText(f"{current_unit}: ?")
             self.delta_label.setText("Δ: ?")
+            return
+
+        value_str = units.Value(value, current_unit).pretty_format(3)
+        self.value_label.setText(f"{current_unit}: {value_str}")
+
+        # Calculate delta from the minimum value of the color scale
+        delta_value = value - self.mesh_viewer.current_rendering_mode.min_value
+        delta_str = units.Value(delta_value, current_unit).pretty_format(3)
+        self.delta_label.setText(f"Δ: {delta_str}")
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         """Override showEvent to display warnings after window is visible."""
@@ -2464,9 +2288,6 @@ def main(prepared: PreparedUI,
     """
     # Configure OpenGL
     configure_opengl()
-
-    if warnings_list is None:
-        warnings_list = []
 
     app = QApplication(sys.argv)
     window = MainWindow(prepared, warnings_list)

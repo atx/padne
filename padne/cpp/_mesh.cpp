@@ -28,6 +28,8 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 
+#include "ndarray_util.h"
+
 namespace nb = nanobind;
 using namespace nb::literals;
 
@@ -187,16 +189,8 @@ Py_hash_t mix_hash(const Mesh *m, uint32_t i, uint32_t salt) {
     return result;
 }
 
-// Resolves a half-edge index for `__contains__`-style checks: false for
-// objects of the wrong type or from a different mesh.
-template <typename Ref>
-bool try_ref(nb::object obj, Ref &out) {
-    return nb::try_cast<Ref>(obj, out, false);
-}
-
-// Object stores exposed as mesh.vertices/halfedges/faces/boundaries. These
-// provide the read-only parts of the original IndexStore API; objects are
-// created through the Mesh methods instead of IndexStore.add().
+// Object stores exposed as mesh.vertices/halfedges/faces/boundaries. Objects
+// are created through the Mesh methods.
 
 struct VertexStore {
     nb::object owner;
@@ -276,7 +270,7 @@ NB_MODULE(_mesh, m) {
             })
         .def("__eq__", [](const VertexRef &a, nb::object obj) {
             VertexRef b;
-            return try_ref(obj, b) && a.m == b.m && a.i == b.i;
+            return nb::try_cast(obj, b, false) && a.m == b.m && a.i == b.i;
         })
         .def("__hash__", [](const VertexRef &v) { return mix_hash(v.m, v.i, 1); })
         .def("__getstate__", [](const VertexRef &v) {
@@ -321,15 +315,12 @@ NB_MODULE(_mesh, m) {
                 check_same_mesh(h.m, *face);
                 h.m->he_face[h.i] = encode_face(*face);
             })
-        // Cotangent weight of this edge: sums |cot(opposite angle)| / 2 over
-        // the two adjacent triangles, skipping any side that is a boundary
-        // face. Mirrors the former pure-Python HalfEdge.cotan.
         .def("cotan", [](const HalfEdgeRef &h) {
             return h.m->cotan_weight(h.i);
         })
         .def("__eq__", [](const HalfEdgeRef &a, nb::object obj) {
             HalfEdgeRef b;
-            return try_ref(obj, b) && a.m == b.m && a.i == b.i;
+            return nb::try_cast(obj, b, false) && a.m == b.m && a.i == b.i;
         })
         .def("__hash__", [](const HalfEdgeRef &h) { return mix_hash(h.m, h.i, 2); })
         .def("__getstate__", [](const HalfEdgeRef &h) {
@@ -354,7 +345,7 @@ NB_MODULE(_mesh, m) {
             })
         .def("__eq__", [](const FaceRef &a, nb::object obj) {
             FaceRef b;
-            return try_ref(obj, b) && a.m == b.m && a.i == b.i
+            return nb::try_cast(obj, b, false) && a.m == b.m && a.i == b.i
                 && a.is_boundary == b.is_boundary;
         })
         .def("__hash__", [](const FaceRef &f) {
@@ -398,57 +389,33 @@ NB_MODULE(_mesh, m) {
         .def("__iter__", [](const VertexStore &s) { return VertexIter{s.owner, s.m}; })
         .def("__contains__", [](const VertexStore &s, nb::object obj) {
             VertexRef v;
-            return try_ref(obj, v) && v.m == s.m;
+            return nb::try_cast(obj, v, false) && v.m == s.m;
         })
-        .def("to_index", [](const VertexStore &, const VertexRef &v) { return v.i; })
         .def("to_object", [](const VertexStore &s, int64_t idx) {
             return VertexRef{s.owner, s.m, resolve_index(idx, s.m->n_vertices(), "vertex index out of range")};
-        })
-        .def("items", [](const VertexStore &s) {
-            nb::list items;
-            for (uint32_t i = 0; i < s.m->n_vertices(); i++)
-                items.append(nb::make_tuple(i, VertexRef{s.owner, s.m, i}));
-            return items;
-        })
-        .def_prop_ro("next_index", [](const VertexStore &s) { return s.m->n_vertices(); });
+        });
 
     nb::class_<HalfEdgeStore>(m, "HalfEdgeStore")
         .def("__len__", [](const HalfEdgeStore &s) { return s.m->n_halfedges(); })
         .def("__iter__", [](const HalfEdgeStore &s) { return HalfEdgeIter{s.owner, s.m}; })
         .def("__contains__", [](const HalfEdgeStore &s, nb::object obj) {
             HalfEdgeRef h;
-            return try_ref(obj, h) && h.m == s.m;
+            return nb::try_cast(obj, h, false) && h.m == s.m;
         })
-        .def("to_index", [](const HalfEdgeStore &, const HalfEdgeRef &h) { return h.i; })
         .def("to_object", [](const HalfEdgeStore &s, int64_t idx) {
             return HalfEdgeRef{s.owner, s.m, resolve_index(idx, s.m->n_halfedges(), "halfedge index out of range")};
-        })
-        .def("items", [](const HalfEdgeStore &s) {
-            nb::list items;
-            for (uint32_t i = 0; i < s.m->n_halfedges(); i++)
-                items.append(nb::make_tuple(i, HalfEdgeRef{s.owner, s.m, i}));
-            return items;
-        })
-        .def_prop_ro("next_index", [](const HalfEdgeStore &s) { return s.m->n_halfedges(); });
+        });
 
     nb::class_<FaceStore>(m, "FaceStore")
         .def("__len__", [](const FaceStore &s) { return s.m->n_faces(s.boundary); })
         .def("__iter__", [](const FaceStore &s) { return FaceIter{s.owner, s.m, s.boundary}; })
         .def("__contains__", [](const FaceStore &s, nb::object obj) {
             FaceRef f;
-            return try_ref(obj, f) && f.m == s.m && f.is_boundary == s.boundary;
+            return nb::try_cast(obj, f, false) && f.m == s.m && f.is_boundary == s.boundary;
         })
-        .def("to_index", [](const FaceStore &, const FaceRef &f) { return f.i; })
         .def("to_object", [](const FaceStore &s, int64_t idx) {
             return FaceRef{s.owner, s.m, resolve_index(idx, s.m->n_faces(s.boundary), "face index out of range"), s.boundary};
-        })
-        .def("items", [](const FaceStore &s) {
-            nb::list items;
-            for (uint32_t i = 0; i < s.m->n_faces(s.boundary); i++)
-                items.append(nb::make_tuple(i, FaceRef{s.owner, s.m, i, s.boundary}));
-            return items;
-        })
-        .def_prop_ro("next_index", [](const FaceStore &s) { return s.m->n_faces(s.boundary); });
+        });
 
     // Build a half-edge mesh from a triangle soup, entirely in C++. Same
     // semantics as the former pure-Python Mesh.from_triangle_soup, but the
@@ -595,68 +562,59 @@ NB_MODULE(_mesh, m) {
         // vectorization (KDTree construction, solution transfer, ...).
         .def("positions", [](const Mesh &m_) {
             size_t n = m_.n_vertices();
-            auto *buf = new std::vector<double>();
-            nb::capsule owner(buf, [](void *p) noexcept {
-                delete static_cast<std::vector<double> *>(p);
-            });
+            std::vector<double> buf;
             {
                 nb::gil_scoped_release nogil;
-                buf->resize(2 * n);
+                buf.resize(2 * n);
                 for (size_t i = 0; i < n; i++) {
-                    (*buf)[2 * i] = m_.vertex_x[i];
-                    (*buf)[2 * i + 1] = m_.vertex_y[i];
+                    buf[2 * i] = m_.vertex_x[i];
+                    buf[2 * i + 1] = m_.vertex_y[i];
                 }
             }
-            return nb::ndarray<nb::numpy, double>(buf->data(), {n, 2}, owner);
+            return vector_to_numpy(std::move(buf), {n, 2});
         })
         // Interior-face vertex indices as an (F, 3) array, in face index
         // order. Requires all interior faces to be triangles.
         .def("triangles", [](const Mesh &m_) {
             size_t nf = m_.n_faces(false);
-            auto *buf = new std::vector<uint32_t>();
-            nb::capsule owner(buf, [](void *p) noexcept {
-                delete static_cast<std::vector<uint32_t> *>(p);
-            });
+            std::vector<uint32_t> buf;
             {
                 nb::gil_scoped_release nogil;
-                buf->resize(3 * nf);
+                buf.resize(3 * nf);
                 for (size_t f = 0; f < nf; f++) {
                     uint32_t e0 = m_.face_edge[f];
                     uint32_t e1 = m_.he_next[e0];
                     uint32_t e2 = m_.he_next[e1];
                     if (m_.he_next[e2] != e0)
                         throw std::runtime_error("Non-triangular interior face");
-                    (*buf)[3 * f] = m_.he_origin[e0];
-                    (*buf)[3 * f + 1] = m_.he_origin[e1];
-                    (*buf)[3 * f + 2] = m_.he_origin[e2];
+                    buf[3 * f] = m_.he_origin[e0];
+                    buf[3 * f + 1] = m_.he_origin[e1];
+                    buf[3 * f + 2] = m_.he_origin[e2];
                 }
             }
-            return nb::ndarray<nb::numpy, uint32_t>(buf->data(), {nf, 3}, owner);
+            return vector_to_numpy(std::move(buf), {nf, 3});
         })
         // One byte per triangle edge, in the same order as triangles(). A
         // nonzero byte means its twin belongs to an exterior or hole boundary.
         // Like the other bulk readers, requires no concurrent mesh mutation.
         .def("triangle_boundary_mask", [](const Mesh &m_) {
             size_t nf = m_.n_faces(false);
-            auto *buf = new std::vector<uint8_t>();
-            nb::capsule owner(buf, [](void *p) noexcept {
-                delete static_cast<std::vector<uint8_t> *>(p);
-            });
+            std::vector<uint8_t> buf;
             {
                 nb::gil_scoped_release nogil;
-                buf->resize(3 * nf);
+                buf.resize(3 * nf);
                 for (size_t f = 0; f < nf; f++) {
                     uint32_t start = m_.face_edge[f];
                     uint32_t h = start;
                     for (size_t k = 0; k < 3; k++) {
-                        (*buf)[3 * f + k] = bool(m_.he_face[h ^ 1] & BOUNDARY_BIT);
+                        buf[3 * f + k] = bool(m_.he_face[h ^ 1] & BOUNDARY_BIT);
                         h = m_.he_next[h];
                     }
                     if (h != start)
                         throw std::runtime_error("Non-triangular interior face");
                 }
             }
-            return nb::ndarray<nb::numpy, uint8_t>(buf->data(), {nf, 3}, owner);
+            return vector_to_numpy(std::move(buf), {nf, 3});
         })
         // Cotan-weighted Laplace operator in COO form: a (rows, cols, values)
         // tuple over mesh-local vertex indices, including the diagonal.
@@ -666,14 +624,13 @@ NB_MODULE(_mesh, m) {
         .def("laplacian", [](const Mesh &m_) {
             uint32_t nh = m_.n_halfedges();
             uint32_t nv = m_.n_vertices();
-            auto *rows = new std::vector<uint32_t>();
-            auto *cols = new std::vector<uint32_t>();
-            auto *vals = new std::vector<double>();
+            std::vector<uint32_t> rows, cols;
+            std::vector<double> vals;
             {
                 nb::gil_scoped_release nogil;
-                rows->reserve(nh + nv);
-                cols->reserve(nh + nv);
-                vals->reserve(nh + nv);
+                rows.reserve(nh + nv);
+                cols.reserve(nh + nv);
+                vals.reserve(nh + nv);
                 std::vector<double> diag(nv, 0.0);
                 for (uint32_t h = 0; h < nh; h++) {
                     uint32_t vi = m_.he_origin[h];
@@ -681,30 +638,22 @@ NB_MODULE(_mesh, m) {
                     double ratio = m_.cotan_weight(h);
                     if (ratio == 0.0)
                         continue;
-                    rows->push_back(vi);
-                    cols->push_back(vk);
-                    vals->push_back(ratio);
+                    rows.push_back(vi);
+                    cols.push_back(vk);
+                    vals.push_back(ratio);
                     diag[vi] -= ratio;
                 }
                 for (uint32_t v = 0; v < nv; v++) {
-                    rows->push_back(v);
-                    cols->push_back(v);
-                    vals->push_back(diag[v]);
+                    rows.push_back(v);
+                    cols.push_back(v);
+                    vals.push_back(diag[v]);
                 }
             }
-            auto make_u32 = [](std::vector<uint32_t> *buf) {
-                nb::capsule owner(buf, [](void *p) noexcept {
-                    delete static_cast<std::vector<uint32_t> *>(p);
-                });
-                return nb::ndarray<nb::numpy, uint32_t>(buf->data(), {buf->size()}, owner);
-            };
-            nb::capsule vowner(vals, [](void *p) noexcept {
-                delete static_cast<std::vector<double> *>(p);
-            });
+            size_t nnz = vals.size();
             return nb::make_tuple(
-                make_u32(rows),
-                make_u32(cols),
-                nb::ndarray<nb::numpy, double>(vals->data(), {vals->size()}, vowner));
+                vector_to_numpy(std::move(rows), {nnz}),
+                vector_to_numpy(std::move(cols), {nnz}),
+                vector_to_numpy(std::move(vals), {nnz}));
         })
         .def("__getstate__", [](const Mesh &m_) {
             return nb::make_tuple(

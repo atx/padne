@@ -6,6 +6,7 @@ import scipy.sparse
 import shapely.geometry
 
 from padne import kicad
+import padne._mesh as _mesh
 
 from padne.mesh import Vector, Point, Vertex, HalfEdge, Face, Mesh, \
     Mesher, MeshingException, ZeroForm, OneForm, TwoForm, PolyBoundaryDistanceMap, CGALPolygon, index_type
@@ -897,6 +898,20 @@ class TestMesh:
         with pytest.raises(ValueError, match="Non-manifold"):
             Mesh.from_triangle_soup(points, triangles)
 
+    def test_triangle_soup_index_out_of_range(self):
+        points = [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0)]
+
+        with pytest.raises(ValueError, match="Triangle vertex index out of range"):
+            Mesh.from_triangle_soup(points, [(0, 1, 3)])
+
+    def test_triangle_soup_into_nonempty_mesh(self):
+        points = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        triangles = np.array([[0, 1, 2]], dtype=np.uint32)
+        mesh = Mesh.from_triangle_soup(points, triangles)
+
+        with pytest.raises(ValueError, match="Mesh must be empty"):
+            _mesh.build_from_triangle_soup(mesh, points, triangles)
+
     def test_grid_mesh(self):
         """Programmatic N x N grid of squares, each split into two triangles."""
         n = 20
@@ -1006,17 +1021,6 @@ class TestMeshBulkAccessors:
         cycles = [[0, 1, 2], [1, 2, 0], [2, 0, 1]]
         assert list(tris[0]) in cycles
 
-    def test_laplacian_matches_python_implementation(self):
-        from padne import solver
-
-        mesh = self.make_mesh_with_hole()
-        n = len(mesh.vertices)
-        rows, cols, vals = mesh.laplacian()
-        L = scipy.sparse.coo_matrix((vals, (rows, cols)), shape=(n, n))
-        L_ref = solver.laplace_operator(mesh)
-
-        np.testing.assert_allclose(L.toarray(), L_ref.toarray(), atol=1e-12)
-
     def test_laplacian_square_with_center(self):
         mesh = make_square_with_center_mesh()
         rows, cols, vals = mesh.laplacian()
@@ -1067,14 +1071,6 @@ class TestMeshStores:
         assert v2.i == index_type(1)
         assert v3.i == index_type(2)
 
-    def test_to_index(self):
-        mesh = Mesh()
-        v1 = mesh.make_vertex(Point(1.0, 2.0))
-        v2 = mesh.make_vertex(Point(3.0, 4.0))
-
-        assert mesh.vertices.to_index(v1) == index_type(0)
-        assert mesh.vertices.to_index(v2) == index_type(1)
-
     def test_to_object(self):
         mesh = Mesh()
         v1 = mesh.make_vertex(Point(1.0, 2.0))
@@ -1087,17 +1083,6 @@ class TestMeshStores:
 
         with pytest.raises(IndexError):
             mesh.vertices.to_object(2)
-
-    def test_items(self):
-        mesh = Mesh()
-        vertices = [mesh.make_vertex(Point(float(i), float(i))) for i in range(3)]
-
-        items = list(mesh.vertices.items())
-        assert len(items) == 3
-
-        for i, (idx, obj) in enumerate(items):
-            assert idx == index_type(i)
-            assert obj == vertices[i]
 
     def test_contains_added_object(self):
         mesh = Mesh()
@@ -1123,16 +1108,6 @@ class TestMeshStores:
         assert face not in mesh.boundaries
         assert boundary in mesh.boundaries
         assert boundary not in mesh.faces
-
-    def test_next_index(self):
-        mesh = Mesh()
-        assert mesh.vertices.next_index == index_type(0)
-
-        mesh.make_vertex(Point(1.0, 2.0))
-        assert mesh.vertices.next_index == index_type(1)
-
-        mesh.make_vertex(Point(3.0, 4.0))
-        assert mesh.vertices.next_index == index_type(2)
 
     def test_iteration(self):
         mesh = Mesh()
@@ -1163,7 +1138,7 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         assert v1.p == v2.p  # Point data
         if v1.out is not None:
             assert v2.out is not None
-            assert mesh1.halfedges.to_index(v1.out) == mesh2.halfedges.to_index(v2.out)
+            assert v1.out.i == v2.out.i
         else:
             assert v2.out is None
 
@@ -1172,24 +1147,24 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         h1 = mesh1.halfedges.to_object(i)
         h2 = mesh2.halfedges.to_object(i)
 
-        assert mesh1.vertices.to_index(h1.origin) == mesh2.vertices.to_index(h2.origin)
+        assert h1.origin.i == h2.origin.i
 
         assert h1.twin is not None and h2.twin is not None
-        assert mesh1.halfedges.to_index(h1.twin) == mesh2.halfedges.to_index(h2.twin)
+        assert h1.twin.i == h2.twin.i
 
         assert h1.next is not None and h2.next is not None
-        assert mesh1.halfedges.to_index(h1.next) == mesh2.halfedges.to_index(h2.next)
+        assert h1.next.i == h2.next.i
 
         assert h1.prev is not None and h2.prev is not None
-        assert mesh1.halfedges.to_index(h1.prev) == mesh2.halfedges.to_index(h2.prev)
+        assert h1.prev.i == h2.prev.i
 
         if h1.face is not None:
             assert h2.face is not None
             assert h1.face.is_boundary == h2.face.is_boundary
             if h1.face.is_boundary:
-                assert mesh1.boundaries.to_index(h1.face) == mesh2.boundaries.to_index(h2.face)
+                assert h1.face.i == h2.face.i
             else:
-                assert mesh1.faces.to_index(h1.face) == mesh2.faces.to_index(h2.face)
+                assert h1.face.i == h2.face.i
         else:
             assert h2.face is None
 
@@ -1201,7 +1176,7 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         assert not f1.is_boundary
         if f1.edge is not None:
             assert f2.edge is not None
-            assert mesh1.halfedges.to_index(f1.edge) == mesh2.halfedges.to_index(f2.edge)
+            assert f1.edge.i == f2.edge.i
         else:
             assert f2.edge is None
 
@@ -1213,13 +1188,13 @@ def assert_meshes_equivalent(mesh1: Mesh, mesh2: Mesh):
         assert b1.is_boundary
         if b1.edge is not None:
             assert b2.edge is not None
-            assert mesh1.halfedges.to_index(b1.edge) == mesh2.halfedges.to_index(b2.edge)
+            assert b1.edge.i == b2.edge.i
         else:
             assert b2.edge is None
 
     # Compare _edge_map by converting HalfEdge values to their indices
-    edge_map1_indexed = {key: mesh1.halfedges.to_index(value) for key, value in mesh1._edge_map.items()}
-    edge_map2_indexed = {key: mesh2.halfedges.to_index(value) for key, value in mesh2._edge_map.items()}
+    edge_map1_indexed = {key: value.i for key, value in mesh1._edge_map.items()}
+    edge_map2_indexed = {key: value.i for key, value in mesh2._edge_map.items()}
     assert edge_map1_indexed == edge_map2_indexed
 
     # Final validation of the unpickled mesh structure
@@ -1450,6 +1425,13 @@ def assert_mesh_maximum_edge_length(mesh, max_size, tolerance=1e-6):
             f"(from {start_vertex.p} to {end_vertex.p})"
 
 
+def assert_vertices_within(mesh, poly, tol=1e-6):
+    region = poly.buffer(tol)
+    for vertex in mesh.vertices:
+        point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
+        assert region.covers(point), f"Vertex {vertex.p} lies outside the polygon"
+
+
 class TestMesher:
 
     def test_simple_square(self):
@@ -1486,14 +1468,7 @@ class TestMesher:
         assert len(mesh.faces) >= 1
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
 
-        # Check that all vertices are within the polygon bounds
-        for _, vertex in mesh.vertices.items():
-            x, y = vertex.p.x, vertex.p.y
-            assert 0 <= x <= 1
-            assert 0 <= y <= 1
-            # Note that this actually fails, one of the vertices is very slightly
-            # outside of the bounds due to floating point error
-            assert y <= -x + 1 + 1e-6  # This is the line connecting (0,1) and (1,0)
+        assert_vertices_within(mesh, triangle)
 
     def test_triangulate_simple_polygon(self):
         """Test triangulation without mesh refinement using relaxed config."""
@@ -1514,10 +1489,7 @@ class TestMesher:
         # An L-shape needs at least 4 triangles to cover
         assert len(mesh.faces) >= 4
 
-        # All vertices should be within the polygon
-        for _, vertex in mesh.vertices.items():
-            point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
-            assert polygon.contains(point) or polygon.boundary.contains(point)
+        assert_vertices_within(mesh, polygon)
 
     def test_triangulate_with_hole(self):
         """Test triangulation of a polygon with a hole using relaxed config."""
@@ -1534,10 +1506,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
 
-        # All vertices should be within the polygon (but not in the hole)
-        for _, vertex in mesh.vertices.items():
-            point = shapely.geometry.Point(vertex.p.x, vertex.p.y)
-            assert polygon.contains(point) or polygon.boundary.contains(point)
+        assert_vertices_within(mesh, polygon)
 
     def test_polygon_with_hole(self):
         """Test meshing a polygon with a hole."""
@@ -1557,11 +1526,7 @@ class TestMesher:
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 0
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
-
-        for vertex in mesh.vertices:
-            x = vertex.p.x
-            y = vertex.p.y
-            assert not (4 < x < 6 and 4 < y < 6)
+        assert_vertices_within(mesh, poly_with_hole)
 
     def test_polygon_with_multiple_holes(self):
         """Test meshing a polygon with multiple holes."""
@@ -1580,14 +1545,7 @@ class TestMesher:
         assert len(mesh.vertices) > 0
         assert len(mesh.faces) > 0
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
-
-        for vertex in mesh.vertices:
-            x = vertex.p.x
-            y = vertex.p.y
-
-            assert not (2 < x < 4 and 2 < y < 4)
-            assert not (6 < x < 8 and 6 < y < 8)
-
+        assert_vertices_within(mesh, poly_with_holes)
         assert mesh.euler_characteristic() == -1
 
     def test_concave_polygon(self):
@@ -1607,10 +1565,7 @@ class TestMesher:
         assert len(mesh.faces) > 0
         assert mesh.euler_characteristic() == 1
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
-
-        # Check that all vertices are contained within the original polygon
-        for vertex in mesh.vertices:
-            concave.contains(shapely.geometry.Point(vertex.p.x, vertex.p.y))
+        assert_vertices_within(mesh, concave)
 
     def test_mesh_quality_constraints(self):
         """Test that mesh quality constraints are respected."""
@@ -1760,13 +1715,7 @@ class TestMesher:
         assert_mesh_minimum_angle(mesh, mesher.config.minimum_angle)
         assert_mesh_topology_okay(mesh)
         assert_mesh_structure_valid(mesh)
-
-        # Check that vertices are within the original polygon bounds
-        for vertex in mesh.vertices:
-            x, y = vertex.p.x, vertex.p.y
-            assert 0 <= x <= 10
-            assert 0 <= y <= 10
-            assert clockwise_polygon.intersects(shapely.geometry.Point(x, y))
+        assert_vertices_within(mesh, clockwise_polygon)
 
     def test_tiny_polygon(self):
         """Test meshing a very small polygon."""
@@ -1792,15 +1741,9 @@ class TestMesher:
         mesher = Mesher()
         mesh = mesher.poly_to_mesh(rectangle, seed_points)
 
-        for vertex in mesh.vertices:
-            assert 0 <= vertex.p.x <= 1.0
-            assert 0 <= vertex.p.y <= 1.0
-
-            for edge in vertex.orbit():
-                # Passing a seed point to the mesher that is also a vertex
-                # of the mesh caused a malformed mesh to be produced
-                assert edge is not None
-
+        # Passing a seed point to the mesher that is also a vertex
+        # of the mesh caused a malformed mesh to be produced
+        assert_vertices_within(mesh, rectangle)
         assert_mesh_structure_valid(mesh)
         assert_mesh_topology_okay(mesh)
 
@@ -1885,6 +1828,17 @@ class TestMeshPickling:
         assert_meshes_equivalent(original_mesh, unpickled_mesh)
         # Also check Euler characteristic for the unpickled mesh
         assert unpickled_mesh.euler_characteristic() == 1
+
+    def test_mismatched_array_lengths_rejected(self):
+        mesh = Mesh.from_triangle_soup(
+            [Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0)], [(0, 1, 2)])
+        state = list(mesh.__getstate__())
+        # Drop one vertex_y entry so the vertex arrays disagree in length
+        state[1] = state[1][:-8]
+
+        restored = Mesh.__new__(Mesh)
+        with pytest.raises(ValueError, match="Corrupt mesh pickle data"):
+            restored.__setstate__(tuple(state))
 
     def test_references_preserved(self):
         """Test that if we pickle multiple objects simultaneously, the Vertex/HalfEdge/Face objects references get preserved"""
@@ -3143,3 +3097,24 @@ class TestVariableDensityMeshing:
             mock_cgal_mesh.assert_called_once()
             args, kwargs = mock_cgal_mesh.call_args
             assert args[4] is mock_distance_map_instance
+
+    def test_variable_density_triangle_sizes(self):
+        """Triangles grow away from the boundary but stay within the scaled bound."""
+        size = 0.5
+        factor = 3.0
+        config = Mesher.Config(maximum_size=size,
+                               variable_size_maximum_factor=factor,
+                               distance_map_quantization=0.1)
+        mesh = Mesher(config).poly_to_mesh(shapely.geometry.box(0, 0, 20, 20))
+
+        corners = mesh.positions()[mesh.triangles()]
+        longest_edge = np.linalg.norm(
+            corners - np.roll(corners, 1, axis=1), axis=2).max(axis=1)
+        centroids = corners.mean(axis=1)
+        boundary_distance = np.minimum(centroids, 20 - centroids).min(axis=1)
+
+        near_boundary = boundary_distance < 0.25
+        assert near_boundary.any()
+        assert np.all(longest_edge[near_boundary] <= size + 1e-9)
+        assert np.all(longest_edge <= size * factor + 1e-9)
+        assert np.any(longest_edge[boundary_distance > config.variable_density_max_distance] > size)

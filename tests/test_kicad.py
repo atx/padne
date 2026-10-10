@@ -6,6 +6,7 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 import pytest
 import pcbnew
+import sexpdata
 import shapely.geometry
 
 from pathlib import Path
@@ -15,6 +16,28 @@ from typing import Optional
 from padne import kicad, problem
 
 from conftest import for_all_kicad_projects
+
+
+# Points inside and outside the castellated_vias_internal_cutout board outline
+CASTELLATED_INSIDE_POINTS = [
+    (100.2, 90.2),
+    (100.2, 109.2),
+    (101, 100),
+    (117.8, 93.8),
+    (149.4, 109.4),
+    (141.5, 107.2)
+]
+
+CASTELLATED_OUTSIDE_POINTS = [
+    (98, 110),
+    (124, 89),
+    (118.5, 94.4),
+    (129.1, 93.8),
+    (129, 106.3),
+    (119.2, 100.3),
+    (166.5, 101.7),
+    (126.7, 100.0)
+]
 
 
 class Utils:
@@ -96,6 +119,35 @@ class Utils:
 
         return found_elements[0]
 
+    @staticmethod
+    def classify_resistors(network):
+        """
+        Split the resistors of a via network into vertical (different layers)
+        and lateral (same layer) ones, returned as (resistor, conn_a, conn_b).
+        """
+        conns = {c.node_id: c for c in network.connections}
+        vertical, lateral = [], []
+        for element in network.elements:
+            if not isinstance(element, problem.Resistor):
+                continue
+            # Lumped resistors from directives may hang on internal nodes
+            if element.a not in conns or element.b not in conns:
+                continue
+            conn_a, conn_b = conns[element.a], conns[element.b]
+            if conn_a.layer is conn_b.layer:
+                lateral.append((element, conn_a, conn_b))
+            else:
+                vertical.append((element, conn_a, conn_b))
+        return vertical, lateral
+
+    @staticmethod
+    def assert_one_1v_source_and_one_10mohm_resistor(kicad_problem):
+        elements = [e for network in kicad_problem.networks for e in network.elements]
+        voltage_source, = [e for e in elements if isinstance(e, problem.VoltageSource)]
+        resistor, = [e for e in elements if isinstance(e, problem.Resistor)]
+        assert voltage_source.voltage == 1.0
+        assert resistor.resistance == 0.01
+
 
 class TestKiCadProject:
 
@@ -119,28 +171,9 @@ class TestKiCadProject:
         assert project.pcb_path.exists()
         assert project.sch_path.exists()
 
-    def test_simple_geometry_paths(self):
-        """Test that paths are correctly resolved for the simple_geometry project."""
-        kicad_dir = Path(__file__).parent / "kicad"
-        pro_path = kicad_dir / "simple_geometry" / "simple_geometry.kicad_pro"
-
-        project = kicad.KiCadProject.from_pro_file(pro_path)
-
-        # Test that all paths point to the expected locations
-        expected_dir = kicad_dir / "simple_geometry"
-        assert project.pro_path == expected_dir / "simple_geometry.kicad_pro"
-        assert project.pcb_path == expected_dir / "simple_geometry.kicad_pcb"
-        assert project.sch_path == expected_dir / "simple_geometry.kicad_sch"
-
-        # Test that all paths are absolute
         assert project.pro_path.is_absolute()
         assert project.pcb_path.is_absolute()
         assert project.sch_path.is_absolute()
-
-        # Test that all files have correct extensions
-        assert project.pro_path.suffix == ".kicad_pro"
-        assert project.pcb_path.suffix == ".kicad_pcb"
-        assert project.sch_path.suffix == ".kicad_sch"
 
     def test_from_pro_file_missing_project_file(self):
         """Test that from_pro_file() raises FileNotFoundError for missing project file."""
@@ -262,27 +295,6 @@ class TestViaSpecs:
         return (math.pi / 2) * kicad.COPPER_CONDUCTIVITY * plating * math.tanh(dead_end_height / radius)
 
     @staticmethod
-    def classify_resistors(network):
-        """
-        Split the resistors of a via network into vertical (different layers)
-        and lateral (same layer) ones, returned as (resistor, conn_a, conn_b).
-        """
-        conns = {c.node_id: c for c in network.connections}
-        vertical, lateral = [], []
-        for element in network.elements:
-            if not isinstance(element, problem.Resistor):
-                continue
-            # Lumped resistors from directives may hang on internal nodes
-            if element.a not in conns or element.b not in conns:
-                continue
-            conn_a, conn_b = conns[element.a], conns[element.b]
-            if conn_a.layer is conn_b.layer:
-                lateral.append((element, conn_a, conn_b))
-            else:
-                vertical.append((element, conn_a, conn_b))
-        return vertical, lateral
-
-    @staticmethod
     def load_simple_via(kicad_test_projects):
         board = pcbnew.LoadBoard(str(kicad_test_projects["simple_via"].pcb_path))
         layer_dict, _ = Utils.setup_layer_dict_and_pad_index(board)
@@ -381,50 +393,29 @@ class TestViaSpecs:
         # connecting the layers F.Cu - In1.Cu - In2.Cu - B.Cu have been created
         result = kicad.load_kicad_project(project.pro_path)
         via_center = shapely.geometry.Point(118.8, 105.9)
-        drill_diameter = 0.3  # mm (assuming same as simple via)
-        expected_radius = drill_diameter / 2
-        tolerance = expected_radius * 0.1  # 10% tolerance
+        radius = 0.15
 
-        expected_layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        def on_rim(conn):
+            return abs(via_center.distance(conn.point) - radius) < 0.1 * radius
 
-        # Find all resistors at this via boundary and on these layers
-        found_layers = set()
-        for network in result.networks:
-            for element in network.elements:
-                if isinstance(element, problem.Resistor):
-                    # Find the connections associated with this resistor within this network
-                    conn_a = next((c for c in network.connections if c.node_id == element.a), None)
-                    conn_b = next((c for c in network.connections if c.node_id == element.b), None)
+        found_pairs = {
+            tuple(sorted([conn_a.layer.name, conn_b.layer.name]))
+            for network in result.networks
+            for _, conn_a, conn_b in Utils.classify_resistors(network)[0]
+            if on_rim(conn_a) and on_rim(conn_b)
+        }
 
-                    if not conn_a or not conn_b:
-                        continue
-
-                    # Check if both endpoints are on the via boundary (within 10% of expected radius)
-                    dist_a = via_center.distance(conn_a.point)
-                    dist_b = via_center.distance(conn_b.point)
-                    points_on_boundary = (
-                        abs(dist_a - expected_radius) < tolerance and
-                        abs(dist_b - expected_radius) < tolerance
-                    )
-
-                    if points_on_boundary:
-                        # Record the pair of layers this resistor connects
-                        found_layers.add(tuple(sorted([conn_a.layer.name, conn_b.layer.name])))
-
-        # The expected resistor stack is between each adjacent pair of layers
-        expected_pairs = [
-            tuple(sorted([expected_layers[i], expected_layers[i+1]]))
-            for i in range(len(expected_layers)-1)
-        ]
-        for pair in expected_pairs:
-            assert pair in found_layers, f"Missing resistor between layers {pair} at via {via_center}"
+        layers = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        for pair in zip(layers, layers[1:]):
+            assert tuple(sorted(pair)) in found_pairs, \
+                f"Missing resistor between layers {pair} at via {via_center}"
 
     @pytest.mark.parametrize("plating", [0.025, 0.010])
     def test_via_barrel_resistance_uses_plating_thickness(self, kicad_test_projects, plating):
         via_spec, layer_dict, stackup = self.load_simple_via(kicad_test_projects)
 
         network, = kicad.process_via_spec(via_spec, layer_dict, stackup, plating)
-        vertical, _ = self.classify_resistors(network)
+        vertical, _ = Utils.classify_resistors(network)
 
         assert len(vertical) == 16
         parallel_resistance = 1 / sum(1 / r.resistance for r, _, _ in vertical)
@@ -438,7 +429,7 @@ class TestViaSpecs:
         vertical = [
             r
             for network in result.networks
-            for r, _, _ in self.classify_resistors(network)[0]
+            for r, _, _ in Utils.classify_resistors(network)[0]
         ]
         assert len(vertical) == 16
         parallel_resistance = 1 / sum(1 / r.resistance for r in vertical)
@@ -454,7 +445,7 @@ class TestViaSpecs:
 
         lateral_by_layer = {}
         for network in result.networks:
-            for r, conn_a, conn_b in self.classify_resistors(network)[1]:
+            for r, conn_a, conn_b in Utils.classify_resistors(network)[1]:
                 lateral_by_layer.setdefault(conn_a.layer.name, []).append((r, conn_a, conn_b))
 
         assert set(lateral_by_layer) == {"F.Cu", "B.Cu"}
@@ -480,7 +471,7 @@ class TestViaSpecs:
         conductance_by_layer = {}
         count_by_layer = {}
         for network in result.networks:
-            for r, conn_a, _ in self.classify_resistors(network)[1]:
+            for r, conn_a, _ in Utils.classify_resistors(network)[1]:
                 if via_center.distance(conn_a.point) > 2 * radius:
                     continue
                 name = conn_a.layer.name
@@ -498,124 +489,57 @@ class TestViaSpecs:
 
 class TestDirectiveParse:
 
-    def test_basic_directive_parsing(self):
-        """Test parsing a simple directive with key-value pairs."""
-        directive_str = "!padne VOLTAGE v=12.0V p=R1.4 n=R13.1"
-        directive = kicad.Directive.parse(directive_str)
+    @pytest.mark.parametrize("text, name, params", [
+        ("!padne VOLTAGE v=12.0V p=R1.4 n=R13.1",
+         "VOLTAGE", {"v": "12.0V", "p": "R1.4", "n": "R13.1"}),
+        ("!padne RESISTANCE r=4.7k from=R5.1 to=R5.2",
+         "RESISTANCE", {"r": "4.7k", "from": "R5.1", "to": "R5.2"}),
+        ("!padne CURRENT i=500mA source=U1.OUT+ sink=GND.1",
+         "CURRENT", {"i": "500mA", "source": "U1.OUT+", "sink": "GND.1"}),
+        ("!padne DEBUG", "DEBUG", {}),
+        # Last duplicate key wins
+        ("!padne TEST key=value1 key=value2", "TEST", {"key": "value2"}),
+        # Simple quotes get eliminated, spaces inside quotes are not supported yet
+        ('!padne LABEL text="HelloWorld" position=R1.1',
+         "LABEL", {"text": "HelloWorld", "position": "R1.1"}),
+    ])
+    def test_parse_valid(self, text, name, params):
+        directive = kicad.Directive.parse(text)
 
-        assert directive.name == "VOLTAGE"
-        assert directive.params == {"v": "12.0V", "p": "R1.4", "n": "R13.1"}
+        assert directive.name == name
+        assert directive.params == params
 
-    def test_directive_with_numeric_values(self):
-        """Test parsing a directive with numeric values."""
-        directive_str = "!padne RESISTANCE r=4.7k from=R5.1 to=R5.2"
-        directive = kicad.Directive.parse(directive_str)
+    @pytest.mark.parametrize("text, match", [
+        ("VOLTAGE v=12V p=R1.1 n=R1.2", "Directive must start with '!padne'"),
+        ("!padne", "Directive must have a name"),
+        ("!padne VOLTAGE v12V p=R1.1 n=R1.2", "Invalid parameter format"),
+        ("!padne VOLTAGE =12V p=R1.1 n=R1.2", "Empty parameter key"),
+    ])
+    def test_parse_invalid(self, text, match):
+        with pytest.raises(ValueError, match=match):
+            kicad.Directive.parse(text)
 
-        assert directive.name == "RESISTANCE"
-        assert directive.params == {"r": "4.7k", "from": "R5.1", "to": "R5.2"}
-
-    def test_directive_with_special_characters(self):
-        """Test parsing a directive with special characters in values."""
-        directive_str = "!padne CURRENT i=500mA source=U1.OUT+ sink=GND.1"
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "CURRENT"
-        assert directive.params == {"i": "500mA", "source": "U1.OUT+", "sink": "GND.1"}
-
-    def test_directive_with_empty_params(self):
-        """Test parsing a directive with no parameters."""
-        directive_str = "!padne DEBUG"
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "DEBUG"
-        assert directive.params == {}
-
-    def test_directive_with_duplicate_keys(self):
-        """Test parsing a directive with duplicate keys (last one should win)."""
-        directive_str = "!padne TEST key=value1 key=value2"
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "TEST"
-        assert directive.params == {"key": "value2"}
-
-    def test_directive_with_simple_quotes(self):
-        """Test that simple quotes get eliminated. We do not yet support spaces, so that is undefined behavior for now."""
-        directive_str = '!padne LABEL text="HelloWorld" position=R1.1'
-
-        directive = kicad.Directive.parse(directive_str)
-
-        assert directive.name == "LABEL"
-        assert directive.params == {"text": "HelloWorld", "position": "R1.1"}
-
-    # Error case tests
-
-    def test_missing_padne_prefix(self):
-        """Test that a ValueError is raised when the !padne prefix is missing."""
-        with pytest.raises(ValueError, match="Directive must start with '!padne'"):
-            kicad.Directive.parse("VOLTAGE v=12V p=R1.1 n=R1.2")
-
-    def test_missing_directive_name(self):
-        """Test that a ValueError is raised when the directive name is missing."""
-        with pytest.raises(ValueError, match="Directive must have a name"):
-            kicad.Directive.parse("!padne")
-
-    def test_invalid_key_value_format(self):
-        """Test that a ValueError is raised when the key-value format is invalid."""
-        with pytest.raises(ValueError, match="Invalid parameter format"):
-            kicad.Directive.parse("!padne VOLTAGE v12V p=R1.1 n=R1.2")
-
-    def test_empty_key(self):
-        """Test that a ValueError is raised when a parameter has an empty key."""
-        with pytest.raises(ValueError, match="Empty parameter key"):
-            kicad.Directive.parse("!padne VOLTAGE =12V p=R1.1 n=R1.2")
-
-    def test_multiline_directive_parsing(self):
-        """Test parsing multiple directives from a single text block with newlines."""
-        text = '!padne VOLTAGE v=1.0V p=R2.1 n=R2.2\n!padne RESISTANCE r=0.01 a=R3.1 b=R3.2'
-
+    @pytest.mark.parametrize("text, expected", [
+        ('!padne VOLTAGE v=1.0V p=R2.1 n=R2.2\n!padne RESISTANCE r=0.01 a=R3.1 b=R3.2',
+         [("VOLTAGE", {'v': '1.0V', 'p': 'R2.1', 'n': 'R2.2'}),
+          ("RESISTANCE", {'r': '0.01', 'a': 'R3.1', 'b': 'R3.2'})]),
+        # Leading/trailing whitespace is stripped
+        ('  !padne VOLTAGE v=3.3V p=U1.VCC n=U1.GND  \n\t!padne CURRENT i=1.0A f=R1.1 t=R1.2\t',
+         [("VOLTAGE", {'v': '3.3V', 'p': 'U1.VCC', 'n': 'U1.GND'}),
+          ("CURRENT", {'i': '1.0A', 'f': 'R1.1', 't': 'R1.2'})]),
+        # Non-!padne lines are ignored
+        ('This is a comment\n!padne VOLTAGE v=5V p=VCC n=GND\nAnother comment\n!padne RESISTANCE r=10 a=R1.1 b=R1.2\n',
+         [("VOLTAGE", {'v': '5V', 'p': 'VCC', 'n': 'GND'}),
+          ("RESISTANCE", {'r': '10', 'a': 'R1.1', 'b': 'R1.2'})]),
+        # Empty lines are ignored
+        ('\n\n!padne VOLTAGE v=12V p=PWR n=GND\n\n\n!padne CURRENT i=2A f=J1.1 t=J1.2\n\n',
+         [("VOLTAGE", {'v': '12V', 'p': 'PWR', 'n': 'GND'}),
+          ("CURRENT", {'i': '2A', 'f': 'J1.1', 't': 'J1.2'})]),
+    ])
+    def test_extract_multiline_directives(self, text, expected):
         directives = kicad.extract_directives_from_text(text)
 
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '1.0V', 'p': 'R2.1', 'n': 'R2.2'}
-        assert directives[1].name == 'RESISTANCE'
-        assert directives[1].params == {'r': '0.01', 'a': 'R3.1', 'b': 'R3.2'}
-
-    def test_multiline_directive_with_whitespace(self):
-        """Test that directives with leading/trailing whitespace are properly stripped."""
-        text = '  !padne VOLTAGE v=3.3V p=U1.VCC n=U1.GND  \n\t!padne CURRENT i=1.0A f=R1.1 t=R1.2\t'
-
-        directives = kicad.extract_directives_from_text(text)
-
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '3.3V', 'p': 'U1.VCC', 'n': 'U1.GND'}
-        assert directives[1].name == 'CURRENT'
-        assert directives[1].params == {'i': '1.0A', 'f': 'R1.1', 't': 'R1.2'}
-
-    def test_multiline_directive_ignore_non_padne_lines(self):
-        """Test that non-!padne lines in multiline text blocks are ignored."""
-        text = 'This is a comment\n!padne VOLTAGE v=5V p=VCC n=GND\nAnother comment\n!padne RESISTANCE r=10 a=R1.1 b=R1.2\n'
-
-        directives = kicad.extract_directives_from_text(text)
-
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '5V', 'p': 'VCC', 'n': 'GND'}
-        assert directives[1].name == 'RESISTANCE'
-        assert directives[1].params == {'r': '10', 'a': 'R1.1', 'b': 'R1.2'}
-
-    def test_multiline_directive_empty_lines(self):
-        """Test that empty lines in multiline text blocks are ignored."""
-        text = '\n\n!padne VOLTAGE v=12V p=PWR n=GND\n\n\n!padne CURRENT i=2A f=J1.1 t=J1.2\n\n'
-
-        directives = kicad.extract_directives_from_text(text)
-
-        assert len(directives) == 2
-        assert directives[0].name == 'VOLTAGE'
-        assert directives[0].params == {'v': '12V', 'p': 'PWR', 'n': 'GND'}
-        assert directives[1].name == 'CURRENT'
-        assert directives[1].params == {'i': '2A', 'f': 'J1.1', 't': 'J1.2'}
+        assert [(d.name, d.params) for d in directives] == expected
 
     def test_parse_directives_from_simple_geometry(self, kicad_test_projects):
         # Get the simple_geometry project's schematic file
@@ -673,38 +597,15 @@ class TestDirectiveParse:
 
         # Should have exactly 2 lumped elements: 1 from root + 1 from nested schematic
         assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
-
-        # Extract the voltage source and resistor by type
-        voltage_source_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.VoltageSource)
-        resistor_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.Resistor)
-
-        # Verify the voltage source properties (from root schematic)
-        assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
-
-        # Verify the resistor properties (from nested schematic)
-        assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
+        Utils.assert_one_1v_source_and_one_10mohm_resistor(kicad_problem)
 
     def test_multiline_directives_from_project(self, kicad_test_projects):
         """Test that the multiline_directive project loads correctly with multiple directives."""
         project = kicad_test_projects["multiline_directive"]
 
-        # Load the entire project - this tests the full integration
-        problem = kicad.load_kicad_project(project.pro_path)
+        kicad_problem = kicad.load_kicad_project(project.pro_path)
 
-        # Should have both a voltage source and a resistor from the multiline directive
-        from padne.problem import VoltageSource, Resistor
-
-        voltage_sources = [e for network in problem.networks for e in network.elements if isinstance(e, VoltageSource)]
-        resistors = [e for network in problem.networks for e in network.elements if isinstance(e, Resistor)]
-
-        assert len(voltage_sources) == 1
-        assert len(resistors) == 1
-
-        # Check the voltage source parameters
-        assert voltage_sources[0].voltage == 1.0
-
-        # Check the resistor parameters
-        assert resistors[0].resistance == 0.01
+        Utils.assert_one_1v_source_and_one_10mohm_resistor(kicad_problem)
 
     def test_nested_schematic_twoinstances_directive_deduplication(self, kicad_test_projects):
         """Test that directives from multiple instances of the same file are deduplicated."""
@@ -719,16 +620,7 @@ class TestDirectiveParse:
         # Should have exactly 2 lumped elements: 1 from root + 1 from nested schematic
         # Even though nested schematic is referenced twice, directive should only be extracted once
         assert len(kicad_problem.networks) == 2, f"Expected 2 networks, got {len(kicad_problem.networks)}"
-
-        # Extract the voltage source and resistor by type
-        voltage_source_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.VoltageSource)
-        resistor_element, _ = Utils.find_first_network_with_element_type(kicad_problem, problem.Resistor)
-
-        # Verify the voltage source properties (from root schematic)
-        assert voltage_source_element.voltage == 1.0, "Voltage value should be 1.0V"
-
-        # Verify the resistor properties (from nested schematic)
-        assert resistor_element.resistance == 0.01, "Resistance value should be 0.01 ohms"
+        Utils.assert_one_1v_source_and_one_10mohm_resistor(kicad_problem)
 
     def test_nested_schematic_twoinstances_hierarchy_structure(self, kicad_test_projects):
         """Test that hierarchy correctly preserves multiple instances with proper names."""
@@ -772,6 +664,14 @@ class TestDirectiveParse:
         assert child_b.parsed_sexp is not None, "Child B should have parsed S-expression content"
 
 
+def test_find_sexp_elements():
+    sexp = sexpdata.loads(
+        '(kicad_sch (text "a") (sheet (text "b") (property "x")) (text "c" (text "d")))')
+    texts = kicad._find_sexp_elements(sexp, "text")
+    assert [text[1] for text in texts] == ["a", "b", "c", "d"]
+    assert kicad._find_sexp_elements(sexp, "missing") == []
+
+
 class TestStackup:
 
     def test_extract_stackup(self, kicad_test_projects):
@@ -786,8 +686,6 @@ class TestStackup:
         # Extract stackup
         stackup = kicad.extract_stackup_from_kicad_pcb(board)
 
-        # Check that we got a valid Stackup object
-        assert isinstance(stackup, kicad.Stackup)
         assert len(stackup.items) == 3, f"Expected 3 stackup items, got {len(stackup.items)}"
 
         # Check F.Cu layer
@@ -816,8 +714,6 @@ class TestStackup:
         # Extract stackup
         stackup = kicad.extract_stackup_from_kicad_pcb(board)
 
-        # Check that we got a valid Stackup object
-        assert isinstance(stackup, kicad.Stackup), f"Stackup extraction failed for {project.name}"
         assert len(stackup.items) > 0, f"No stackup items found for {project.name}"
 
 
@@ -829,8 +725,6 @@ class TestLoadKicadProject:
         project = kicad_test_projects["simple_geometry"]
         result = kicad.load_kicad_project(project.pro_path)
 
-        # Check that we got a Problem object back
-        assert isinstance(result, problem.Problem)
         # Should have at least one layer (F.Cu)
         assert len(result.layers) >= 1
         # Should have our two lumped elements, each in its own network
@@ -852,13 +746,12 @@ class TestLoadKicadProject:
         assert isinstance(f_cu_layer.shape, shapely.geometry.MultiPolygon)
         assert not f_cu_layer.shape.is_empty
 
-    def test_conductance_vaguely_makes_sense(self, kicad_test_projects, monkeypatch):
-        """Test that custom resistivity is applied correctly."""
+    def test_conductance_vaguely_makes_sense(self, kicad_test_projects):
+        """Test that the default copper yields a plausible F.Cu sheet conductance."""
         project = kicad_test_projects["simple_geometry"]
 
         result = kicad.load_kicad_project(project.pro_path)
 
-        # F.Cu layer should have the custom resistivity
         f_cu_layer = next(layer for layer in result.layers if layer.name == "F.Cu")
         assert 1900 < f_cu_layer.conductance < 2300
 
@@ -992,55 +885,20 @@ class TestLoadKicadProject:
         """Test that flipped pads are handled correctly."""
         project = kicad_test_projects["simple_via"]
 
-        # Load the project
         result = kicad.load_kicad_project(project.pro_path)
 
-        # Find the voltage source lumped element by searching networks
-        voltage_source_element = None
-        voltage_source_connections = []
-        for network in result.networks:
-            for element in network.elements:
-                if isinstance(element, problem.VoltageSource):
-                    voltage_source_element = element
-                    voltage_source_connections = network.connections
-                    break
-            if voltage_source_element:
-                break
+        _, voltage_network = Utils.find_first_network_with_element_type(
+            result, problem.VoltageSource)
 
-        # Check that we found a voltage source
-        assert voltage_source_element is not None, "No voltage source found in the simple_via project"
+        points = sorted(
+            (c.layer.name, c.point.x, c.point.y)
+            for c in voltage_network.connections
+        )
 
-        # Find the connections corresponding to the voltage source terminals
-        conn_p = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.p)
-        conn_n = next(c for c in voltage_source_connections if c.node_id == voltage_source_element.n)
-
-        # Check that one endpoint is on F.Cu at position (122, 100)
-        # and the other is on B.Cu at (142, 100)
-        if conn_p.layer.name == "F.Cu":
-            f_cu_conn = conn_p
-            b_cu_conn = conn_n
-        elif conn_n.layer.name == "F.Cu":
-            f_cu_conn = conn_n
-            b_cu_conn = conn_p
-        else:
-            pytest.fail("Neither connection point p nor n was on F.Cu")
-
-        f_cu_point = f_cu_conn.point
-        b_cu_point = b_cu_conn.point
-        f_cu_layer = f_cu_conn.layer
-        b_cu_layer = b_cu_conn.layer
-
-        # Verify F.Cu point is at expected coordinates (122, 100)
-        assert abs(f_cu_point.x - 122) < 1e-3, f"F.Cu point X should be 122, got {f_cu_point.x}"
-        assert abs(f_cu_point.y - 100) < 1e-3, f"F.Cu point Y should be 100, got {f_cu_point.y}"
-
-        # Verify B.Cu point is at expected coordinates (142, 100)
-        assert abs(b_cu_point.x - 142) < 1e-3, f"B.Cu point X should be 142, got {b_cu_point.x}"
-        assert abs(b_cu_point.y - 100) < 1e-3, f"B.Cu point Y should be 100, got {b_cu_point.y}"
-
-        # Verify the layer names
-        assert f_cu_layer.name == "F.Cu", f"Expected F.Cu layer, got {f_cu_layer.name}"
-        assert b_cu_layer.name == "B.Cu", f"Expected B.Cu layer, got {b_cu_layer.name}"
+        assert points == [
+            ("B.Cu", pytest.approx(142, abs=1e-3), pytest.approx(100, abs=1e-3)),
+            ("F.Cu", pytest.approx(122, abs=1e-3), pytest.approx(100, abs=1e-3)),
+        ]
 
     def test_flipped_pads_with_pad_offset_are_not_mirrored(self, kicad_test_projects):
         """
@@ -1221,30 +1079,15 @@ class TestCopperDirective:
         assert copper_spec.undercut == pytest.approx(0.030)
         assert copper_spec.plating == pytest.approx(0.020)
 
-    def test_copper_directive_negative_undercut(self):
-        directive = kicad.Directive.parse("!padne COPPER undercut=-1u")
-        with pytest.raises(ValueError, match="Undercut must be non-negative"):
-            kicad.CopperSpec.from_directive(directive)
-
-    def test_copper_directive_zero_plating(self):
-        directive = kicad.Directive.parse("!padne COPPER plating=0")
-        with pytest.raises(ValueError, match="Plating thickness must be positive"):
-            kicad.CopperSpec.from_directive(directive)
-
-    def test_copper_directive_negative_conductivity(self):
-        """Test error when conductivity is negative."""
-        directive_text = "!padne COPPER conductivity=-1000"
-        directive = kicad.Directive.parse(directive_text)
-
-        with pytest.raises(ValueError, match="Conductivity must be positive"):
-            kicad.CopperSpec.from_directive(directive)
-
-    def test_copper_directive_zero_conductivity(self):
-        """Test error when conductivity is zero."""
-        directive_text = "!padne COPPER conductivity=0"
-        directive = kicad.Directive.parse(directive_text)
-
-        with pytest.raises(ValueError, match="Conductivity must be positive"):
+    @pytest.mark.parametrize("text, match", [
+        ("!padne COPPER undercut=-1u", "Undercut must be non-negative"),
+        ("!padne COPPER plating=0", "Plating thickness must be positive"),
+        ("!padne COPPER conductivity=-1000", "Conductivity must be positive"),
+        ("!padne COPPER conductivity=0", "Conductivity must be positive"),
+    ])
+    def test_copper_directive_invalid(self, text, match):
+        directive = kicad.Directive.parse(text)
+        with pytest.raises(ValueError, match=match):
             kicad.CopperSpec.from_directive(directive)
 
 
@@ -1260,35 +1103,13 @@ class TestExtractBoardOutline:
         # Extract the board outline
         outline = kicad.extract_board_outline(board)
 
-        # Points that should be inside the board outline
-        inside_points = [
-            (100.2, 90.2),
-            (100.2, 109.2),
-            (101, 100),
-            (117.8, 93.8),
-            (149.4, 109.4),
-            (141.5, 107.2)
-        ]
-
-        # Points that should be outside the board outline
-        outside_points = [
-            (98, 110),
-            (124, 89),
-            (118.5, 94.4),
-            (129.1, 93.8),
-            (129, 106.3),
-            (119.2, 100.3),
-            (166.5, 101.7),
-            (126.7, 100.0)
-        ]
-
         # Test inside points
-        for x, y in inside_points:
+        for x, y in CASTELLATED_INSIDE_POINTS:
             point = shapely.geometry.Point(x, y)
             assert outline.contains(point), f"Point ({x}, {y}) should be inside the board outline but is not"
 
         # Test outside points
-        for x, y in outside_points:
+        for x, y in CASTELLATED_OUTSIDE_POINTS:
             point = shapely.geometry.Point(x, y)
             assert not outline.contains(point), f"Point ({x}, {y}) should be outside the board outline but is inside"
 
@@ -1313,28 +1134,6 @@ class TestClipLayerWithOutline:
         # Load the KiCad project - this will apply layer clipping
         problem = kicad.load_kicad_project(project.pro_path)
 
-        # Points that should be inside the board outline (from TestExtractBoardOutline)
-        inside_points = [
-            (100.2, 90.2),
-            (100.2, 109.2),
-            (101, 100),
-            (117.8, 93.8),
-            (149.4, 109.4),
-            (141.5, 107.2)
-        ]
-
-        # Points that should be outside the board outline (from TestExtractBoardOutline)
-        outside_points = [
-            (98, 110),
-            (124, 89),
-            (118.5, 94.4),
-            (129.1, 93.8),
-            (129, 106.3),
-            (119.2, 100.3),
-            (166.5, 101.7),
-            (126.7, 100.0)
-        ]
-
         # Verify that we have layers in the problem
         assert len(problem.layers) > 0, "Problem should contain layers"
 
@@ -1346,19 +1145,10 @@ class TestClipLayerWithOutline:
 
             # Test outside points - none should be contained in any layer geometry
             # since they are outside the board outline
-            for x, y in outside_points:
+            for x, y in CASTELLATED_OUTSIDE_POINTS:
                 point = shapely.geometry.Point(x, y)
                 assert not layer.shape.contains(point), \
                     f"Point ({x}, {y}) should not be contained in layer {layer.name} geometry after clipping (outside board outline)"
-
-            # For inside points, they may or may not be contained depending on whether
-            # there's actual copper geometry at those locations, but if they are contained,
-            # it means the clipping is working (geometry is present and within board bounds)
-            for x, y in inside_points:
-                point = shapely.geometry.Point(x, y)
-                # We don't assert anything here since copper may or may not be present
-                # at these specific points, but the key test is that outside points
-                # are never contained (tested above)
 
     def test_layer_clipping_simple_geometry_no_outline(self, kicad_test_projects):
         """Test layer clipping behavior when board has no outline defined."""
@@ -1417,3 +1207,74 @@ class TestErodeLayersByUndercut:
             geometry=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 2)]),
         )
         assert kicad.erode_layers_by_undercut([layer], 0.0) == [layer]
+
+
+class TestProcessDirectives:
+
+    def test_unknown_directive_warns(self):
+        with pytest.warns(UserWarning, match="Unknown directive: BOGUS"):
+            directives = kicad.process_directives([kicad.Directive.parse("!padne BOGUS x=1")])
+        assert directives.lumped_specs == []
+
+    def test_multiple_copper_directives_first_wins(self):
+        with pytest.warns(UserWarning, match="Multiple COPPER directives"):
+            directives = kicad.process_directives([
+                kicad.Directive.parse("!padne COPPER conductivity=5e7"),
+                kicad.Directive.parse("!padne COPPER conductivity=1e7"),
+            ])
+        assert directives.copper_spec.conductivity == pytest.approx(5e4)
+
+
+class TestLumpedSpecs:
+
+    @staticmethod
+    def single_layer_with_pads(endpoints):
+        """A square F.Cu layer with one pad per endpoint, spaced along x."""
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([shapely.geometry.box(0, 0, 10, 10)]),
+            name="F.Cu",
+            conductance=1.0,
+        )
+        pad_index = kicad.PadIndex()
+        for i, ep in enumerate(endpoints):
+            pad_index.mapping[ep] = [
+                kicad.LayerPoint(layer="F.Cu", point=shapely.geometry.Point(1 + i, 5))
+            ]
+        return {"F.Cu": layer}, pad_index
+
+    def test_from_directive_missing_endpoint(self):
+        with pytest.raises(ValueError, match="Missing endpoint parameter: b"):
+            kicad.ResistorSpec.from_directive(
+                kicad.Directive.parse("!padne RESISTANCE a=R1.1 r=1"))
+
+    def test_from_directive_missing_value(self):
+        with pytest.raises(ValueError, match="Missing value parameter: r"):
+            kicad.ResistorSpec.from_directive(
+                kicad.Directive.parse("!padne RESISTANCE a=R1.1 b=R1.2"))
+
+    def test_from_directive_default_value(self):
+        spec = kicad.VoltageSourceSpec.from_directive(
+            kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=U1.2 v=5V"))
+        assert spec.values == {"v": 5.0, "esr": 0.0}
+
+        spec = kicad.VoltageSourceSpec.from_directive(
+            kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=U1.2 v=5V esr=10m"))
+        assert spec.values["esr"] == pytest.approx(0.01)
+
+    def test_voltage_source_unresolved_endpoints(self):
+        layer_dict, pad_index = self.single_layer_with_pads([kicad.Endpoint("U1", "1")])
+
+        spec = kicad.VoltageSourceSpec.from_directive(
+            kicad.Directive.parse("!padne VOLTAGE p=U1.1 n=NOPE.1 v=1V"))
+        with pytest.raises(ValueError, match="Negative endpoints"):
+            spec.construct(pad_index, layer_dict)
+
+    @pytest.mark.parametrize("spec_type, text", [
+        (kicad.ResistorSpec, "!padne RESISTANCE a=R99.1 b=R1.2 r=1"),
+        (kicad.CurrentSourceSpec, "!padne CURRENT f=R99.1 t=R1.2 i=1"),
+        (kicad.RegulatorSpec, "!padne REGULATOR p=R99.1 n=U1.2 f=U1.3 t=U1.4 v=3.3V gain=1"),
+    ])
+    def test_unresolved_endpoints(self, spec_type, text):
+        spec = spec_type.from_directive(kicad.Directive.parse(text))
+        with pytest.raises(ValueError, match="did not resolve to any pad"):
+            spec.construct(kicad.PadIndex(), {})

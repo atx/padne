@@ -475,8 +475,7 @@ def main() -> None:
     for name, handler in (("calibrate", _cmd_calibrate),
                           ("report", _cmd_report)):
         p = sub.add_parser(name)
-        p.add_argument("test_set", choices=sorted(TEST_SETS),
-                       nargs="?")
+        p.add_argument("test_set", choices=sorted(TEST_SETS))
         p.set_defaults(handler=handler)
 
     args = parser.parse_args()

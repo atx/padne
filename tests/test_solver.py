@@ -1,5 +1,4 @@
 import pytest
-import itertools
 import shapely.geometry
 import math
 import numpy as np
@@ -178,6 +177,25 @@ def find_vertex_value(sol: solver.Solution, conn: problem.Connection) -> float:
     return found_value
 
 
+def find_source(prob: problem.Problem, source_type: type) -> tuple:
+    """
+    Find the single network consisting of just one source_type element and
+    return (source, conn_a, conn_b), the connections being p/n or f/t.
+    """
+    (network,) = [
+        n for n in prob.networks
+        if len(n.elements) == 1 and isinstance(n.elements[0], source_type)
+    ]
+    source = network.elements[0]
+    if source_type is problem.VoltageSource:
+        node_a, node_b = source.p, source.n
+    else:
+        node_a, node_b = source.f, source.t
+    conn_a = next(c for c in network.connections if c.node_id == node_a)
+    conn_b = next(c for c in network.connections if c.node_id == node_b)
+    return source, conn_a, conn_b
+
+
 # Add this helper function at the module level
 def _find_connection_at_point(prob: problem.Problem,
                               coords: tuple[float, float],
@@ -345,6 +363,71 @@ class TestConnectivityGraph:
         # Beware: This assumes the order of the layers is F.Cu, B.Cu
         assert len([n for n in connected if n.layer_i == 0]) == 3
         assert len([n for n in connected if n.layer_i == 1]) == 2
+
+
+class TestFilterDeadNetworks:
+
+    def test_any_dead_terminal_drops_network(self):
+        layer = problem.Layer(
+            shape=shapely.geometry.MultiPolygon([
+                shapely.geometry.box(0, 0, 10, 10),
+                shapely.geometry.box(20, 0, 30, 10),
+            ]),
+            name="top", conductance=1.0)
+
+        def network(*points):
+            return problem.Network(
+                connections=[
+                    problem.Connection(layer=layer, point=shapely.geometry.Point(*p))
+                    for p in points
+                ],
+                elements=[],
+            )
+
+        live = network((5, 5), (6, 6))
+        mixed = network((5, 5), (25, 5))
+        off_copper = network((5, 5), (100, 100))
+        prob = problem.Problem(layers=[layer], networks=[live, mixed, off_copper])
+
+        # Only geometry 0 is connected; a connection matching no geometry at
+        # all does not count as dead
+        filtered = solver.filter_dead_networks(prob, {(0, 0)})
+
+        assert len(filtered) == 2
+        assert filtered[0] is live
+        assert filtered[1] is off_copper
+
+
+class TestFindBestGroundNodeIndex:
+
+    def test_picks_n_node_of_highest_voltage_source(self):
+        nodes = [problem.NodeID() for _ in range(6)]
+        networks = [
+            problem.Network(connections=[], elements=[
+                problem.VoltageSource(p=nodes[0], n=nodes[1], voltage=1.0),
+                problem.Resistor(a=nodes[0], b=nodes[1], resistance=1.0),
+            ]),
+            problem.Network(connections=[], elements=[
+                problem.VoltageSource(p=nodes[2], n=nodes[3], voltage=5.0),
+                problem.VoltageSource(p=nodes[4], n=nodes[5], voltage=3.0),
+            ]),
+        ]
+        prob = problem.Problem(layers=[], networks=networks)
+        node_indexer = solver.NodeIndexer(
+            node_to_global_index={node: 10 + i for i, node in enumerate(nodes)})
+
+        assert solver.find_best_ground_node_index(prob, node_indexer) == 13
+
+    def test_falls_back_to_zero_without_voltage_sources(self):
+        a, b = problem.NodeID(), problem.NodeID()
+        prob = problem.Problem(layers=[], networks=[
+            problem.Network(connections=[], elements=[
+                problem.CurrentSource(f=a, t=b, current=1.0),
+            ]),
+        ])
+        node_indexer = solver.NodeIndexer(node_to_global_index={a: 5, b: 6})
+
+        assert solver.find_best_ground_node_index(prob, node_indexer) == 0
 
 
 class TestSolverMeshLayer:
@@ -895,107 +978,6 @@ class TestSyntheticProblems:
                 assert numerical_value == pytest.approx(analytical_value, abs=0.015), \
                     f"Error too large at point ({x:.2f}, {y:.2f}), r={r:.2f}: " \
                     f"numerical={numerical_value:.4f}, analytical={analytical_value:.4f}"
-
-
-class TestLaplaceOperator:
-
-    @staticmethod
-    def assert_matrix_is_laplacian(L):
-        N = L.shape[0]
-        assert L.shape == (N, N), "Laplace operator should be square"
-        # Check that the diagonal entries are negative
-        for i in range(N):
-            assert L[i, i] < 0, f"Diagonal entry {i} should be negative"
-
-        # Check that the off-diagonal entries are non-negative
-        for i, j in itertools.product(range(N), range(N)):
-            if i != j:
-                assert L[i, j] >= 0, f"Off-diagonal entry ({i}, {j}) should be non-negative"
-            assert L[i, j] == L[j, i], f"Laplace operator should be symmetric ({i}, {j})"
-
-        # And finally, check that the diagonal is the sum of the off-diagonal entries
-        for i in range(N):
-            row_sum = np.sum(L[i, :])
-            assert abs(row_sum) < 1e-5, f"Row {i} does not sum to zero (sum={row_sum})"
-
-
-    def test_laplace_operator_unit_square_with_center(self):
-        """
-        Test the laplace_operator function using a unit square with a central vertex.
-        The resulting mesh has 4 triangles, and we can analytically compute the
-        expected Laplace operator matrix.
-        """
-        # Create a simple mesh: unit square with a central vertex
-        # Points at the corners of the square and one at the center
-        points = [
-            mesh.Point(0.0, 0.0),  # bottom left (0)
-            mesh.Point(1.0, 0.0),  # bottom right (1)
-            mesh.Point(1.0, 1.0),  # top right (2)
-            mesh.Point(0.0, 1.0),  # top left (3)
-            mesh.Point(0.5, 0.5),  # center (4)
-        ]
-
-        # Define the triangles (counter-clockwise order)
-        triangles = [
-            (0, 1, 4),  # bottom triangle
-            (1, 2, 4),  # right triangle
-            (2, 3, 4),  # top triangle
-            (3, 0, 4),  # left triangle
-        ]
-
-        # Create the mesh
-        test_mesh = mesh.Mesh.from_triangle_soup(points, triangles)
-
-        # Call the function under test
-        L = solver.laplace_operator(test_mesh)
-
-        assert L.shape == (5, 5), "Laplace operator should be a 5x5 matrix"
-
-        # Convert to dense matrix for easier testing
-        L_dense = L.toarray()
-
-        self.assert_matrix_is_laplacian(L_dense)
-
-        # Manually calculate the expected Laplace matrix
-        # For this regular structure with right isosceles triangles:
-        # - Each corner vertex connects to two other vertices (center and adjacent corners)
-        # - The center vertex connects to all four corners
-        # - For right isosceles triangles, the cotangent of the angle is 1.0
-
-        # For the center vertex (index 4):
-        # It connects to vertices 0, 1, 2, 3 with cotangent weights
-        # Each triangle has two 45° angles (cotangent = 1) and one 90° angle (cotangent = 0)
-        # So the center vertex gets 4 connections, each with weight 0.5 (average of cotangents)
-
-        # For each corner vertex (indices 0-3):
-        # It connects to the center and two adjacent corners
-        # The connections to adjacent corners have weight 0 (90° angle, cotangent = 0)
-        # The connection to center has weight 0.5 (same as above)
-
-        # Create the expected matrix (initialized to zeros)
-        expected_L = np.zeros((5, 5), dtype=np.float32)
-
-        # Fill the diagonal entries (negative sum of off-diagonal entries in the same row)
-        # Center vertex (index 4) connects to all corners with weight 1.0
-        # since
-        # 1/2 * (cot 45 + cot 45) = 1.0
-        expected_L[4, 0] = 1
-        expected_L[4, 1] = 1
-        expected_L[4, 2] = 1
-        expected_L[4, 3] = 1
-        expected_L[4, 4] = -4.0  # -sum(0.5 * 4)
-
-        # Corner vertices
-        # Each corner vertex connects to the center with weight 1.0 (as above)
-        # and to two adjacent corners with weight 0.0 (cot 90° = 0)
-        for i in range(4):
-            # Connection to center
-            expected_L[i, 4] = 1.0
-            expected_L[i, i] = -1.0
-
-        # Verify the Laplace operator matches our expectations
-        np.testing.assert_allclose(L_dense, expected_L, rtol=1e-5, atol=1e-5,
-                                   err_msg="Laplace operator matrix does not match expected values")
 
 
 class TestVertexIndexer:
@@ -1704,25 +1686,7 @@ class TestSolverEndToEnd:
         prob = kicad.load_kicad_project(project.pro_path)
         solution = solver.solve(prob, backend=solver_backend)
 
-        # Find the current source network and element
-        current_source_element = None
-        current_source_network = None
-        for network in prob.networks:
-            # Assuming this project has one network with one current source
-            if len(network.elements) == 1 and isinstance(network.elements[0], problem.CurrentSource):
-                current_source_element = network.elements[0]
-                current_source_network = network
-                break
-
-        assert current_source_element is not None, "No current source element found in the test project"
-        assert current_source_network is not None, "No network containing the current source found"
-
-        # Find the Connection objects corresponding to the f and t NodeIDs
-        try:
-            f_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.f)
-            t_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.t)
-        except StopIteration:
-            pytest.fail(f"Could not find connections for CurrentSource {current_source_element} in network {current_source_network}")
+        current_source_element, f_conn, t_conn = find_source(prob, problem.CurrentSource)
 
         # Get voltages at the connection points
         voltage_from = find_vertex_value(solution, f_conn)
@@ -1737,13 +1701,7 @@ class TestSolverEndToEnd:
         def current_source_voltage_drop(project_name):
             prob = kicad.load_kicad_project(kicad_test_projects[project_name].pro_path)
             solution = solver.solve(prob)
-            network = next(
-                n for n in prob.networks
-                if len(n.elements) == 1 and isinstance(n.elements[0], problem.CurrentSource)
-            )
-            source = network.elements[0]
-            f_conn = next(c for c in network.connections if c.node_id == source.f)
-            t_conn = next(c for c in network.connections if c.node_id == source.t)
+            _, f_conn, t_conn = find_source(prob, problem.CurrentSource)
             return abs(find_vertex_value(solution, f_conn) - find_vertex_value(solution, t_conn))
 
         # Same board and conductivity, the only difference is undercut=30u
@@ -1870,25 +1828,7 @@ class TestSolverEndToEnd:
         ]
         assert len(widths) == 21, "Width array should have 21 elements"
 
-        # Find the current source network and element
-        current_source_element = None
-        current_source_network = None
-        for network in prob.networks:
-            # Assuming this project has one network with one current source
-            if len(network.elements) == 1 and isinstance(network.elements[0], problem.CurrentSource):
-                current_source_element = network.elements[0]
-                current_source_network = network
-                break
-
-        assert current_source_element is not None, "No current source element found in the test project"
-        assert current_source_network is not None, "No network containing the current source found"
-
-        # Find the Connection objects corresponding to the f and t NodeIDs
-        try:
-            f_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.f)
-            t_conn = next(c for c in current_source_network.connections if c.node_id == current_source_element.t)
-        except StopIteration:
-            pytest.fail(f"Could not find connections for CurrentSource {current_source_element} in network {current_source_network}")
+        current_source_element, f_conn, t_conn = find_source(prob, problem.CurrentSource)
 
         # Get voltages at the connection points
         voltage_from = find_vertex_value(solution, f_conn)
@@ -1964,27 +1904,10 @@ class TestSolverEndToEnd:
         # Load the original problem with both sources
         full_problem = kicad.load_kicad_project(project.pro_path)
 
-        # --- Identify the voltage source, current source, and their networks ---
-        voltage_source_element = None
-        voltage_source_network = None
-        current_source_element = None
-        current_source_network = None
-
-        for network in full_problem.networks:
-            for element in network.elements:
-                if isinstance(element, problem.VoltageSource):
-                    if voltage_source_element is not None:
-                        pytest.fail("Found more than one voltage source")
-                    voltage_source_element = element
-                    voltage_source_network = network
-                elif isinstance(element, problem.CurrentSource):
-                    if current_source_element is not None:
-                        pytest.fail("Found more than one current source")
-                    current_source_element = element
-                    current_source_network = network
-
-        assert voltage_source_element is not None, "Expected exactly one voltage source"
-        assert current_source_element is not None, "Expected exactly one current source"
+        voltage_source_element, vsource_p_conn, vsource_n_conn = \
+            find_source(full_problem, problem.VoltageSource)
+        current_source_element, csource_f_conn, csource_t_conn = \
+            find_source(full_problem, problem.CurrentSource)
 
         # --- Solve the full problem ---
         full_solution = solver.solve(full_problem, backend=solver_backend)
@@ -2040,19 +1963,8 @@ class TestSolverEndToEnd:
                 f"Residual too large: {solution.solver_info.residual_norm}"
 
         # --- Choose test points (Connections of the sources) ---
-        test_connections = []
-        try:
-            # Connections for the voltage source
-            test_connections.append(next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p))
-            test_connections.append(next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n))
-            # Connections for the current source
-            test_connections.append(next(c for c in current_source_network.connections if c.node_id == current_source_element.f))
-            test_connections.append(next(c for c in current_source_network.connections if c.node_id == current_source_element.t))
-        except StopIteration:
-             pytest.fail("Could not find all connections for the sources")
-
         # Remove duplicates if sources share connections
-        test_connections = list(set(test_connections))
+        test_connections = list({vsource_p_conn, vsource_n_conn, csource_f_conn, csource_t_conn})
 
         # --- Compare solutions at each test point ---
         for connection in test_connections:
@@ -2068,10 +1980,6 @@ class TestSolverEndToEnd:
                 f"current={v_current:.6f}, sum={v_superposition:.6f}"
 
         # --- Verify specific expected voltage values in the full solution ---
-        # Find connections for the original voltage source again
-        vsource_p_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p)
-        vsource_n_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n)
-
         v_source_p = find_vertex_value(full_solution, vsource_p_conn)
         v_source_n = find_vertex_value(full_solution, vsource_n_conn)
         assert v_source_p - v_source_n == pytest.approx(voltage_source_element.voltage, abs=1e-4), \
@@ -2115,25 +2023,7 @@ class TestSolverEndToEnd:
         # Solve the problem
         solution = solver.solve(prob, backend=solver_backend)
 
-        # Find the voltage source network and element
-        voltage_source_element = None
-        voltage_source_network = None
-        for network in prob.networks:
-            # Assuming this project has one network with one voltage source
-            if len(network.elements) == 1 and isinstance(network.elements[0], problem.VoltageSource):
-                voltage_source_element = network.elements[0]
-                voltage_source_network = network
-                break
-
-        assert voltage_source_element is not None, "No voltage source element found in the unconnected_via project"
-        assert voltage_source_network is not None, "No network containing the voltage source found"
-
-        # Find the Connection objects corresponding to the p and n NodeIDs
-        try:
-            p_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p)
-            n_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n)
-        except StopIteration:
-            pytest.fail(f"Could not find connections for VoltageSource {voltage_source_element} in network {voltage_source_network}")
+        voltage_source_element, p_conn, n_conn = find_source(prob, problem.VoltageSource)
 
         # Get reference voltages at the source connection points
         neg_voltage = find_vertex_value(solution, n_conn)
@@ -2186,29 +2076,9 @@ class TestSolverEndToEnd:
 
         assert solution is not None, "Solver failed to produce a solution"
 
-        # Find the voltage source network and element
-        voltage_source_element = None
-        voltage_source_network = None
-        found_networks_with_vs = 0
-        for network in prob.networks:
-            for element in network.elements:
-                if isinstance(element, problem.VoltageSource):
-                    if voltage_source_element is not None:
-                         pytest.fail("Found more than one voltage source element")
-                    voltage_source_element = element
-                    voltage_source_network = network
-                    found_networks_with_vs += 1
-                # Check for other unexpected elements (like resistors from vias)
-                # For this specific test, we assume only the voltage source exists.
-                elif not isinstance(element, problem.VoltageSource):
-                     pytest.fail(f"Found unexpected element type {type(element)} in network")
-
-        assert voltage_source_element is not None, "No voltage source element found in the project"
-        assert voltage_source_network is not None, "No network containing the voltage source found"
-        # Verify it's the only network (as expected for this specific test project)
+        # The project is a single network holding only the voltage source
         assert len(prob.networks) == 1, "Expected exactly one network"
-        # Verify the network contains only the voltage source
-        assert len(voltage_source_network.elements) == 1, "Expected network to contain only the voltage source"
+        voltage_source_element, p_conn, n_conn = find_source(prob, problem.VoltageSource)
 
         expected_voltage_diff = voltage_source_element.voltage
 
@@ -2247,13 +2117,6 @@ class TestSolverEndToEnd:
 
         # Additionally, check that the source terminals land on the correct planes
         # and have the expected voltage difference
-        # Find the Connection objects corresponding to the p and n NodeIDs
-        try:
-            p_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.p)
-            n_conn = next(c for c in voltage_source_network.connections if c.node_id == voltage_source_element.n)
-        except StopIteration:
-            pytest.fail(f"Could not find connections for VoltageSource {voltage_source_element} in network {voltage_source_network}")
-
         voltage_p = find_vertex_value(solution, p_conn)
         voltage_n = find_vertex_value(solution, n_conn)
 
