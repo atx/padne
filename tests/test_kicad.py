@@ -6,6 +6,7 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 import pytest
 import pcbnew
+import sexpdata
 import shapely.geometry
 
 from pathlib import Path
@@ -770,6 +771,14 @@ class TestDirectiveParse:
         # Verify both children have parsed content
         assert child_a.parsed_sexp is not None, "Child A should have parsed S-expression content"
         assert child_b.parsed_sexp is not None, "Child B should have parsed S-expression content"
+
+
+def test_find_sexp_elements():
+    sexp = sexpdata.loads(
+        '(kicad_sch (text "a") (sheet (text "b") (property "x")) (text "c" (text "d")))')
+    texts = kicad._find_sexp_elements(sexp, "text")
+    assert [text[1] for text in texts] == ["a", "b", "c", "d"]
+    assert kicad._find_sexp_elements(sexp, "missing") == []
 
 
 class TestStackup:

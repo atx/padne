@@ -1050,6 +1050,22 @@ def process_directives(directives: list[Directive]) -> Directives:
                       probe_specs=probe_specs)
 
 
+def _find_sexp_elements(sexp_data: Any, name: str) -> list:
+    """Recursively find all (name ...) elements in the sexp tree."""
+    if not isinstance(sexp_data, list):
+        return []
+
+    ret = []
+
+    if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol(name):
+        ret.append(sexp_data)
+
+    for item in sexp_data:
+        ret.extend(_find_sexp_elements(item, name))
+
+    return ret
+
+
 @stage_timer
 def build_schema_hierarchy(sch_file_path: pathlib.Path,
                            sheet_name: str = "Root") -> SchemaInstance:
@@ -1071,22 +1087,6 @@ def build_schema_hierarchy(sch_file_path: pathlib.Path,
         child_instances=[]
     )
 
-    # Find sheet elements in the parsed data
-    def find_sheet_elements(sexp_data) -> list:
-        """Recursively find all (sheet ...) elements in the sexp tree."""
-        if not isinstance(sexp_data, list):
-            return []
-
-        ret = []
-
-        if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol("sheet"):
-            ret.append(sexp_data)
-
-        for item in sexp_data:
-            ret.extend(find_sheet_elements(item))
-
-        return ret
-
     def extract_sheet_properties(sheet_element) -> tuple[str | None, str | None]:
         """Extract Sheetname and Sheetfile properties from a sheet element."""
         sheetname = None
@@ -1106,7 +1106,7 @@ def build_schema_hierarchy(sch_file_path: pathlib.Path,
         return sheetname, sheetfile
 
     # Process all sheet elements
-    sheet_elements = find_sheet_elements(parsed_sexp)
+    sheet_elements = _find_sexp_elements(parsed_sexp, "sheet")
 
     for sheet_element in sheet_elements:
         sheetname, sheetfile = extract_sheet_properties(sheet_element)
@@ -1177,22 +1177,6 @@ def extract_directives_from_text(text: str) -> list[Directive]:
 
 
 def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
-
-    def find_text_elements(sexp_data) -> list:
-        """Recursively find all (text ...) elements in the sexp tree."""
-        if not isinstance(sexp_data, list):
-            return []
-
-        ret = []
-
-        if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol("text"):
-            ret.append(sexp_data)
-
-        for item in sexp_data:
-            ret.extend(find_text_elements(item))
-
-        return ret
-
     def extract_content_from_text_element(text_element) -> str:
         """Extract text content from a text element."""
         assert isinstance(text_element, list)
@@ -1202,7 +1186,7 @@ def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
 
     all_texts = [
         extract_content_from_text_element(text_element)
-        for text_element in find_text_elements(instance.parsed_sexp)
+        for text_element in _find_sexp_elements(instance.parsed_sexp, "text")
     ]
 
     directives = []
