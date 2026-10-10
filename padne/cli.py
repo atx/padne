@@ -17,6 +17,8 @@ import padne.mesh
 import padne.paraview
 from padne import __version__, context, parallel
 
+log = logging.getLogger(__name__)
+
 
 def setup_logging(debug_mode: bool) -> None:
     """Configures basic logging for the application."""
@@ -210,7 +212,6 @@ def handle_errors(func):
 
 @handle_errors
 def do_gui(args: argparse.Namespace) -> int:
-    log = logging.getLogger(__name__)
     with context.timing_session() as session:
         log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
@@ -241,7 +242,6 @@ def do_gui(args: argparse.Namespace) -> int:
 
 @handle_errors
 def do_solve(args: argparse.Namespace) -> None:
-    log = logging.getLogger(__name__)
     with context.timing_session() as session:
         log.info(f"Loading KiCad project: {args.kicad_pro_file}")
         prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
@@ -259,7 +259,6 @@ def do_solve(args: argparse.Namespace) -> None:
 
 
 def do_show(args: argparse.Namespace) -> int:
-    log = logging.getLogger(__name__)
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
         solution = pickle.load(f)
@@ -271,7 +270,6 @@ def do_show(args: argparse.Namespace) -> int:
 
 @handle_errors
 def do_paraview(args: argparse.Namespace) -> None:
-    log = logging.getLogger(__name__)
     log.info(f"Loading solution from: {args.solution_file}")
     with open(args.solution_file, "rb") as f:
         solution = pickle.load(f)
@@ -286,8 +284,6 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.debug)
     parallel.configure(jobs=args.jobs)
-
-    log = logging.getLogger(__name__)
     log.debug(f"Parsed arguments: {args}")
 
     command_func = {
