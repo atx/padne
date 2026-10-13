@@ -2,17 +2,11 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
-#include <iostream>
-#include <iterator>
 #include <cmath>
 #include <algorithm>
 #include <limits>
-#include <streambuf>
 #include <unordered_map>
 #include <utility>
-
-
-//#define CGAL_USE_BASIC_VIEWER
 
 #include <CGAL/version.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
@@ -26,10 +20,7 @@
 #include <CGAL/squared_distance_2.h>
 #include <CGAL/enum.h>
 
-#ifdef CGAL_USE_BASIC_VIEWER
-#include <CGAL/draw_triangulation_2.h>
-#include <CGAL/draw_constrained_triangulation_2.h>
-#endif
+#include "ndarray_util.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -44,9 +35,6 @@ typedef CGAL::Triangulation_data_structure_2<Vb, Fb> Tds;
 typedef CGAL::Constrained_Delaunay_triangulation_2<K, Tds> CDT;
 typedef K::Point_2 Point;
 typedef K::Segment_2 Segment_2;
-
-// Helper macro (often used with version info passed from CMake)
-#define MACRO_STRINGIFY(x) #x
 
 // CGALPolygon class - wraps CGAL::Polygon_with_holes_2 for Python interface
 class CGALPolygon {
@@ -77,7 +65,6 @@ private:
 
     // Coordinate transformation methods
     std::pair<double, double> world_to_grid(double world_x, double world_y) const;
-    std::pair<double, double> grid_to_world(double grid_x, double grid_y) const;
     int grid_to_index(int grid_i, int grid_j) const;
 
 public:
@@ -125,8 +112,6 @@ public:
 
     inline double size_bound() const { return sizebound; }
 
-    inline void set_size_bound(const double sb) { sizebound = sb; }
-
     // Simple struct with public members for size and sine
     struct Quality {
       double sine;
@@ -150,11 +135,6 @@ public:
               }
           }
           return sine < q.sine;
-      }
-
-      std::ostream& operator<<(std::ostream& out) const {
-          return out << "(size=" << size
-                     << ", sine=" << sine << ")";
       }
     };
 
@@ -192,7 +172,6 @@ public:
 
         CGAL::Mesh_2::Face_badness operator()(const typename CDT::Face_handle& fh,
                                               Quality& q) const {
-            typedef typename CDT::Geom_traits Geom_traits;
             typedef typename Geom_traits::Compute_area_2 Compute_area_2;
             typedef typename Geom_traits::Compute_squared_distance_2
               Compute_squared_distance_2;
@@ -207,11 +186,7 @@ public:
             // Compute triangle centroid using helper method
             auto [cx, cy] = compute_triangle_centroid(pa, pb, pc);
 
-            // Compute distance to polygon boundary using distance map
-            double boundary_distance = distance_map_ptr ? distance_map_ptr->query(cx, cy) : 0.0;
-
-            // Compute effective size bound using piecewise linear scaling
-            double effective_size_bound = compute_effective_size_bound(boundary_distance);
+            double effective_size_bound = compute_effective_size_bound(cx, cy);
             double squared_size_bound = effective_size_bound * effective_size_bound;
 
             double a = CGAL::to_double(squared_distance(pb, pc));
@@ -271,12 +246,13 @@ public:
             return std::make_pair(cx, cy);
         }
 
-        // Helper method for piecewise linear scaling
-        double compute_effective_size_bound(double boundary_distance) const {
+        // Piecewise linear scaling by the distance of (x, y) to the polygon boundary
+        double compute_effective_size_bound(double x, double y) const {
             // If no distance map, use uniform sizing
             if (!distance_map_ptr) {
                 return base_size_bound;
             }
+            double boundary_distance = distance_map_ptr->query(x, y);
             if (boundary_distance <= min_distance) {
                 return base_size_bound;
             } else if (boundary_distance >= max_distance) {
@@ -326,9 +302,7 @@ static void setup_cdt(CDT& cdt,
         cdt.insert_constraint(start_vh, end_vh);
     }
 
-    // Insert the seed points into the CDT
-    // We do this before creating the Mesher object, but I am not sure
-    // if that is needed
+    // Seeds become mesh vertices so connection points land exactly on a vertex
     for (const auto& seed : seeds) {
         cdt.insert(Point(seed.first, seed.second));
     }
@@ -373,17 +347,6 @@ static void extract_meshing_result(CDT &cdt, MeshingResult &result)
     }
 }
 
-template <typename T>
-static nb::ndarray<nb::numpy, T> vector_to_numpy(std::vector<T> &&v, size_t cols)
-{
-    auto *buf = new std::vector<T>(std::move(v));
-    nb::capsule owner(buf, [](void *p) noexcept {
-        delete static_cast<std::vector<T> *>(p);
-    });
-    return nb::ndarray<nb::numpy, T>(buf->data(), {buf->size() / cols, cols}, owner);
-}
-
-
 nb::dict mesh(const nb::object& py_config,
               const std::vector<std::pair<double, double>>& vertices,
               const std::vector<std::pair<int, int>>& segments,
@@ -425,8 +388,10 @@ nb::dict mesh(const nb::object& py_config,
     // result["vertices"] is an (N, 2) float64 array of vertex coordinates,
     // result["triangles"] an (M, 3) uint32 array of vertex indices.
     nb::dict py_result;
-    py_result["vertices"] = vector_to_numpy(std::move(result.vertices), 2);
-    py_result["triangles"] = vector_to_numpy(std::move(result.triangles), 3);
+    py_result["vertices"] = vector_to_numpy(std::move(result.vertices),
+                                            {result.vertices.size() / 2, 2});
+    py_result["triangles"] = vector_to_numpy(std::move(result.triangles),
+                                             {result.triangles.size() / 3, 3});
     return py_result;
 }
 
@@ -578,7 +543,8 @@ double PolyBoundaryDistanceMap::query(double x, double y) const {
     int j0 = static_cast<int>(std::floor(gy));
     int j1 = j0 + 1;
 
-    // Clamp to valid ranges (should not be needed now due to bounds check)
+    // The half-cell shift can push points near the bounds outside the sample
+    // grid (index -1 or width/height), clamp them to the border samples
     i0 = std::clamp(i0, 0, width-1);
     i1 = std::clamp(i1, 0, width-1);
     j0 = std::clamp(j0, 0, height-1);
@@ -604,12 +570,6 @@ std::pair<double, double> PolyBoundaryDistanceMap::world_to_grid(double world_x,
     double grid_x = (world_x - min_x) / quantization;
     double grid_y = (world_y - min_y) / quantization;
     return std::make_pair(grid_x, grid_y);
-}
-
-std::pair<double, double> PolyBoundaryDistanceMap::grid_to_world(double grid_x, double grid_y) const {
-    double world_x = min_x + grid_x * quantization;
-    double world_y = min_y + grid_y * quantization;
-    return std::make_pair(world_x, world_y);
 }
 
 int PolyBoundaryDistanceMap::grid_to_index(int grid_i, int grid_j) const {
@@ -716,11 +676,7 @@ double CGALPolygon::distance_to_boundary(double x, double y) const {
     return std::sqrt(min_squared_dist);
 }
 
-// NB_MODULE defines the module initialization function.
-// The first argument ("_cgal") MUST match the first argument of nanobind_add_module in CMakeLists.txt.
-// The 'm' variable is the module object.
 NB_MODULE(_cgal, m) {
-    // Optional: Add a docstring to the module.
     m.doc() = R"pbdoc(
         Padne internal libcgal wrapper
         ------------------------------
@@ -770,11 +726,4 @@ NB_MODULE(_cgal, m) {
         .def_prop_ro("height", &PolyBoundaryDistanceMap::get_height);
 
     m.attr("cgal_version") = CGAL_VERSION_STR;
-
-#ifdef VERSION_INFO
-    // Add version information if defined (usually via CMake)
-    m.attr("__version__") = MACRO_STRINGIFY(VERSION_INFO);
-#else
-    m.attr("__version__") = "dev";
-#endif
 }

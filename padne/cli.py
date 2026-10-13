@@ -17,6 +17,8 @@ import padne.mesh
 import padne.paraview
 from padne import __version__, context, parallel
 
+log = logging.getLogger(__name__)
+
 
 def setup_logging(debug_mode: bool) -> None:
     """Configures basic logging for the application."""
@@ -98,6 +100,25 @@ def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Confi
         variable_size_maximum_factor=args.variable_size_maximum_factor,
         distance_map_quantization=args.distance_map_quantization
     )
+
+
+def solve_from_args(args: argparse.Namespace) -> padne.solver.Solution:
+    log.info(f"Loading KiCad project: {args.kicad_pro_file}")
+    prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+    log.info("Solving problem...")
+    solution = padne.solver.solve(
+        prob, mesher_config=mesher_config_from_args(args), backend=args.solver)
+    # Release the worker processes; joining them at interpreter exit
+    # would run in the degraded threading-shutdown context and take
+    # seconds instead of milliseconds.
+    parallel.shutdown()
+    return solution
+
+
+def load_solution(path: Path) -> padne.solver.Solution:
+    log.info(f"Loading solution from: {path}")
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
 
 def parse_args() -> argparse.Namespace:
@@ -210,26 +231,16 @@ def handle_errors(func):
 
 @handle_errors
 def do_gui(args: argparse.Namespace) -> int:
-    log = logging.getLogger(__name__)
     with context.timing_session() as session:
-        log.info(f"Loading KiCad project for GUI: {args.kicad_pro_file}")
-        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
-        log.info("Solving problem for GUI...")
-        mesher_config = mesher_config_from_args(args)
-
         # Capture warnings emitted during solving
         with collect_warnings() as warns:
-            solution = padne.solver.solve(prob, mesher_config=mesher_config, backend=args.solver)
+            solution = solve_from_args(args)
 
         captured_warnings = [
             msg
             for msg in warns
             if issubclass(msg.category, padne.solver.SolverWarning)
         ]
-        # Release the worker processes; joining them at interpreter exit
-        # would run in the degraded threading-shutdown context and take
-        # seconds instead of milliseconds.
-        parallel.shutdown()
 
         # GL-free UI preparation, timed alongside the solve so the window can
         # be created (and shown) quickly afterwards.
@@ -241,17 +252,8 @@ def do_gui(args: argparse.Namespace) -> int:
 
 @handle_errors
 def do_solve(args: argparse.Namespace) -> None:
-    log = logging.getLogger(__name__)
     with context.timing_session() as session:
-        log.info(f"Loading KiCad project: {args.kicad_pro_file}")
-        prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
-        log.info("Solving problem...")
-        mesher_config = mesher_config_from_args(args)
-        solution = padne.solver.solve(prob, mesher_config=mesher_config, backend=args.solver)
-        # Release the worker processes; joining them at interpreter exit
-        # would run in the degraded threading-shutdown context and take
-        # seconds instead of milliseconds.
-        parallel.shutdown()
+        solution = solve_from_args(args)
         with open(args.output_file, "wb") as f:
             pickle.dump(solution, f)
     log.info("Stage timings:\n%s", session.format_summary())
@@ -259,10 +261,7 @@ def do_solve(args: argparse.Namespace) -> None:
 
 
 def do_show(args: argparse.Namespace) -> int:
-    log = logging.getLogger(__name__)
-    log.info(f"Loading solution from: {args.solution_file}")
-    with open(args.solution_file, "rb") as f:
-        solution = pickle.load(f)
+    solution = load_solution(args.solution_file)
     with context.timing_session() as session:
         prepared = padne.ui.prepare_ui_data(solution)
     log.info("Stage timings:\n%s", session.format_summary())
@@ -271,10 +270,7 @@ def do_show(args: argparse.Namespace) -> int:
 
 @handle_errors
 def do_paraview(args: argparse.Namespace) -> None:
-    log = logging.getLogger(__name__)
-    log.info(f"Loading solution from: {args.solution_file}")
-    with open(args.solution_file, "rb") as f:
-        solution = pickle.load(f)
+    solution = load_solution(args.solution_file)
     padne.paraview.export_solution(solution, args.output_dir)
     log.info(f"ParaView export completed: {args.output_dir}")
 
@@ -286,8 +282,6 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.debug)
     parallel.configure(jobs=args.jobs)
-
-    log = logging.getLogger(__name__)
     log.debug(f"Parsed arguments: {args}")
 
     command_func = {

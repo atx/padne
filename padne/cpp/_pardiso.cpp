@@ -14,6 +14,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
+#include "ndarray_util.h"
+
 namespace nb = nanobind;
 using namespace nb::literals;
 
@@ -94,22 +96,19 @@ NB_MODULE(_pardiso, m) {
 
               // PARDISO takes b as non-const, so hand it a copy.
               std::vector<double> rhs(b.data(), b.data() + n);
-              auto *x = new std::vector<double>(n);
+              std::vector<double> x(n);
               MKL_INT perturbed_pivots;
-              nb::capsule owner(x, [](void *p) noexcept {
-                  delete static_cast<std::vector<double> *>(p);
-              });
               {
                   nb::gil_scoped_release nogil;
                   mkl_set_num_threads(num_threads);
                   Handle h(MTYPE_REAL_NONSYMMETRIC, static_cast<MKL_INT>(n));
                   // Phase 13: analysis, numerical factorization, solve.
                   h.run(13, data.data(), indptr.data(), indices.data(),
-                        rhs.data(), x->data());
+                        rhs.data(), x.data());
                   perturbed_pivots = h.perturbed_pivots();
               }
               return nb::make_tuple(
-                  nb::ndarray<nb::numpy, double>(x->data(), {n}, owner),
+                  vector_to_numpy(std::move(x), {n}),
                   perturbed_pivots);
           },
           "indptr"_a, "indices"_a, "data"_a, "b"_a, "num_threads"_a,

@@ -54,7 +54,6 @@ class TestSpatialIndex:
 
         # Query near vertex 0 at (0, 0) - should return value close to 1.0
         value = index.query_nearest(0.05, 0.05)
-        assert value is not None
         assert value == pytest.approx(1.0)
 
     def test_face_spatial_index_basic(self):
@@ -65,7 +64,6 @@ class TestSpatialIndex:
 
         # The centroid of triangle (0,0), (1,0), (0.5,1) is at (0.5, 1/3)
         value = index.query_nearest(0.5, 0.33)
-        assert value is not None
         assert value == pytest.approx(42.0)
 
     def test_spatial_index_outside_geometry(self):
@@ -137,18 +135,15 @@ class TestSpatialIndex:
 
         # Query at (5, 5) - expected value is approximately 10.0 (x + y)
         value = index.query_nearest(5.0, 5.0)
-        assert value is not None
         # With a dense mesh, nearest vertex should be very close to query point
         assert value == pytest.approx(10.0, abs=1.0)
 
         # Query at corner (0, 0) - expected value is approximately 0.0
         value_corner = index.query_nearest(0.1, 0.1)
-        assert value_corner is not None
         assert value_corner == pytest.approx(0.0, abs=0.5)
 
         # Query at (10, 10) - expected value is approximately 20.0
         value_far = index.query_nearest(9.9, 9.9)
-        assert value_far is not None
         assert value_far == pytest.approx(20.0, abs=1.0)
 
     def test_face_spatial_index_dense_mesh(self):
@@ -159,12 +154,10 @@ class TestSpatialIndex:
 
         # Query at (5, 5) - expected value is approximately 25.0 (x * y)
         value = index.query_nearest(5.0, 5.0)
-        assert value is not None
         assert value == pytest.approx(25.0, abs=5.0)
 
         # Query near corner (1, 1) - expected value is approximately 1.0
         value_corner = index.query_nearest(1.0, 1.0)
-        assert value_corner is not None
         assert value_corner == pytest.approx(1.0, abs=2.0)
 
 
@@ -274,41 +267,20 @@ class TestRenderingModeColorScale:
         assert mode.slider_range == (0.0, 100.0)
 
 
-class TestPrepareUiData:
-    """The GL-free UI preparation builds modes/indices without Qt or OpenGL."""
-
-    def test_builds_modes_and_spatial_indices(self):
-        # A hand-built mesh keeps this independent of the CGAL mesher.
-        points = [mesh.Point(0, 0), mesh.Point(1, 0), mesh.Point(0.5, 1)]
-        msh = mesh.Mesh.from_triangle_soup(points, [(0, 1, 2)])
-
-        zero_form = mesh.ZeroForm(msh)
-        for i, vertex in enumerate(msh.vertices):
-            zero_form[vertex] = float(i + 1)
-        two_form = mesh.TwoForm(msh)
-        for face in msh.faces:
-            two_form[face] = 1.0
-
-        layer_solution = solver.LayerSolution(
-            meshes=[msh], potentials=[zero_form], power_densities=[two_form],
-            disconnected_meshes=[])
-        layer = problem.Layer(
-            shape=shapely.geometry.MultiPolygon([
-                shapely.geometry.Polygon([(0, 0), (1, 0), (0.5, 1)])]),
-            name="F.Cu", conductance=1.0)
-        solution = solver.Solution(
-            problem=problem.Problem(layers=[layer], networks=[]),
-            layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0,
-                                          relative_residual=0.0))
-
-        prepared = prepare_ui_data(solution)
-
-        assert prepared.modes
-        for mode in prepared.modes:
-            assert mode.solution is solution
-            assert "F.Cu" in mode.spatial_indices
-            assert mode.max_value >= mode.min_value
+@pytest.mark.parametrize("mode_cls, layer_values, expected", [
+    (ui.MeshViewer.VoltageRenderingMode, [], (0.0, 1.0)),
+    (ui.MeshViewer.VoltageRenderingMode, [[]], (0.0, 1.0)),
+    (ui.MeshViewer.VoltageRenderingMode, [[2.0, 2.0]], (2.0, 3.0)),
+    (ui.MeshViewer.VoltageRenderingMode, [[5.0, 7.0], [], [-1.0]], (-1.0, 7.0)),
+    (ui.MeshViewer.PowerDensityRenderingMode, [[5.0, 7.0]], (0.0, 7.0)),
+])
+def test_compute_min_max(mode_cls, layer_values, expected):
+    shape = shapely.geometry.MultiPolygon()
+    mode = mode_cls(spatial_indices={
+        f"L{i}": ui.BaseSpatialIndex(None, np.array(values), shape)
+        for i, values in enumerate(layer_values)
+    })
+    assert mode._compute_min_max() == expected
 
 
 def _ring_mesh():

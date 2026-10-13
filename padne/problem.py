@@ -19,9 +19,7 @@ class Layer:
     shape: shapely.geometry.MultiPolygon
     name: str
 
-    # This is in Siemens
-    # Note that this is computed by
-    # conductivity [S/mm] * thickness [mm]
+    # In Siemens, computed as conductivity [S/mm] * thickness [mm]
     conductance: float
 
     # Copper foil thickness in mm. Optional because synthetic Problems may not
@@ -29,12 +27,9 @@ class Layer:
     # density (A/mm^2).
     thickness: float | None = None
 
-    # Cached tuple of individual polygons, extracted from shape
     geoms: tuple[shapely.geometry.Polygon, ...] = field(init=False, repr=False)
 
     def __post_init__(self):
-        # Extract individual polygons from MultiPolygon and cache them
-        # This avoids expensive Shapely copying on repeated .geoms access
         object.__setattr__(self, 'geoms', tuple(self.shape.geoms))
 
 
@@ -99,7 +94,6 @@ class Network:
 
         # This bypasses the frozen dataclass restriction
         object.__setattr__(self, "nodes", nodes)
-        # Check if the network has a source
         has_source = any(element.is_source for element in self.elements)
         object.__setattr__(self, "has_source", has_source)
 

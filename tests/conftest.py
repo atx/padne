@@ -29,49 +29,22 @@ def _kicad_test_projects():
     kicad_dir = Path(__file__).parent / "kicad"
     excluded_projects = _load_excluded_projects()
 
-    # Dictionary to store all discovered projects
     projects = {}
-
-    # Check if the kicad test directory exists
-    if not kicad_dir.exists() or not kicad_dir.is_dir():
-        return projects
-
-    # Scan through each subdirectory in the kicad test directory
     for project_dir in kicad_dir.iterdir():
-        if not project_dir.is_dir():
+        if any(excluded in project_dir.name for excluded in excluded_projects):
             continue
 
-        project_name = project_dir.name
-
-        # Check if project is in the excluded list
-        if any(excluded in project_name for excluded in excluded_projects):
-            continue
-
-        # Find .kicad_pro file
         pro_files = list(project_dir.glob("*.kicad_pro"))
         if not pro_files:
-            continue  # Skip directories without project files
-
-        pro_path = pro_files[0]
-
-        try:
-            # Create KiCadProject using the from_pro_file classmethod
-            project = KiCadProject.from_pro_file(pro_path)
-            projects[project_name] = project
-        except FileNotFoundError:
-            # Skip projects with missing files
             continue
+
+        projects[project_dir.name] = KiCadProject.from_pro_file(pro_files[0])
 
     return projects
 
 
 def for_all_kicad_projects(_func=None, *, include=None, exclude=None):
-    """
-    Decorator that provides a list of all KiCad test projects.
-
-    Returns:
-        list: A list of KiCadProject objects.
-    """
+    """Decorator parametrizing a test over the KiCad test projects as `project`."""
     if include is not None and exclude is not None:
         raise ValueError("Cannot specify both include and exclude.")
 

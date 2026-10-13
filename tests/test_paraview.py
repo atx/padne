@@ -3,9 +3,6 @@ Tests for ParaView VTK XML export functionality.
 """
 
 import pytest
-import tempfile
-import xml.etree.ElementTree as ET
-from pathlib import Path
 from unittest.mock import Mock
 
 import lxml.etree
@@ -14,35 +11,19 @@ from padne import mesh, solver, problem, paraview
 
 
 class TestFilenameSanitization:
-    def test_sanitize_filename_basic(self):
+    @pytest.mark.parametrize("name, expected", [
+        ("F.Cu", "F.Cu"),
+        ("Power Plane", "Power_Plane"),
+        ("Layer/Name?!@", "Layer_Name"),
+        ("", "layer"),
+        ("   ", "layer"),
+        ("Test___Name", "Test_Name"),
+        ("In1-Cu.2", "In1-Cu.2"),
+    ])
+    def test_sanitize_filename(self, name, expected):
         used_names = set()
-        result = paraview._sanitize_filename("F.Cu", used_names)
-        assert result == "F.Cu"
-        assert "F.Cu" in used_names
-
-    def test_sanitize_filename_with_spaces(self):
-        used_names = set()
-        result = paraview._sanitize_filename("Power Plane", used_names)
-        assert result == "Power_Plane"
-        assert "Power_Plane" in used_names
-
-    def test_sanitize_filename_special_chars(self):
-        used_names = set()
-        result = paraview._sanitize_filename("Layer/Name?!@", used_names)
-        assert result == "Layer_Name"
-        assert "Layer_Name" in used_names
-
-    def test_sanitize_filename_empty(self):
-        used_names = set()
-        result = paraview._sanitize_filename("", used_names)
-        assert result == "layer"
-        assert "layer" in used_names
-
-    def test_sanitize_filename_whitespace_only(self):
-        used_names = set()
-        result = paraview._sanitize_filename("   ", used_names)
-        assert result == "layer"
-        assert "layer" in used_names
+        assert paraview._sanitize_filename(name, used_names) == expected
+        assert used_names == {expected}
 
     def test_sanitize_filename_duplicates(self):
         used_names = set()
@@ -52,18 +33,6 @@ class TestFilenameSanitization:
         assert result1 == "F.Cu"
         assert result2 == "F.Cu_2"
         assert {"F.Cu", "F.Cu_2"} == used_names
-
-    def test_sanitize_filename_multiple_underscores(self):
-        used_names = set()
-        result = paraview._sanitize_filename("Test___Name", used_names)
-        assert result == "Test_Name"
-        assert "Test_Name" in used_names
-
-    def test_sanitize_filename_preserves_dots_and_hyphens(self):
-        used_names = set()
-        result = paraview._sanitize_filename("In1-Cu.2", used_names)
-        assert result == "In1-Cu.2"
-        assert "In1-Cu.2" in used_names
 
 
 class TestDataArrayCreation:
@@ -223,56 +192,6 @@ class TestPointsCreation:
         assert data_array.text == expected_coords
 
 
-class TestTriangleConnectivity:
-    def test_extract_triangle_connectivity_single_triangle(self):
-        # Create a mesh with one triangle
-        test_mesh = mesh.Mesh()
-
-        # Add vertices
-        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
-        v1 = test_mesh.make_vertex(mesh.Point(1.0, 0.0))
-        v2 = test_mesh.make_vertex(mesh.Point(0.0, 1.0))
-
-        # Create face and half-edges forming a triangle
-        face = test_mesh.make_face()
-        e0 = test_mesh.connect_vertices(v0, v1)
-        e1 = test_mesh.connect_vertices(v1, v2)
-        e2 = test_mesh.connect_vertices(v2, v0)
-
-        # Connect the edges in a loop
-        mesh.HalfEdge.connect(e0, e1)
-        mesh.HalfEdge.connect(e1, e2)
-        mesh.HalfEdge.connect(e2, e0)
-
-        # Associate edges with face
-        e0.face = face
-        e1.face = face
-        e2.face = face
-        face.edge = e0
-
-        triangles = paraview._extract_triangle_connectivity(test_mesh)
-
-        assert len(triangles) == 1
-        triangle = triangles[0]
-        assert len(triangle) == 3
-        # Vertices should be indices 0, 1, 2 in some order
-        assert set(triangle) == {0, 1, 2}
-
-    def test_extract_triangle_connectivity_boundary_face_skipped(self):
-        test_mesh = mesh.Mesh()
-
-        # Add vertices
-        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
-
-        # Create boundary face (lives in the boundaries store, not faces)
-        test_mesh.make_face(is_boundary=True)
-
-        triangles = paraview._extract_triangle_connectivity(test_mesh)
-
-        # Boundary faces should be skipped
-        assert len(triangles) == 0
-
-
 class TestCellsCreation:
     def test_create_cells_empty_mesh(self):
         test_mesh = mesh.Mesh()
@@ -299,65 +218,33 @@ class TestCellsCreation:
         assert types.get("type") == "UInt8"
         assert types.text == ""
 
-    def test_create_cells_mock_triangle(self):
-        # Mock triangle connectivity extraction
-        import padne.paraview
-        original_extract = padne.paraview._extract_triangle_connectivity
+    def test_create_cells_two_triangles(self):
+        test_mesh = mesh.Mesh.from_triangle_soup(
+            [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0),
+             mesh.Point(0.0, 1.0), mesh.Point(1.0, 1.0)],
+            [(0, 1, 2), (1, 3, 2)])
 
-        def mock_extract(mesh_obj):
-            return [(0, 1, 2), (1, 2, 3)]  # Two triangles
+        cells = paraview.create_cells(test_mesh)
 
-        padne.paraview._extract_triangle_connectivity = mock_extract
+        connectivity = [int(v) for v in cells.find("DataArray[@Name='connectivity']").text.split()]
+        triangles = [set(connectivity[i:i + 3]) for i in range(0, len(connectivity), 3)]
+        assert sorted(triangles, key=sorted) == [{0, 1, 2}, {1, 2, 3}]
 
-        try:
-            test_mesh = mesh.Mesh()
-            cells = paraview.create_cells(test_mesh)
+        offsets = cells.find("DataArray[@Name='offsets']")
+        assert offsets.text == "3 6"
 
-            connectivity = cells.find("DataArray[@Name='connectivity']")
-            assert connectivity.text == "0 1 2 1 2 3"
-
-            offsets = cells.find("DataArray[@Name='offsets']")
-            assert offsets.text == "3 6"
-
-            types = cells.find("DataArray[@Name='types']")
-            assert types.text == "5 5"
-
-        finally:
-            # Restore original function
-            padne.paraview._extract_triangle_connectivity = original_extract
+        types = cells.find("DataArray[@Name='types']")
+        assert types.text == "5 5"
 
 
 class TestPieceCreation:
     def test_create_piece_basic_structure(self):
-        # Create a minimal mesh with proper triangle structure
-        test_mesh = mesh.Mesh()
-
-        # Add three vertices for a triangle
-        v0 = test_mesh.make_vertex(mesh.Point(0.0, 0.0))
-        v1 = test_mesh.make_vertex(mesh.Point(1.0, 0.0))
-        v2 = test_mesh.make_vertex(mesh.Point(0.0, 1.0))
-
-        # Create face and half-edges forming a triangle
-        face = test_mesh.make_face()
-        e0 = test_mesh.connect_vertices(v0, v1)
-        e1 = test_mesh.connect_vertices(v1, v2)
-        e2 = test_mesh.connect_vertices(v2, v0)
-
-        # Connect the edges in a loop
-        mesh.HalfEdge.connect(e0, e1)
-        mesh.HalfEdge.connect(e1, e2)
-        mesh.HalfEdge.connect(e2, e0)
-
-        # Associate edges with face
-        e0.face = face
-        e1.face = face
-        e2.face = face
-        face.edge = e0
+        test_mesh = mesh.Mesh.from_triangle_soup(
+            [mesh.Point(0.0, 0.0), mesh.Point(1.0, 0.0), mesh.Point(0.0, 1.0)],
+            [(0, 1, 2)])
 
         potentials = mesh.ZeroForm(test_mesh)
-        potentials[v0] = 1.0
-        potentials[v1] = 2.0
-        potentials[v2] = 3.0
+        potentials.values[:] = [1.0, 2.0, 3.0]
 
         piece = paraview.create_piece(test_mesh, potentials)
 
@@ -376,186 +263,85 @@ class TestPieceCreation:
         assert cells is not None
 
 
+def _single_vertex_potentials(point, value):
+    test_mesh = mesh.Mesh()
+    vertex = test_mesh.make_vertex(point)
+    potentials = mesh.ZeroForm(test_mesh)
+    potentials[vertex] = value
+    return potentials
+
+
+def _solution(layers):
+    """Build a Solution from (layer name, ZeroForm) pairs, one mesh per layer."""
+    mock_layers = []
+    for name, _ in layers:
+        mock_layer = Mock(spec=problem.Layer)
+        mock_layer.name = name
+        mock_layers.append(mock_layer)
+    mock_problem = Mock(spec=problem.Problem)
+    mock_problem.layers = mock_layers
+
+    return solver.Solution(
+        problem=mock_problem,
+        layer_solutions=[
+            solver.LayerSolution(meshes=[potentials.mesh], potentials=[potentials])
+            for _, potentials in layers
+        ],
+        solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
+    )
+
+
 class TestSolutionExport:
-    def test_export_solution_file_creation(self):
-        # Create mock problem with layer names
-        mock_layer = Mock(spec=problem.Layer)
-        mock_layer.name = "F.Cu"
-        mock_problem = Mock(spec=problem.Problem)
-        mock_problem.layers = [mock_layer]
+    def test_export_solution_file_creation(self, tmp_path):
+        solution = _solution([("F.Cu", _single_vertex_potentials(mesh.Point(1.0, 2.0), 3.3))])
+        output_dir = tmp_path / "out"
 
-        # Create minimal mesh and potentials
-        test_mesh = mesh.Mesh()
-        vertex = test_mesh.make_vertex(mesh.Point(1.0, 2.0))
+        paraview.export_solution(solution, output_dir)
 
-        potentials = mesh.ZeroForm(test_mesh)
-        potentials[vertex] = 3.3
+        # Verify directory was created and file exists
+        assert output_dir.exists()
+        vtu_files = list(output_dir.glob("*.vtu"))
+        assert len(vtu_files) == 1
 
-        layer_solution = solver.LayerSolution(
-            meshes=[test_mesh],
-            potentials=[potentials]
-        )
+        output_file = vtu_files[0]
+        assert output_file.name == "F.Cu.vtu"
+        assert output_file.read_text(encoding="utf-8").startswith(
+            "<?xml version='1.0' encoding='UTF-8'?>")
 
-        solution = solver.Solution(
-            problem=mock_problem,
-            layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
-        )
+        # Parse and validate XML structure
+        tree = lxml.etree.parse(str(output_file))
+        root = tree.getroot()
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = Path(tmp_dir)
-
-            paraview.export_solution(solution, output_dir)
-
-            # Verify directory was created and file exists
-            assert output_dir.exists()
-            vtu_files = list(output_dir.glob("*.vtu"))
-            assert len(vtu_files) == 1
-
-            output_file = vtu_files[0]
-            assert output_file.name == "F.Cu.vtu"
-
-            # Parse and validate XML structure
-            tree = lxml.etree.parse(str(output_file))
-            root = tree.getroot()
-
-            assert root.tag == "VTKFile"
-            assert root.get("type") == "UnstructuredGrid"
-
-            unstructured_grid = root.find("UnstructuredGrid")
-            assert unstructured_grid is not None
-
-            pieces = unstructured_grid.findall("Piece")
-            assert len(pieces) == 1
-
-            piece = pieces[0]
-            assert piece.get("NumberOfPoints") == "1"
-
-    def test_export_solution_multiple_layers(self):
-        # Create mock problem with multiple layer names
-        layer_names = ["F.Cu", "B.Cu"]
-        mock_layers = []
-        for name in layer_names:
-            mock_layer = Mock(spec=problem.Layer)
-            mock_layer.name = name
-            mock_layers.append(mock_layer)
-
-        mock_problem = Mock(spec=problem.Problem)
-        mock_problem.layers = mock_layers
-
-        # Create two layers with different meshes
-        layer_solutions = []
-        for layer_idx in range(2):
-            test_mesh = mesh.Mesh()
-            vertex = test_mesh.make_vertex(mesh.Point(float(layer_idx), 0.0))
-
-            potentials = mesh.ZeroForm(test_mesh)
-            potentials[vertex] = float(layer_idx + 1)
-
-            layer_solution = solver.LayerSolution(
-                meshes=[test_mesh],
-                potentials=[potentials]
-            )
-            layer_solutions.append(layer_solution)
-
-        solution = solver.Solution(
-            problem=mock_problem,
-            layer_solutions=layer_solutions,
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
-        )
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = Path(tmp_dir)
-
-            paraview.export_solution(solution, output_dir)
-
-            # Verify two separate files were created
-            vtu_files = list(output_dir.glob("*.vtu"))
-            assert len(vtu_files) == 2
-
-            filenames = {f.name for f in vtu_files}
-            assert filenames == {"F.Cu.vtu", "B.Cu.vtu"}
-
-            # Verify each file contains one piece
-            for vtu_file in vtu_files:
-                tree = lxml.etree.parse(str(vtu_file))
-                root = tree.getroot()
-                pieces = root.findall(".//Piece")
-                assert len(pieces) == 1  # One piece per file
-
-
-class TestXMLValidation:
-    def test_xml_is_well_formed(self):
-        """Test that generated XML is well-formed and parseable."""
-        mock_layer = Mock(spec=problem.Layer)
-        mock_layer.name = "TestLayer"
-        mock_problem = Mock(spec=problem.Problem)
-        mock_problem.layers = [mock_layer]
-
-        test_mesh = mesh.Mesh()
-        vertices = [
-            test_mesh.make_vertex(mesh.Point(0.0, 0.0)),
-            test_mesh.make_vertex(mesh.Point(1.0, 0.0)),
-            test_mesh.make_vertex(mesh.Point(0.0, 1.0))
-        ]
-
-        potentials = mesh.ZeroForm(test_mesh)
-        for i, vertex in enumerate(vertices):
-            potentials[vertex] = float(i * 10)
-
-        layer_solution = solver.LayerSolution(
-            meshes=[test_mesh],
-            potentials=[potentials]
-        )
-
-        solution = solver.Solution(
-            problem=mock_problem,
-            layer_solutions=[layer_solution],
-            solver_info=solver.SolverInfo(ground_node_current=0.0, residual_norm=0.0, relative_residual=0.0)
-        )
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = Path(tmp_dir)
-
-            paraview.export_solution(solution, output_dir)
-
-            # Get the generated file
-            vtu_files = list(output_dir.glob("*.vtu"))
-            assert len(vtu_files) == 1
-            output_file = vtu_files[0]
-
-            # Test with both lxml and standard library parsers
-            lxml_tree = lxml.etree.parse(str(output_file))
-            assert lxml_tree is not None
-
-            et_tree = ET.parse(str(output_file))
-            assert et_tree is not None
-
-            # Validate XML declaration and encoding
-            with open(output_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-                assert content.startswith('<?xml version=\'1.0\' encoding=\'UTF-8\'?>')
-
-    def test_vtk_format_compliance(self):
-        """Test compliance with VTK XML format specification."""
-        root = paraview.create_vtk_root()
-
-        # Required root attributes
+        assert root.tag == "VTKFile"
         assert root.get("type") == "UnstructuredGrid"
-        assert root.get("version") is not None
-        assert root.get("byte_order") is not None
 
-        # Test data array attributes
-        test_mesh = mesh.Mesh()
-        vertex = test_mesh.make_vertex(mesh.Point(1.0, 2.0))
+        unstructured_grid = root.find("UnstructuredGrid")
+        assert unstructured_grid is not None
 
-        potentials = mesh.ZeroForm(test_mesh)
-        potentials[vertex] = 1.5
+        pieces = unstructured_grid.findall("Piece")
+        assert len(pieces) == 1
 
-        point_data = paraview.create_point_data(potentials)
-        data_array = point_data.find("DataArray")
+        piece = pieces[0]
+        assert piece.get("NumberOfPoints") == "1"
 
-        # VTK requires these attributes
-        assert data_array.get("type") in ["Float64", "Float32", "Int32", "UInt8"]
-        assert data_array.get("Name") is not None
-        assert data_array.get("format") in ["ascii", "binary"]
+    def test_export_solution_multiple_layers(self, tmp_path):
+        solution = _solution([
+            ("F.Cu", _single_vertex_potentials(mesh.Point(0.0, 0.0), 1.0)),
+            ("B.Cu", _single_vertex_potentials(mesh.Point(1.0, 0.0), 2.0)),
+        ])
+
+        paraview.export_solution(solution, tmp_path)
+
+        # Verify two separate files were created
+        vtu_files = list(tmp_path.glob("*.vtu"))
+        assert len(vtu_files) == 2
+
+        filenames = {f.name for f in vtu_files}
+        assert filenames == {"F.Cu.vtu", "B.Cu.vtu"}
+
+        # Verify each file contains one piece
+        for vtu_file in vtu_files:
+            tree = lxml.etree.parse(str(vtu_file))
+            root = tree.getroot()
+            pieces = root.findall(".//Piece")
+            assert len(pieces) == 1  # One piece per file

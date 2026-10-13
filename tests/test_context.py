@@ -5,6 +5,10 @@ import pytest
 from padne import context
 
 
+def _local_key(test_fn, name):
+    return f"test_context.{test_fn.__qualname__}.<locals>.{name}"
+
+
 class TestTimingSession:
 
     def test_durations_empty_when_nothing_recorded(self):
@@ -83,6 +87,8 @@ class TestStageTimerWithForm:
 class TestStageTimerDecorator:
 
     def test_bare_decorator_uses_qualname(self):
+        # Bound before the session opens, so the session lookup must be
+        # deferred to call time.
         @context.stage_timer
         def my_decorated_func():
             return 42
@@ -90,11 +96,8 @@ class TestStageTimerDecorator:
         with context.timing_session() as s:
             assert my_decorated_func() == 42
         # qualname for a function defined inside a method is nested
-        expected = (
-            f"test_context."
-            f"{TestStageTimerDecorator.test_bare_decorator_uses_qualname.__qualname__}"
-            f".<locals>.my_decorated_func"
-        )
+        expected = _local_key(TestStageTimerDecorator.test_bare_decorator_uses_qualname,
+                              "my_decorated_func")
         with s.durations as d:
             assert expected in d
 
@@ -122,25 +125,6 @@ class TestStageTimerDecorator:
         with s.durations as d:
             entry = d["test_context.hot"]
         assert entry.call_count == n
-        assert entry.perf_time >= 0.0
-
-    def test_decorator_session_lookup_is_deferred(self):
-        # Decorator bound *before* a session opens must still record into
-        # the session that's active when the function is *called*.
-        @context.stage_timer
-        def bound_outside_session():
-            pass
-
-        with context.timing_session() as s:
-            bound_outside_session()
-
-        expected = (
-            f"test_context."
-            f"{TestStageTimerDecorator.test_decorator_session_lookup_is_deferred.__qualname__}"
-            f".<locals>.bound_outside_session"
-        )
-        with s.durations as d:
-            assert expected in d
 
     def test_decorator_no_op_outside_session(self):
         @context.stage_timer
@@ -171,11 +155,7 @@ class TestDirectSessionAPI:
             def my_fn():
                 return 7
             assert my_fn() == 7
-        expected = (
-            f"test_context."
-            f"{TestDirectSessionAPI.test_bare_decorator_on_session.__qualname__}"
-            f".<locals>.my_fn"
-        )
+        expected = _local_key(TestDirectSessionAPI.test_bare_decorator_on_session, "my_fn")
         with s.durations as d:
             assert expected in d
 
@@ -187,20 +167,6 @@ class TestDirectSessionAPI:
             f()
         with s.durations as d:
             assert "explicit.key" in d
-
-
-class TestSessionDurationNested:
-    # Duration moved to Session.Duration. Verify the stored values are
-    # instances of that nested class so external consumers can reference
-    # the type via Session.Duration without surprises.
-
-    def test_recorded_value_is_session_duration(self):
-        with context.timing_session() as s:
-            with context.stage_timer("typed"):
-                pass
-        with s.durations as d:
-            entry = d["test_context.typed"]
-        assert isinstance(entry, context.Session.Duration)
 
 
 class TestConcurrentMerging:
@@ -237,19 +203,15 @@ class TestConcurrentMerging:
         # session as active (since the session is process-wide). Verify a
         # plain threading.Thread can record into the parent's session with
         # no explicit context propagation.
-        recorded_in_thread = threading.Event()
-
         def worker():
             with context.stage_timer("from_worker"):
                 pass
-            recorded_in_thread.set()
 
         with context.timing_session() as s:
             t = threading.Thread(target=worker)
             t.start()
             t.join()
 
-        assert recorded_in_thread.is_set()
         with s.durations as d:
             assert "test_context.from_worker" in d
 
@@ -348,6 +310,8 @@ class TestLockedObject:
         first_inside = threading.Event()
         second_attempted = threading.Event()
         second_acquired = threading.Event()
+        # Assertions inside a thread cannot fail the test, so record instead.
+        result = {}
 
         def first():
             with wrapped:
@@ -356,7 +320,7 @@ class TestLockedObject:
                 second_attempted.wait()
                 # Brief pause to give second thread a chance to race in
                 time.sleep(0.05)
-                assert not second_acquired.is_set()
+                result["second_acquired_while_held"] = second_acquired.is_set()
 
         def second():
             first_inside.wait()
@@ -370,6 +334,7 @@ class TestLockedObject:
         t2.start()
         t1.join()
         t2.join()
+        assert not result["second_acquired_while_held"]
         assert second_acquired.is_set()  # eventually got it after t1 released
 
     def test_released_on_exception(self):

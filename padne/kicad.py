@@ -1,3 +1,6 @@
+"""
+Loading of KiCad projects and their conversion to our internal representation.
+"""
 
 import warnings
 
@@ -10,7 +13,7 @@ import sexpdata
 import shapely
 import tempfile
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional, Iterator, ClassVar, Iterable
 
@@ -71,9 +74,6 @@ def find_pcbnew_module() -> Any:
 # Load pcbnew module using the fallback mechanism
 pcbnew = find_pcbnew_module()
 
-# This file is responsible for loading KiCad files and converting them to our
-# internal representation.
-
 # Copper conductivity in S/mm (not S/m!)
 COPPER_CONDUCTIVITY = 5.95e4
 # Default via barrel plating thickness in mm (typical fab spec is >=25um)
@@ -117,6 +117,9 @@ class Stackup:
             (i for i, item in enumerate(self.items) if item.name == name)
         )
 
+    def item_by_name(self, name: str) -> StackupItem:
+        return self.items[self.index_by_name(name)]
+
 
 def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
     """
@@ -128,6 +131,18 @@ def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
         yield layer_id
 
 
+def _copper_layer_names(board: pcbnew.BOARD, layer_set: pcbnew.LSET) -> list[str]:
+    return [
+        board.GetLayerName(layer_id)
+        for layer_id in copper_layers(board)
+        if layer_set.Contains(layer_id)
+    ]
+
+
+def _position_to_point(pos: pcbnew.VECTOR2I) -> shapely.geometry.Point:
+    return shapely.geometry.Point(nm_to_mm(pos.x), nm_to_mm(pos.y))
+
+
 @stage_timer
 def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
                                    copper_conductivity: float = COPPER_CONDUCTIVITY
@@ -137,8 +152,7 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
 
     Args:
         board: KiCad board object
-        copper_conductivity: Optional custom copper conductivity in S/mm.
-                           If None, uses COPPER_CONDUCTIVITY constant.
+        copper_conductivity: Copper conductivity in S/mm
     """
     # Unfortunately, the Python pcbnew API does not support reading the stackup
     # directly. We need to parse the file manually...
@@ -160,11 +174,10 @@ def extract_stackup_from_kicad_pcb(board: pcbnew.BOARD,
                    item and item[0] == sexpdata.Symbol('stackup')), None)
 
     if not stackup:
-        # TODO: Return verify that the board only has two layers
+        # TODO: Verify that the board only has two layers
         # I am not sure if it is possible to have no stackup section and
         # more than two layers. It seems KiCad generates the section
         # on every change in the stackup window...
-        # Use custom conductivity if provided, otherwise use default
         return Stackup(
             items=[
                 StackupItem(name="F.Cu", thickness=0.035, conductivity=copper_conductivity),
@@ -303,6 +316,9 @@ class PadIndex:
         # simulations.
         return self.mapping.get(ep, [])
 
+    def find_by_endpoints(self, eps: Iterable[Endpoint]) -> list[LayerPoint]:
+        return [lp for ep in eps for lp in self.find_by_endpoint(ep)]
+
     def load_smd_pads(self, board: pcbnew.BOARD, layer_dict: dict[str, problem.Layer]) -> None:
         """
         Load all SMD pads from the given PCB board into the mapping.
@@ -323,10 +339,7 @@ class PadIndex:
                 pad_name = pad_obj.GetName()
                 endpoint = Endpoint(designator=designator, pad=pad_name)
 
-                # Get pad position and convert from nm to mm
-                position = pad_obj.GetPosition()
-                x_mm = nm_to_mm(position.x)
-                y_mm = nm_to_mm(position.y)
+                point = _position_to_point(pad_obj.GetPosition())
 
                 # Get the layer for SMD pads
                 layer_id = pad_obj.GetLayer()
@@ -343,7 +356,6 @@ class PadIndex:
                             raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
 
                 layer_name = board.GetLayerName(layer_id)
-                point = shapely.geometry.Point(x_mm, y_mm)
 
                 # Validate that the point falls within the layer geometry
                 layer = layer_dict.get(layer_name)
@@ -358,7 +370,7 @@ class PadIndex:
                 if not layer.shape.intersects(point):
                     # At the moment, we just reject those pads
                     log.warning(
-                        f"SMD pad {endpoint} connection point at ({x_mm}, {y_mm}) "
+                        f"SMD pad {endpoint} connection point at ({point.x}, {point.y}) "
                         f"on layer {layer_name} falls outside the layer geometry (likely in a hole). "
                         f"Skipping this connection point."
                     )
@@ -437,8 +449,8 @@ class BaseLumpedSpec:
 
     # To be overridden by subclasses
     endpoint_names: ClassVar[dict[str, str]] = {}
-    value_names: ClassVar[dict[str, str]] = {}
-    lumped_type: ClassVar[type] = None
+    value_names: ClassVar[dict[str, str | None]] = {}
+    lumped_type: ClassVar[type | None] = None
     default_values: ClassVar[dict[str, float]] = {}
 
     @classmethod
@@ -468,7 +480,6 @@ class BaseLumpedSpec:
                 # Use default value if specified in the class
                 spec.values[name] = cls.default_values[name]
             else:
-                # A subclass can construct default values in the values dict
                 raise ValueError(f"Missing value parameter: {name} for {directive.name}")
 
         # Parse optional coupling parameter
@@ -508,11 +519,9 @@ class BaseLumpedSpec:
 
             internal_arg_name = self.endpoint_names[directive_param_name]
 
-            layerpoints = [
-                lp
-                for ep in endpoints_list
-                for lp in pad_index.find_by_endpoint(ep)
-            ]
+            layerpoints = pad_index.find_by_endpoints(endpoints_list)
+            if not layerpoints:
+                raise ValueError(f"Endpoints of {directive_param_name} in {self.__class__.__name__} did not resolve to any pad")
 
             if len(layerpoints) == 1:
                 # Optimize by wiring directly to the internal node
@@ -609,16 +618,15 @@ class VoltageSourceSpec(BaseLumpedSpec):
         n_connections = []
         for endpoints, connections in zip([p_endpoints, n_endpoints],
                                           [p_connections, n_connections]):
-            layerpoints = [
-                lp
-                for ep in endpoints
-                for lp in pad_index.find_by_endpoint(ep)
-            ]
-
-            for lp in layerpoints:
+            for lp in pad_index.find_by_endpoints(endpoints):
                 layer = layer_dict[lp.layer]
                 conn = problem.Connection(layer=layer, point=lp.point)
                 connections.append(conn)
+
+        if not p_connections:
+            raise ValueError("Positive endpoints of voltage source did not resolve to any pad")
+        if not n_connections:
+            raise ValueError("Negative endpoints of voltage source did not resolve to any pad")
 
         return p_connections, n_connections
 
@@ -707,19 +715,18 @@ class CurrentSourceSpec(BaseLumpedSpec):
     lumped_type = problem.CurrentSource
 
 
-@dataclass
 class RegulatorSpec(BaseLumpedSpec):
-    endpoint_names: ClassVar[dict[str, str]] = {
+    endpoint_names = {
         "p": "v_p",
         "n": "v_n",
         "f": "s_f",
         "t": "s_t",
     }
-    value_names: ClassVar[dict[str, str]] = {
+    value_names = {
         "v": "voltage",
         "gain": "gain",
     }
-    lumped_type: ClassVar[type] = problem.VoltageRegulator
+    lumped_type = problem.VoltageRegulator
 
 
 @dataclass
@@ -908,25 +915,10 @@ def extract_via_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
         # Get the via drill diameter (convert from nm to mm)
         drill_diameter = nm_to_mm(via.GetDrillValue())
 
-        # Get the layers this via connects
-        layer_names = []
-        layer_set = via.GetLayerSet()
-
-        for layer_id in copper_layers(board):
-            if not layer_set.Contains(layer_id):
-                continue
-            layer_names.append(board.GetLayerName(layer_id))
-
-        # Get the via's position (convert from KiCad internal units - nanometers to mm)
-        pos_x = nm_to_mm(via.GetPosition().x)
-        pos_y = nm_to_mm(via.GetPosition().y)
-        via_point = shapely.geometry.Point(pos_x, pos_y)
-
-        # Create a ViaSpec object
         via_spec = ViaSpec(
-            point=via_point,
+            point=_position_to_point(via.GetPosition()),
             drill_diameter=drill_diameter,
-            layer_names=layer_names
+            layer_names=_copper_layer_names(board, via.GetLayerSet())
         )
 
         via_specs.append(via_spec)
@@ -953,23 +945,9 @@ def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
             # Check if the pad is through-hole type
             if pad.GetAttribute() != pcbnew.PAD_ATTRIB_PTH:
                 continue
-            # Get the pad position and convert from nm to mm
-            pos_x = nm_to_mm(pad.GetPosition().x)
-            pos_y = nm_to_mm(pad.GetPosition().y)
-            pad_point = shapely.geometry.Point(pos_x, pos_y)
-
             # Get the drill diameter
             # For oval/slot drills, use average of width and height as an approximation
             drill_diameter = nm_to_mm((pad.GetDrillSize().x + pad.GetDrillSize().y) / 2)
-
-            # Determine which layers this pad connects
-            layer_names = []
-            layer_set = pad.GetLayerSet()
-
-            for layer_id in copper_layers(board):
-                if not layer_set.Contains(layer_id):
-                    continue
-                layer_names.append(board.GetLayerName(layer_id))
 
             endpoint = Endpoint(
                 designator=footprint.GetReference(),
@@ -978,9 +956,9 @@ def extract_tht_pad_specs_from_pcb(board: pcbnew.BOARD) -> list[ViaSpec]:
 
             # Create a ViaSpec object for this through-hole pad
             tht_spec = ViaSpec(
-                point=pad_point,
+                point=_position_to_point(pad.GetPosition()),
                 drill_diameter=drill_diameter,
-                layer_names=layer_names,
+                layer_names=_copper_layer_names(board, pad.GetLayerSet()),
                 endpoint=endpoint
             )
 
@@ -1050,6 +1028,22 @@ def process_directives(directives: list[Directive]) -> Directives:
                       probe_specs=probe_specs)
 
 
+def _find_sexp_elements(sexp_data: Any, name: str) -> list:
+    """Recursively find all (name ...) elements in the sexp tree."""
+    if not isinstance(sexp_data, list):
+        return []
+
+    ret = []
+
+    if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol(name):
+        ret.append(sexp_data)
+
+    for item in sexp_data:
+        ret.extend(_find_sexp_elements(item, name))
+
+    return ret
+
+
 @stage_timer
 def build_schema_hierarchy(sch_file_path: pathlib.Path,
                            sheet_name: str = "Root") -> SchemaInstance:
@@ -1071,22 +1065,6 @@ def build_schema_hierarchy(sch_file_path: pathlib.Path,
         child_instances=[]
     )
 
-    # Find sheet elements in the parsed data
-    def find_sheet_elements(sexp_data) -> list:
-        """Recursively find all (sheet ...) elements in the sexp tree."""
-        if not isinstance(sexp_data, list):
-            return []
-
-        ret = []
-
-        if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol("sheet"):
-            ret.append(sexp_data)
-
-        for item in sexp_data:
-            ret.extend(find_sheet_elements(item))
-
-        return ret
-
     def extract_sheet_properties(sheet_element) -> tuple[str | None, str | None]:
         """Extract Sheetname and Sheetfile properties from a sheet element."""
         sheetname = None
@@ -1106,7 +1084,7 @@ def build_schema_hierarchy(sch_file_path: pathlib.Path,
         return sheetname, sheetfile
 
     # Process all sheet elements
-    sheet_elements = find_sheet_elements(parsed_sexp)
+    sheet_elements = _find_sexp_elements(parsed_sexp, "sheet")
 
     for sheet_element in sheet_elements:
         sheetname, sheetfile = extract_sheet_properties(sheet_element)
@@ -1177,22 +1155,6 @@ def extract_directives_from_text(text: str) -> list[Directive]:
 
 
 def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
-
-    def find_text_elements(sexp_data) -> list:
-        """Recursively find all (text ...) elements in the sexp tree."""
-        if not isinstance(sexp_data, list):
-            return []
-
-        ret = []
-
-        if len(sexp_data) > 0 and sexp_data[0] == sexpdata.Symbol("text"):
-            ret.append(sexp_data)
-
-        for item in sexp_data:
-            ret.extend(find_text_elements(item))
-
-        return ret
-
     def extract_content_from_text_element(text_element) -> str:
         """Extract text content from a text element."""
         assert isinstance(text_element, list)
@@ -1202,7 +1164,7 @@ def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
 
     all_texts = [
         extract_content_from_text_element(text_element)
-        for text_element in find_text_elements(instance.parsed_sexp)
+        for text_element in _find_sexp_elements(instance.parsed_sexp, "text")
     ]
 
     directives = []
@@ -1262,13 +1224,8 @@ class PlottedGerberLayer:
 @stage_timer
 def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> list[PlottedGerberLayer]:
     """
-    Generate Gerber files from a KiCad PCB file and convert them to PlottedGerberLayer objects.
-
-    Args:
-        pcb_file_path: Path to the KiCad PCB file
-
-    Returns:
-        List of PlottedGerberLayer objects containing layer geometries
+    Plot the given layers of a KiCad board to Gerbers and convert them to
+    PlottedGerberLayer objects.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         # Plot gerbers and get paths to generated files
@@ -1286,18 +1243,7 @@ def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> 
 
 @stage_timer
 def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: Path):
-    """
-    Plot copper layers of a KiCad board to Gerber files.
-
-    Args:
-        board: KiCad board object
-        output_dir: Directory where Gerber files will be saved
-
-    Returns:
-        Dictionary mapping layer IDs to paths of generated Gerber files
-    """
-    # Create plot controller and options
-
+    """Plot a single layer of a KiCad board to a Gerber file at output_path."""
     # Unfortunately, we cannot direct the resulting gerber to a specific _file path_,
     # we can only specify the output directory and then acquire the file name
     # for the specific layer. The cleanest way to have nice API for this function
@@ -1358,7 +1304,7 @@ def extract_layers_from_gerbers(board,
     )
 
     plotted_layers = []
-    for (layer_id, gerber_path), geometry in zip(gerber_layers.items(), geometries):
+    for layer_id, geometry in zip(gerber_layers, geometries):
         if geometry is None:
             continue
 
@@ -1461,7 +1407,7 @@ def process_via_spec(via_spec: ViaSpec,
     radius = via_spec.drill_diameter / 2
 
     involved_copper_layers = [
-        stackup.items[stackup.index_by_name(layer_name)]
+        stackup.item_by_name(layer_name)
         for layer_name in via_spec.layer_names
     ]
 
@@ -1582,12 +1528,7 @@ def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
         assert punched_geometry.geom_type == "MultiPolygon", \
             f"Expected MultiPolygon after punching holes, got {punched_geometry.geom_type}"
 
-        # Create a new PlottedGerberLayer with the punched geometry
-        return PlottedGerberLayer(
-            name=plotted_layer.name,
-            layer_id=plotted_layer.layer_id,
-            geometry=punched_geometry
-        )
+        return replace(plotted_layer, geometry=punched_geometry)
 
     # The hole union and the difference are GEOS calls that release the GIL,
     # so the layers punch concurrently.
@@ -1596,16 +1537,7 @@ def punch_via_holes(plotted_layers: list[PlottedGerberLayer],
 
 def verify_stackup_contains_all_layers(stackup: Stackup,
                                        plotted_layers: list[PlottedGerberLayer]) -> bool:
-    """
-    Verify that all plotted layers are contained within the stackup.
-
-    Args:
-        stackup: Stackup object containing layers
-        plotted_layers: List of PlottedGerberLayer objects
-
-    Raises:
-        ValueError: If any plotted layer is not found in the stackup
-    """
+    """Return whether all plotted layers are contained within the stackup."""
     for pl in plotted_layers:
         if not any(pl.name == stackup_item.name for stackup_item in stackup.items):
             return False
@@ -1614,20 +1546,10 @@ def verify_stackup_contains_all_layers(stackup: Stackup,
 
 def construct_layer_dict(plotted_layers: list[PlottedGerberLayer],
                          stackup: Stackup) -> dict[str, problem.Layer]:
-    """
-    Construct a dictionary mapping layer names to Layer objects.
-
-    Args:
-        plotted_layers: List of PlottedGerberLayer objects
-
-    Returns:
-        Dictionary mapping layer names to Layer objects
-    """
+    """Construct a dictionary mapping layer names to Layer objects."""
     layer_dict = {}
     for plotted_layer in plotted_layers:
-        stackup_layer = next(
-            (item for item in stackup.items if item.name == plotted_layer.name)
-        )
+        stackup_layer = stackup.item_by_name(plotted_layer.name)
         layer = problem.Layer(
             shape=plotted_layer.geometry,
             name=plotted_layer.name,
@@ -1648,11 +1570,7 @@ def clip_layer_with_outline(plotted_layer: PlottedGerberLayer,
 
     clipped_geometry = ensure_geometry_is_multipolygon(clipped_geometry)
 
-    return PlottedGerberLayer(
-        name=plotted_layer.name,
-        layer_id=plotted_layer.layer_id,
-        geometry=clipped_geometry
-    )
+    return replace(plotted_layer, geometry=clipped_geometry)
 
 
 @stage_timer
@@ -1667,10 +1585,8 @@ def erode_layers_by_undercut(plotted_layers: list[PlottedGerberLayer],
         # Mitre joins add no arc vertices at concave corners, so large pours
         # keep their vertex count; the corner shape error is O(undercut^2).
         eroded_geometry = plotted_layer.geometry.buffer(-undercut, join_style="mitre")
-        eroded_layers.append(PlottedGerberLayer(
-            name=plotted_layer.name,
-            layer_id=plotted_layer.layer_id,
-            geometry=ensure_geometry_is_multipolygon(eroded_geometry)
+        eroded_layers.append(replace(
+            plotted_layer, geometry=ensure_geometry_is_multipolygon(eroded_geometry)
         ))
     return eroded_layers
 
@@ -1681,7 +1597,7 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     Load a KiCad project and create a Problem object for PDN simulation.
 
     Args:
-        project: Either a path to the KiCad project file (*.kicad_pro) or a KiCadProject instance
+        pro_file_path: Path to the KiCad project file (*.kicad_pro)
 
     Returns:
         A Problem object containing layers and lumped elements
@@ -1721,39 +1637,30 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     if not verify_stackup_contains_all_layers(stackup, plotted_layers):
         raise ValueError("Stackup does not contain all plotted layers")
 
-    pad_index = PadIndex()
-
-    # Convert Spec objects to Network objects
-    networks = []
-
     log.info("Processing vias and through hole pads")
     via_specs = extract_via_specs_from_pcb(board) + extract_tht_pad_specs_from_pcb(board)
 
     plotted_layers = punch_via_holes(plotted_layers, via_specs)
-    layer_dict = construct_layer_dict(plotted_layers, stackup)
-
-    # Load SMD pads AFTER hole punching so we can validate against final geometry
-    pad_index.load_smd_pads(board, layer_dict)
-
-    pad_index.insert_via_specs(via_specs, layer_dict)
     # Note that we have to create the layer dict _after_ punching the holes,
     # since otherwise it would contain the original objects!
+    layer_dict = construct_layer_dict(plotted_layers, stackup)
+
+    pad_index = PadIndex()
+    # Load SMD pads AFTER hole punching so we can validate against final geometry
+    pad_index.load_smd_pads(board, layer_dict)
+    pad_index.insert_via_specs(via_specs, layer_dict)
+
+    networks = []
     for via_spec in via_specs:
         networks.extend(process_via_spec(via_spec, layer_dict, stackup, copper_spec.plating))
 
     log.info("Creating networks from specifications")
     for lumped_spec in directives.lumped_specs:
-        network = lumped_spec.construct(pad_index, layer_dict)
-        networks.append(network)
+        networks.append(lumped_spec.construct(pad_index, layer_dict))
 
     for probe_spec in directives.probe_specs:
         networks.extend(probe_spec.construct(pad_index, layer_dict))
 
-    # Get all layers as a list
-    layer_names_in_order = list(layer_dict.keys())
-    layer_names_in_order.sort(key=lambda name: stackup.index_by_name(name))
+    layers = [layer_dict[name] for name in sorted(layer_dict, key=stackup.index_by_name)]
 
-    layers = [layer_dict[name] for name in layer_names_in_order]
-
-    # Return the Problem object
     return problem.Problem(layers=layers, networks=networks, project_name=project.name)

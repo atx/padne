@@ -63,7 +63,7 @@ class Value:
         Raises:
             ValueError: If the string cannot be parsed
         """
-        if not s or not s.strip():
+        if not s.strip():
             raise ValueError(f"Empty value string: '{s}'")
 
         # First, drop all spaces
@@ -75,6 +75,9 @@ class Value:
         if last_character in _KNOWN_UNITS:
             s = s[:-1]
             unit = last_character
+
+        if not s:
+            raise ValueError(f"Missing numeric value before unit '{unit}'")
 
         # Check for SI prefix
         last_character = s[-1]
@@ -90,8 +93,6 @@ class Value:
 
     def pretty_format(self, decimal_places: int | None = None) -> str:
         """Pretty format the stored value with SI prefix and unit.
-
-        Uses self.value and self.unit.
 
         Args:
             decimal_places: Number of decimal places to show. If None, uses smart precision
@@ -110,16 +111,12 @@ class Value:
             >>> Value(23.97, "V").pretty_format(5)
             '23.97000 V'
         """
-        if self.value == 0:
-            return f"0 {self.unit}"
-
-        # Determine the appropriate prefix for the value
         abs_value = abs(self.value)
-        exponent = 0
-
         if abs_value < 1e-10:
             return f"0 {self.unit}"  # Treat very small values as zero
 
+        # Determine the appropriate prefix for the value
+        exponent = 0
         if abs_value >= 1:
             while abs_value >= 1000 and exponent < 12:
                 abs_value /= 1000
@@ -141,9 +138,7 @@ class Value:
                 formatted_value = f"{abs_value:.2f}"
             else:
                 formatted_value = f"{abs_value:.3f}"
-
-        # Remove trailing zeros after decimal point (only for smart precision)
-        if decimal_places is None and "." in formatted_value:
+            # Remove trailing zeros after decimal point
             formatted_value = formatted_value.rstrip("0").rstrip(".")
 
         # Apply the sign from the original value

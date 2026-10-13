@@ -51,7 +51,6 @@ class SystemVirtualenv(virtualenv.Virtualenv):
         # Using .pth instead of sitecustomize.py because system sitecustomize takes precedence
         # .pth files run early and can execute Python code via "import" statements
         log.info(f"Creating .pth file to disable editable install hooks")
-        import site
         site_packages_dir = os.path.join(self._path, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages")
         pth_path = os.path.join(site_packages_dir, "zzz_disable_editable_hooks.pth")
         with open(pth_path, "w") as f:
