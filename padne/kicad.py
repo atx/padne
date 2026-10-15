@@ -133,7 +133,7 @@ def copper_layers(board: pcbnew.BOARD) -> Iterator[int]:
 
 def _copper_layer_names(board: pcbnew.BOARD, layer_set: pcbnew.LSET) -> list[str]:
     return [
-        board.GetLayerName(layer_id)
+        board.GetStandardLayerName(layer_id)
         for layer_id in copper_layers(board)
         if layer_set.Contains(layer_id)
     ]
@@ -355,7 +355,7 @@ class PadIndex:
                         case _:
                             raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
 
-                layer_name = board.GetLayerName(layer_id)
+                layer_name = board.GetStandardLayerName(layer_id)
 
                 # Validate that the point falls within the layer geometry
                 layer = layer_dict.get(layer_name)
@@ -1231,7 +1231,7 @@ def render_gerbers_from_kicad(board: pcbnew.BOARD, layer_ids: Iterable[int]) -> 
         # Plot gerbers and get paths to generated files
         gerber_layers = {}
         for layer_id in layer_ids:
-            layer_path = Path(tmpdir) / f"{board.GetLayerName(layer_id)}.gbr"
+            layer_path = Path(tmpdir) / f"{board.GetStandardLayerName(layer_id)}.gbr"
 
             plot_board_layer_to_gerber(board, layer_id, layer_path)
 
@@ -1267,7 +1267,7 @@ def plot_board_layer_to_gerber(board: pcbnew.BOARD, layer_id: int, output_path: 
         plot_controller.SetLayer(layer_id)
         # This just sets the suffix for the file name. Not quite sure if it is
         # necessary to set it, since we are plotting only a single layer here...
-        layer_name = board.GetLayerName(layer_id)
+        layer_name = board.GetStandardLayerName(layer_id)
         plot_controller.OpenPlotfile(layer_name, pcbnew.PLOT_FORMAT_GERBER, "")
 
         # Plot the layer
@@ -1309,7 +1309,7 @@ def extract_layers_from_gerbers(board,
             continue
 
         plotted_layers.append(PlottedGerberLayer(
-            name=board.GetLayerName(layer_id),
+            name=board.GetStandardLayerName(layer_id),
             layer_id=layer_id,
             geometry=geometry
         ))

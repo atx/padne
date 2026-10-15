@@ -941,6 +941,22 @@ class TestLoadKicadProject:
             f"Layer order mismatch: expected {expected_order}, got {actual_order}"
         )
 
+    def test_user_named_copper_layers(self, kicad_test_projects):
+        # Same board as via_tht_4layer, with user names on the copper layers.
+        # The stackup always uses canonical names, so the user names must not leak in.
+        original = kicad.load_kicad_project(kicad_test_projects["via_tht_4layer"].pro_path)
+        renamed = kicad.load_kicad_project(kicad_test_projects["via_tht_4layer_named_layers"].pro_path)
+
+        def connection_points(prob):
+            return sorted(
+                (conn.layer.name, conn.point.x, conn.point.y)
+                for network in prob.networks
+                for conn in network.connections
+            )
+
+        assert [layer.name for layer in renamed.layers] == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+        assert connection_points(renamed) == connection_points(original)
+
     def test_via_hole_punching(self, kicad_test_projects):
         """Test that holes are punched in layers for THT pads and vias."""
         project = kicad_test_projects["via_tht_4layer"]

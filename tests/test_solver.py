@@ -1620,6 +1620,7 @@ class TestSolverEndToEnd:
                                      "complicated_trace_current",
                                      "two_lumped_elements_one_pad",
                                      "via_tht_4layer",
+                                     "via_tht_4layer_named_layers",
                                      "voltage_source_multipad_degeneration",
                                      "nested_schematic_twoinstances",
                                      "long_trace_current_custom_conductivity",
