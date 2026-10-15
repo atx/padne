@@ -255,7 +255,7 @@ def pad_xy(board: pcbnew.BOARD, ref: str) -> tuple[float, float, str]:
             raise ValueError(f"{designator!r} has no pad {pad_name!r}")
 
     pos = pad.GetPosition()
-    return kicad.nm_to_mm(pos.x), kicad.nm_to_mm(pos.y), board.GetLayerName(pad.GetLayer())
+    return kicad.nm_to_mm(pos.x), kicad.nm_to_mm(pos.y), board.GetStandardLayerName(pad.GetLayer())
 
 
 def probe_voltage(sol: solver.Solution, board: pcbnew.BOARD, ref: str) -> float:
