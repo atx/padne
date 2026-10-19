@@ -53,14 +53,14 @@ class Utils:
         2. Extracting and applying board outline clipping
         3. Extracting via specs and punching holes
         4. Creating stackup and layer dictionary
-        5. Creating and loading PadIndex with SMD pads
+        5. Creating and loading PadIndex with surface pads
 
         Args:
             board: A KiCad board object loaded via pcbnew.LoadBoard()
 
         Returns:
             tuple: (layer_dict, pad_index) where layer_dict contains processed
-                   layer geometry and pad_index contains SMD pad locations
+                   layer geometry and pad_index contains surface pad locations
         """
         # TODO: I am not particularly fond of this method being here,
         # since it mostly replicates the code in kicad.py
@@ -83,9 +83,9 @@ class Utils:
         stackup = kicad.extract_stackup_from_kicad_pcb(board)
         layer_dict = kicad.construct_layer_dict(plotted_layers, stackup)
 
-        # Create PadIndex and load SMD pads
+        # Create PadIndex and load surface pads
         pad_index = kicad.PadIndex()
-        pad_index.load_smd_pads(board, layer_dict)
+        pad_index.load_surface_pads(board, layer_dict)
 
         return layer_dict, pad_index
 
@@ -276,6 +276,28 @@ class TestPadFinder:
 
         assert abs(layer_point.point.x - 129) < 1e-3, "Pad X coordinate should be 129"
         assert abs(layer_point.point.y - 101.375) < 1e-3, "Pad Y coordinate should be 129"
+
+    def test_connect_pads_resolve_on_their_copper_layers(self, kicad_test_projects):
+        """
+        Edge fingers J1.A1 (F.Cu) and J1.B1 (B.Cu) sit at the same XY in an
+        unflipped footprint, where pad.GetLayer() reports F.Cu for both.
+        """
+        board = pcbnew.LoadBoard(str(kicad_test_projects["connect_pads"].pcb_path))
+        layer_dict, pad_index = Utils.setup_layer_dict_and_pad_index(board)
+
+        # The 0.5mm traces do not reach y=101.4, only the 3.2mm long fingers do
+        finger_tip = shapely.geometry.Point(100, 101.4)
+        assert layer_dict["F.Cu"].shape.intersects(finger_tip)
+        assert layer_dict["B.Cu"].shape.intersects(finger_tip)
+
+        for pad, layer in [("A1", "F.Cu"), ("B1", "B.Cu")]:
+            (layer_point,) = pad_index.find_by_endpoint(kicad.Endpoint("J1", pad))
+            assert layer_point.layer == layer
+            assert (layer_point.point.x, layer_point.point.y) == (
+                pytest.approx(100), pytest.approx(100))
+
+        # The paste-only aperture over R1.1 has no copper to connect to
+        assert pad_index.find_by_endpoint(kicad.Endpoint("R1", "")) == []
 
 
 class TestViaSpecs:

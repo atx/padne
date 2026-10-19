@@ -1637,7 +1637,8 @@ class TestSolverEndToEnd:
                                      "many_meshes",
                                      "many_meshes_many_vias",
                                      "probe_directive",
-                                     "test_set_1"])
+                                     "test_set_1",
+                                     "connect_pads"])
     def test_voltage_sources_work(self, project, solver_backend):
         # Load the problem from the KiCad project
         prob = kicad.load_kicad_project(project.pro_path)
@@ -1697,6 +1698,23 @@ class TestSolverEndToEnd:
         voltage_diff = abs(voltage_from - voltage_to)
         assert voltage_diff == pytest.approx(0.24, abs=0.01), \
             f"Voltage difference for {current_source_element} does not match expected value (diff={voltage_diff})"
+
+    def test_current_source_on_connect_pads_conserves_current(self, kicad_test_projects, solver_backend):
+        """
+        All of the current flowing through the copper from edge finger J1.B1
+        on B.Cu back to J1.A1 on F.Cu has to cross the mounting hole barrel
+        and the 1 ohm lumped R1, so R1 must drop exactly i * r.
+        """
+        prob = kicad.load_kicad_project(kicad_test_projects["connect_pads"].pro_path)
+        solution = solver.solve(prob, backend=solver_backend)
+
+        _, f_conn, t_conn = find_source(prob, problem.CurrentSource)
+        assert (f_conn.layer.name, t_conn.layer.name) == ("F.Cu", "B.Cu")
+
+        r1_a = _find_connection_at_point(prob, (110, 100), "F.Cu")
+        r1_b = _find_connection_at_point(prob, (112, 100), "F.Cu")
+        voltage_r1 = find_vertex_value(solution, r1_b) - find_vertex_value(solution, r1_a)
+        assert voltage_r1 == pytest.approx(1.0, rel=1e-6)
 
     def test_long_trace_undercut_scales_resistance(self, kicad_test_projects):
         def current_source_voltage_drop(project_name):

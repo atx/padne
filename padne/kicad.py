@@ -319,21 +319,22 @@ class PadIndex:
     def find_by_endpoints(self, eps: Iterable[Endpoint]) -> list[LayerPoint]:
         return [lp for ep in eps for lp in self.find_by_endpoint(ep)]
 
-    def load_smd_pads(self, board: pcbnew.BOARD, layer_dict: dict[str, problem.Layer]) -> None:
+    def load_surface_pads(self, board: pcbnew.BOARD, layer_dict: dict[str, problem.Layer]) -> None:
         """
-        Load all SMD pads from the given PCB board into the mapping.
+        Load all surface pads from the given PCB board into the mapping. These
+        are SMD pads and connect pads (edge connector fingers, mounting hole
+        rings), which are the same copper without a paste aperture.
         Validates that connection points fall within the final layer geometry.
 
         Args:
-            board: The PCB board to extract SMD pads from
+            board: The PCB board to extract surface pads from
             layer_dict: Dictionary of final layer geometries for validation
         """
         for footprint in board.GetFootprints():
             designator = footprint.GetReference()
 
             for pad_obj in footprint.Pads():
-                # Only process SMD pads
-                if pad_obj.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+                if pad_obj.GetAttribute() not in (pcbnew.PAD_ATTRIB_SMD, pcbnew.PAD_ATTRIB_CONN):
                     continue
 
                 pad_name = pad_obj.GetName()
@@ -341,36 +342,40 @@ class PadIndex:
 
                 point = _position_to_point(pad_obj.GetPosition())
 
-                # Get the layer for SMD pads
-                layer_id = pad_obj.GetLayer()
+                # pad.GetLayer() is F.Cu for every pad loaded from a file, only
+                # the layer set knows the side. It is already flipped along
+                # with the footprint.
+                layer_ids = [
+                    layer_id
+                    for layer_id in copper_layers(board)
+                    if pad_obj.GetLayerSet().Contains(layer_id)
+                ]
+                if not layer_ids:
+                    # Paste-only apertures, such as in the *_ThermalVias footprints
+                    continue
 
-                # pad.GetPosition() is already the post-flip board position,
-                # but GetLayer() still reports the unflipped layer.
-                if footprint.IsFlipped():
-                    match layer_id:
-                        case pcbnew.F_Cu:
-                            layer_id = pcbnew.B_Cu
-                        case pcbnew.B_Cu:
-                            layer_id = pcbnew.F_Cu
-                        case _:
-                            raise NotImplementedError("Flipped footprints with SMD pads on internal layers are not supported yet")
+                if layer_ids not in ([pcbnew.F_Cu], [pcbnew.B_Cu]):
+                    raise NotImplementedError(
+                        f"Surface pad {endpoint} on copper layers "
+                        f"{_copper_layer_names(board, pad_obj.GetLayerSet())} is not supported yet"
+                    )
 
-                layer_name = board.GetStandardLayerName(layer_id)
+                layer_name = board.GetStandardLayerName(layer_ids[0])
 
                 # Validate that the point falls within the layer geometry
                 layer = layer_dict.get(layer_name)
                 if layer is None:
                     # I do not think this should ever happen. That said, in theory,
-                    # it is possible to have a SMD pad that spans internal layers
+                    # it is possible to have a surface pad that spans internal layers
                     # in our footprint and then the user does not include that layer
                     # in the PCB
-                    log.warning(f"SMD pad {endpoint} references unknown layer {layer_name}")
+                    log.warning(f"Surface pad {endpoint} references unknown layer {layer_name}")
                     continue
 
                 if not layer.shape.intersects(point):
                     # At the moment, we just reject those pads
                     log.warning(
-                        f"SMD pad {endpoint} connection point at ({point.x}, {point.y}) "
+                        f"Surface pad {endpoint} connection point at ({point.x}, {point.y}) "
                         f"on layer {layer_name} falls outside the layer geometry (likely in a hole). "
                         f"Skipping this connection point."
                     )
@@ -1646,8 +1651,8 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
     layer_dict = construct_layer_dict(plotted_layers, stackup)
 
     pad_index = PadIndex()
-    # Load SMD pads AFTER hole punching so we can validate against final geometry
-    pad_index.load_smd_pads(board, layer_dict)
+    # Load surface pads AFTER hole punching so we can validate against final geometry
+    pad_index.load_surface_pads(board, layer_dict)
     pad_index.insert_via_specs(via_specs, layer_dict)
 
     networks = []

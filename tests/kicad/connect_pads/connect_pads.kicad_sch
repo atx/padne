@@ -1,0 +1,23 @@
+(kicad_sch
+	(version 20231120)
+	(generator "eeschema")
+	(generator_version "8.0")
+	(uuid "c0a4e3d2-6b1f-4c55-9a7e-5d2f0c1b7a01")
+	(paper "A4")
+	(lib_symbols)
+	(text "!padne CURRENT i=1A f=J1.A1 t=J1.B1\n!padne RESISTANCE r=1 a=R1.1 b=R1.2\n!padne PROBE p=J1.B1,MH1.1"
+		(exclude_from_sim no)
+		(at 80 100 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "c0a4e3d2-6b1f-4c55-9a7e-5d2f0c1b7a02")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
