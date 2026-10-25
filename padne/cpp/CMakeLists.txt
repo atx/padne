@@ -32,6 +32,8 @@ nanobind_add_stub(
 
 install(TARGETS _mesh LIBRARY DESTINATION padne)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/_mesh.pyi DESTINATION padne)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../io.github.atx.padne.metainfo.xml
+        DESTINATION ${SKBUILD_DATA_DIR}/share/metainfo)
 
 nanobind_add_module(_cgal _cgal.cpp)
 
