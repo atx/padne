@@ -28,7 +28,6 @@ import functools
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest import mock
 
 import numpy as np
 import pcbnew
@@ -287,29 +286,18 @@ def voltage_diff(sol: solver.Solution, board: pcbnew.BOARD, m: Measurement) -> f
     return probe_voltage(sol, board, m.p_ref) - probe_voltage(sol, board, m.n_ref)
 
 
-def _copper_spec(ts: TestSet, cal: CalibrationResult, plating_mm: float) -> kicad.CopperSpec:
-    """COPPER parameters from the ladder fit; the fit reports total width loss."""
-    return kicad.CopperSpec(
-        conductivity=cal.sheet_conductance / ts.copper_thickness_mm,
-        undercut=cal.overetch_delta_mm / 2,
-        plating=plating_mm,
-    )
+def _copper_directive(ts: TestSet, cal: CalibrationResult, plating_mm: float) -> kicad.Directive:
+    """COPPER directive (SI units) from the ladder fit; the fit reports total width loss."""
+    return kicad.Directive(name="COPPER", params={
+        "conductivity": repr(float(cal.sheet_conductance / ts.copper_thickness_mm * 1e3)),
+        "undercut": repr(float(cal.overetch_delta_mm / 2 * 1e-3)),
+        "plating": repr(float(plating_mm * 1e-3)),
+    })
 
 
-def _load_with(ts: TestSet, copper_spec: kicad.CopperSpec) -> problem.Problem:
+def _load_with(ts: TestSet, copper: kicad.Directive) -> problem.Problem:
     """Load the project with the schematic's COPPER directive replaced."""
-    orig = kicad.process_directives
-
-    def patched(directives: list[kicad.Directive]) -> kicad.Directives:
-        d = orig(directives)
-        return kicad.Directives(lumped_specs=d.lumped_specs, copper_spec=copper_spec,
-                                probe_specs=d.probe_specs)
-
-    # TODO: This is a bit too hacky; maybe kicad.load_kicad_project
-    # should allow injecting custom directives. Also relates
-    # to the feature where we need to inject other types of directives...
-    with mock.patch.object(kicad, "process_directives", patched):
-        return kicad.load_kicad_project(ts.pro_path)
+    return kicad.load_kicad_project(ts.pro_path, extra_directives=[copper])
 
 
 def _load_board(ts: TestSet) -> pcbnew.BOARD:
@@ -323,7 +311,7 @@ def solve_test_set(ts: TestSet, mesher_config=None,
     fits), solve it, and return solution plus board."""
     cal = extract_calibration(ts)
     via_cal = extract_via_calibration(ts, mesher_config=mesher_config)
-    prob = _load_with(ts, _copper_spec(ts, cal, via_cal.plating_mm))
+    prob = _load_with(ts, _copper_directive(ts, cal, via_cal.plating_mm))
     sol = solver.solve(prob, mesher_config=mesher_config, backend=backend)
     return sol, _load_board(ts)
 
@@ -383,7 +371,7 @@ def extract_via_calibration(ts: TestSet, mesher_config=None) -> ViaCalibrationRe
     log: list[tuple[float, list[float]]] = []
 
     def mean_residual(plating_mm: float) -> float:
-        prob = _load_with(ts, _copper_spec(ts, cal, plating_mm))
+        prob = _load_with(ts, _copper_directive(ts, cal, plating_mm))
         sol = solver.solve(prob, mesher_config=mesher_config)
         resid = [(voltage_diff(sol, board, m) - m.measured_v) / m.measured_v for m in pairs]
         log.append((plating_mm, resid))

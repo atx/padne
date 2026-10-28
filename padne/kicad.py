@@ -1159,6 +1159,25 @@ def extract_directives_from_text(text: str) -> list[Directive]:
     return directives
 
 
+def load_directives_file(path: pathlib.Path) -> list[Directive]:
+    """
+    Load directives from an external text file with one '!padne' directive
+    per line. Blank lines and lines starting with '#' are skipped, anything
+    else is an error.
+    """
+    directives = []
+    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        stripped_line = line.strip()
+        if not stripped_line or stripped_line.startswith("#"):
+            continue
+        try:
+            directives.append(Directive.parse(stripped_line))
+        except ValueError as e:
+            raise ValueError(f"{path}:{lineno}: {e}") from e
+
+    return directives
+
+
 def extract_directives_from_schema(instance: SchemaInstance) -> list[Directive]:
     def extract_content_from_text_element(text_element) -> str:
         """Extract text content from a text element."""
@@ -1597,12 +1616,17 @@ def erode_layers_by_undercut(plotted_layers: list[PlottedGerberLayer],
 
 
 @stage_timer
-def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
+def load_kicad_project(pro_file_path: pathlib.Path,
+                       extra_directives: Iterable[Directive] = (),
+                       schematic_directives: bool = True) -> problem.Problem:
     """
     Load a KiCad project and create a Problem object for PDN simulation.
 
     Args:
         pro_file_path: Path to the KiCad project file (*.kicad_pro)
+        extra_directives: Directives added on top of the schematic ones; a
+            COPPER directive here replaces the schematic one
+        schematic_directives: Whether to load directives from the schematic
 
     Returns:
         A Problem object containing layers and lumped elements
@@ -1624,9 +1648,15 @@ def load_kicad_project(pro_file_path: pathlib.Path) -> problem.Problem:
             for plotted_layer in plotted_layers
         ]
 
-    # Build schematic hierarchy first, then extract directives
-    schema_hierarchy = build_schema_hierarchy(project.sch_path)
-    directives = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
+    directives = process_directives(list(extra_directives))
+    if schematic_directives:
+        schema_hierarchy = build_schema_hierarchy(project.sch_path)
+        schematic = process_directives(extract_directives_from_hierarchy(schema_hierarchy))
+        directives = Directives(
+            lumped_specs=schematic.lumped_specs + directives.lumped_specs,
+            copper_spec=directives.copper_spec or schematic.copper_spec,
+            probe_specs=schematic.probe_specs + directives.probe_specs,
+        )
 
     copper_spec = directives.copper_spec
     if copper_spec is None:

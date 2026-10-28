@@ -1263,6 +1263,65 @@ class TestProcessDirectives:
         assert directives.copper_spec.conductivity == pytest.approx(5e4)
 
 
+class TestExternalDirectives:
+
+    @staticmethod
+    def f_cu_conductance(prob: problem.Problem) -> float:
+        return next(layer for layer in prob.layers if layer.name == "F.Cu").conductance
+
+    def test_load_directives_file(self, tmp_path):
+        path = tmp_path / "extra.padne"
+        path.write_text(
+            "# Load scenario\n"
+            "\n"
+            "  !padne CURRENT i=1A f=TP1.1 t=TP2.1\n"
+            "!padne COPPER conductivity=5e7\n"
+        )
+        directives = kicad.load_directives_file(path)
+        assert [d.name for d in directives] == ["CURRENT", "COPPER"]
+        assert directives[0].params == {"i": "1A", "f": "TP1.1", "t": "TP2.1"}
+
+    def test_load_directives_file_rejects_junk(self, tmp_path):
+        path = tmp_path / "extra.padne"
+        path.write_text("!padne COPPER conductivity=5e7\n!pdne CURRENT i=1A f=TP1.1 t=TP2.1\n")
+        with pytest.raises(ValueError, match=rf"{path}:2: "):
+            kicad.load_directives_file(path)
+
+    def test_extra_directives_are_appended(self, kicad_test_projects):
+        project = kicad_test_projects["long_trace_current_custom_conductivity"]
+        result = kicad.load_kicad_project(
+            project.pro_path,
+            extra_directives=[kicad.Directive.parse("!padne CURRENT i=2A f=TP2.1 t=TP1.1")])
+        assert len(result.networks) == 2
+
+    def test_extra_copper_overrides_schematic(self, kicad_test_projects):
+        project = kicad_test_projects["long_trace_current_custom_conductivity"]
+        baseline = kicad.load_kicad_project(project.pro_path)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = kicad.load_kicad_project(
+                project.pro_path,
+                extra_directives=[kicad.Directive.parse("!padne COPPER conductivity=59.5e6")])
+        # The schematic sets 29.75e6 S/m
+        assert self.f_cu_conductance(result) == pytest.approx(2 * self.f_cu_conductance(baseline))
+
+    def test_no_schematic_directives(self, kicad_test_projects):
+        project = kicad_test_projects["long_trace_current_custom_conductivity"]
+        result = kicad.load_kicad_project(
+            project.pro_path,
+            extra_directives=[
+                kicad.Directive.parse("!padne VOLTAGE v=1V p=TP1.1 n=TP2.1"),
+                kicad.Directive.parse("!padne RESISTANCE r=1 a=TP1.1 b=TP2.1"),
+            ],
+            schematic_directives=False)
+        element_types = {type(network.elements[0]) for network in result.networks}
+        assert element_types == {problem.VoltageSource, problem.Resistor}
+        # Schematic COPPER is ignored too, so the default conductivity applies
+        default = kicad.CopperSpec().conductivity
+        assert self.f_cu_conductance(result) == pytest.approx(
+            self.f_cu_conductance(kicad.load_kicad_project(project.pro_path)) * default / 29.75e3)
+
+
 class TestLumpedSpecs:
 
     @staticmethod

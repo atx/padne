@@ -185,3 +185,31 @@ Example:
    The surface conductivity is computed inside padne by extracting the
    stackup (copper layer thickness in particular) info from your PCB
    file. See *File → Board Setup → Physical Stackup* inside pcbnew.
+
+
+.. _directive-files:
+
+Loading directives from a file
+------------------------------
+
+Directives can also be kept outside the schematic, in a plain text file
+passed to ``padne gui`` or ``padne solve`` with ``-D``/``--directives``.
+The option can be repeated; files are loaded in the order given.
+
+The file holds one directive per line, in exactly the same syntax as in
+the schematic. Blank lines and lines starting with ``#`` are skipped; any
+other line is an error.
+
+.. code-block:: text
+
+   # Heavy load scenario
+   !padne CURRENT i=5A f=U3.1 t=U3.2
+   !padne COPPER conductivity=5.8e7
+
+Directives from files are added to the ones in the schematic. A
+``COPPER`` directive in a file replaces the schematic one. To ignore the
+schematic directives entirely, pass ``--no-schematic-directives``:
+
+.. code-block:: bash
+
+   padne solve -D heavy_load.padne --no-schematic-directives my_project.kicad_pro pdn.padne

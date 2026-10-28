@@ -90,6 +90,23 @@ def add_mesher_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_directive_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments controlling where directives are loaded from."""
+    parser.add_argument(
+        "-D", "--directives",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="Load additional directives from FILE (repeatable)"
+    )
+    parser.add_argument(
+        "--no-schematic-directives",
+        action="store_true",
+        help="Ignore directives in the schematic"
+    )
+
+
 def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Config:
     """Construct a Mesher.Config from parsed arguments."""
     return padne.mesh.Mesher.Config(
@@ -104,7 +121,14 @@ def mesher_config_from_args(args: argparse.Namespace) -> padne.mesh.Mesher.Confi
 
 def solve_from_args(args: argparse.Namespace) -> padne.solver.Solution:
     log.info(f"Loading KiCad project: {args.kicad_pro_file}")
-    prob = padne.kicad.load_kicad_project(args.kicad_pro_file)
+    extra_directives = []
+    for path in args.directives:
+        log.info(f"Loading directives: {path}")
+        extra_directives.extend(padne.kicad.load_directives_file(path))
+    prob = padne.kicad.load_kicad_project(
+        args.kicad_pro_file,
+        extra_directives=extra_directives,
+        schematic_directives=not args.no_schematic_directives)
     log.info("Solving problem...")
     solution = padne.solver.solve(
         prob, mesher_config=mesher_config_from_args(args), backend=args.solver)
@@ -161,6 +185,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Path to the input file",
     )
+    add_directive_args(parser_gui)
     add_mesher_args(parser_gui)
 
     parser_show = subparsers.add_parser(
@@ -190,6 +215,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Path to save the pickled solution file",
     )
+    add_directive_args(parser_solve)
     add_mesher_args(parser_solve)
 
     parser_paraview = subparsers.add_parser(
